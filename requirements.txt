@@ -1,0 +1,2 @@
+yt-dlp
+curl-cffi>=0.15.0
