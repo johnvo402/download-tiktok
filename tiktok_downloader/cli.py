@@ -7,7 +7,6 @@ from .config import (
     AppConfig,
     DEFAULT_COOKIE_FILE,
     DEFAULT_OUTPUT_DIR,
-    DEFAULT_TOTAL_EPISODES,
 )
 from .urls import normalize_url
 
@@ -18,13 +17,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "url",
-        help="URL của tập đầu tiên",
+        help="URL một tập thuộc series",
     )
     parser.add_argument(
         "--episodes",
         type=int,
-        default=DEFAULT_TOTAL_EPISODES,
-        help=f"Tổng số tập (default: {DEFAULT_TOTAL_EPISODES})",
+        default=None,
+        help=(
+            "Giới hạn số tập cần tải "
+            "(mặc định: tự phát hiện toàn bộ)"
+        ),
     )
     parser.add_argument(
         "--cookies",
@@ -42,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
 def parse_config(argv: Sequence[str] | None = None) -> AppConfig:
     args = build_parser().parse_args(argv)
 
-    if args.episodes <= 0:
+    if args.episodes is not None and args.episodes <= 0:
         raise ValueError("--episodes phải lớn hơn 0")
 
     return AppConfig(
