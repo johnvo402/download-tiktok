@@ -1,6 +1,6 @@
 # TikTok Short Drama Downloader
 
-Tool Python dùng Playwright để mở một tập TikTok trong Chrome, di chuyển qua từng tập bằng thao tác scroll và dùng `yt-dlp` để tải video.
+Tool Python dùng Playwright để mở một TikTok series trong Chrome, đọc thông tin phim, điều hướng tập bằng các button trong episode grid và dùng `yt-dlp` để tải video.
 
 ## Cấu trúc dự án
 
@@ -8,24 +8,24 @@ Tool Python dùng Playwright để mở một tập TikTok trong Chrome, di chuy
 .
 ├── main.py
 ├── requirements.txt
-├── cookies.txt                 # không commit
-├── downloads/                  # không commit
+├── cookies.txt
+├── downloads/
+│   └── <Tên phim>/
+│       ├── metadata.json
+│       ├── poster.<ext>
+│       ├── EP0001.<ext>
+│       ├── EP0002.<ext>
+│       └── ...
 └── tiktok_downloader/
-    ├── __init__.py
-    ├── app.py                  # orchestration
-    ├── browser.py              # thao tác TikTok bằng Playwright
-    ├── cli.py                  # argparse / CLI
-    ├── config.py               # cấu hình và constants
-    ├── cookies.py              # đọc Netscape cookies
-    ├── downloader.py           # gọi yt-dlp
-    └── urls.py                 # xử lý URL / video id
+    ├── app.py
+    ├── browser.py
+    ├── cli.py
+    ├── config.py
+    ├── cookies.py
+    ├── downloader.py
+    ├── metadata.py
+    └── urls.py
 ```
-
-## Yêu cầu
-
-- Python 3.11+
-- Google Chrome
-- Cookie TikTok dạng Netscape lưu tại `cookies.txt`
 
 ## Cài đặt
 
@@ -38,28 +38,55 @@ python -m pip install -r requirements.txt
 
 ## Chạy
 
+Tải toàn bộ series được phát hiện:
+
 ```powershell
 python main.py "https://www.tiktok.com/@user/video/123456789"
 ```
 
-Tuỳ chọn:
+Giới hạn số tập tải:
 
 ```powershell
-python main.py "<url>" --episodes 82 --cookies cookies.txt --output downloads
+python main.py "<url>" --episodes 20
 ```
 
-Tool cũng chấp nhận URL bị copy dưới dạng Markdown.
+Các option khác:
 
-## Luồng hoạt động
+```powershell
+python main.py "<url>" --cookies cookies.txt --output downloads
+```
 
-1. Đọc cookie Netscape.
-2. Mở Chrome qua Playwright.
-3. Mở URL tập đầu tiên.
-4. Nếu có nút `Xem tất cả ... tập`, tool thử mở danh sách tập.
-5. Lấy URL video hiện tại.
-6. Gọi `yt-dlp` để tải tập.
-7. Scroll sang tập tiếp theo và lặp lại.
+## Cách điều hướng tập
 
-## Ghi chú
+Tool không scroll để đổi tập nữa.
 
-TikTok thay đổi UI và cơ chế chống bot thường xuyên, nên phần điều hướng bằng Playwright có thể cần điều chỉnh theo thời gian. Không commit `cookies.txt` vào repository.
+1. Mở panel series.
+2. Tìm episode grid.
+3. Xác định tập đang xem bằng element có class chứa `SpanEpisodeActiveIcon`.
+4. Click trực tiếp button của tập cần tải.
+5. Nếu tập cần tải không còn trong grid hiện tại, tool chuyển sang tab kế tiếp bằng **index của tab**.
+6. Nội dung text của tab như `1-24`, `25-48`, ... không được dùng để quyết định điều hướng.
+
+Tool cũng duyệt các tab theo index để tự phát hiện toàn bộ số tập đang có.
+
+## Metadata
+
+Mỗi series được lưu vào một folder riêng theo tiêu đề phim:
+
+```text
+downloads/Ma Đế Đại Thừa Ẩn Sức Trở Về/
+```
+
+`metadata.json` chứa:
+
+- tiêu đề
+- tags
+- mô tả
+- lượt xem poster/series hiển thị trên TikTok
+- URL poster
+- tên file poster đã tải
+- source URL
+- tổng số tập
+- danh sách số tập
+
+Tên folder được sanitize để chạy an toàn trên Windows.
