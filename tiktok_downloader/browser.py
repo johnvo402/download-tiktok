@@ -120,6 +120,10 @@ class TikTokNavigator:
         if tab_count == 0:
             return self.get_visible_episode_numbers()
 
+        # TikTok can already have tab 0 selected. Detect it before
+        # scanning to avoid clicking the selected tab unnecessarily.
+        self._current_tab_index = self._detect_selected_tab_index()
+
         for index in range(tab_count):
             self._switch_to_tab(index)
             numbers.update(self.get_visible_episode_numbers())
@@ -242,17 +246,67 @@ class TikTokNavigator:
         if index < 0 or index >= tabs.count():
             raise IndexError(f"Episode tab index out of range: {index}")
 
+        if self._current_tab_index is None:
+            self._current_tab_index = self._detect_selected_tab_index()
+
         if self._current_tab_index == index:
             return
 
+        # Use a normal click so Playwright still checks whether a real
+        # overlay is blocking the target. Do not bypass it with force=True.
         tabs.nth(index).click()
         self.page.wait_for_timeout(TAB_SWITCH_WAIT_MS)
         self._current_tab_index = index
 
+    def _detect_selected_tab_index(self) -> int | None:
+        """Find the tab under TikTok's visual selection indicator."""
+        tabs = self._episode_tabs()
+
+        if not tabs.count():
+            return None
+
+        try:
+            return tabs.first.evaluate(
+                """(tab) => {
+                    const control = tab.closest(
+                        '[data-testid="tux-segmented-control"]'
+                    );
+                    const indicator = control?.querySelector(
+                        '[class*="tux-segmented-control__indicator"]'
+                    );
+
+                    if (!indicator) return null;
+
+                    const indicatorRect = indicator.getBoundingClientRect();
+                    if (!indicatorRect.width) return null;
+
+                    const indicatorCenter =
+                        indicatorRect.left + indicatorRect.width / 2;
+                    const buttons = Array.from(control.querySelectorAll(
+                        '[data-testid="tux-segment-item"]'
+                    ));
+
+                    const selected = buttons.findIndex((button) => {
+                        const rect = button.getBoundingClientRect();
+                        return (
+                            indicatorCenter >= rect.left &&
+                            indicatorCenter <= rect.right
+                        );
+                    });
+
+                    return selected >= 0 ? selected : null;
+                }"""
+            )
+        except Exception:
+            return None
+
     def _episode_section(self) -> Locator:
+        # Clicking "Xem tất cả ... tập" may create a floating panel while
+        # the original grid remains in the DOM behind it. The popup is
+        # portaled after the page content, so prefer the LAST visible grid.
         return self.page.locator(
-            "xpath=//section[.//h3[normalize-space(.)='Tập']]"
-        ).first
+            'section:visible:has(> h3:text-is("Tập"))'
+        ).last
 
     def _episode_tabs(self) -> Locator:
         return self._episode_section().locator(
