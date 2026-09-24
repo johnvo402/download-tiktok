@@ -60,8 +60,23 @@ try {
         $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
         cargo test --manifest-path src-tauri/Cargo.toml --lib
         if ($LASTEXITCODE -ne 0) { throw "Rust tests failed." }
-        & $Python -m unittest discover -s python/tests -v
-        if ($LASTEXITCODE -ne 0) { throw "Python worker tests failed." }
+        $PreviousPythonPath = $env:PYTHONPATH
+        $WorkerSourcePath = Join-Path $Root "python"
+        if ([string]::IsNullOrWhiteSpace($PreviousPythonPath)) {
+            $env:PYTHONPATH = $WorkerSourcePath
+        } else {
+            $env:PYTHONPATH = "$WorkerSourcePath$([System.IO.Path]::PathSeparator)$PreviousPythonPath"
+        }
+        try {
+            & $Python -m unittest discover -s python/tests -v
+            if ($LASTEXITCODE -ne 0) { throw "Python worker tests failed." }
+        } finally {
+            if ($null -eq $PreviousPythonPath) {
+                Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+            } else {
+                $env:PYTHONPATH = $PreviousPythonPath
+            }
+        }
     }
     & $Python (Join-Path $Root "scripts\generate_dependency_notices.py") $Root
     if ($LASTEXITCODE -ne 0) { throw "Could not generate Rust/npm third-party license notices." }
