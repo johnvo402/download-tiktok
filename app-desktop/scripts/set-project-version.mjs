@@ -34,10 +34,11 @@ function updateSectionVersion(relativePath, sectionName) {
   const nextSection = contents.indexOf("\n[", sectionStart + marker.length);
   const sectionEnd = nextSection < 0 ? contents.length : nextSection + 1;
   const section = contents.slice(sectionStart, sectionEnd);
-  const updated = section.replace(/^(version\s*=\s*)"[^"]+"/m, `$1"${version}"`);
-  if (updated === section) {
+  const versionPattern = /^(version\s*=\s*)"[^"]+"/m;
+  if (!versionPattern.test(section)) {
     throw new Error(`${relativePath} is missing a version in [${sectionName}].`);
   }
+  const updated = section.replace(versionPattern, `$1"${version}"`);
   write(relativePath, contents.slice(0, sectionStart) + updated + contents.slice(sectionEnd));
 }
 
@@ -52,13 +53,14 @@ updateSectionVersion("python/pyproject.toml", "project");
 
 const workerVersionPath = "python/worker/_version.py";
 const workerVersionText = read(workerVersionPath);
-const updatedWorkerVersion = workerVersionText.replace(
-  /^__version__\s*=\s*"[^"]+"/m,
-  `__version__ = "${version}"`,
-);
-if (updatedWorkerVersion === workerVersionText) {
+const workerVersionPattern = /^__version__\s*=\s*"[^"]+"/m;
+if (!workerVersionPattern.test(workerVersionText)) {
   throw new Error(`${workerVersionPath} is missing __version__.`);
 }
+const updatedWorkerVersion = workerVersionText.replace(
+  workerVersionPattern,
+  `__version__ = "${version}"`,
+);
 write(workerVersionPath, updatedWorkerVersion);
 
 let cargoLock = read("src-tauri/Cargo.lock");
