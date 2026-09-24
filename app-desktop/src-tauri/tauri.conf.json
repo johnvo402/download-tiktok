@@ -1,0 +1,59 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "JC AI",
+  "version": "0.1.0",
+  "identifier": "com.ai.video-localization",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "JC AI",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 920,
+        "minHeight": 620,
+        "resizable": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' asset:; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost blob: data:; media-src 'self' asset: http://asset.localhost blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self';",
+      "devCsp": "default-src 'self' asset: http://127.0.0.1:1420; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:1420 ws://127.0.0.1:1420; img-src 'self' asset: http://asset.localhost blob: data:; media-src 'self' asset: http://asset.localhost blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' http://127.0.0.1:1420;",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+            "$APPDATA/projects/*/media/source/**/*",
+            "$APPDATA/projects/*/media/overlays/**/*",
+            "$APPDATA/projects/*/cache/preview/**/*",
+            "$APPDATA/projects/*/audio/tts/**/*",
+            "$APPDATA/models/tts-preview/*"
+        ]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "resources": {
+      "resources/ffmpeg": "ffmpeg",
+      "resources/ai-worker": "ai-worker",
+      "resources/THIRD_PARTY_LICENSES.txt": "THIRD_PARTY_LICENSES.txt",
+      "resources/THIRD_PARTY_DEPENDENCY_LICENSES.txt": "THIRD_PARTY_DEPENDENCY_LICENSES.txt",
+      "resources/dependency-license-inventory.json": "dependency-license-inventory.json"
+    },
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper" },
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "languages": ["English", "Vietnamese"]
+      }
+    }
+  }
+}

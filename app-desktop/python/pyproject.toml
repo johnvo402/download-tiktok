@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-video-localization-worker"
+version = "0.1.0"
+description = "Local JSON Lines worker for JC AI desktop app"
+requires-python = ">=3.10"
+dependencies = [
+    "faster-whisper>=1.1,<2",
+    "playwright>=1.55,<2",
+    "yt-dlp>=2025.3.31,<2027",
+    "curl-cffi>=0.13,<1",
+]
+
+[project.optional-dependencies]
+# Install only when local VieNeu-TTS is needed: `pip install -e .[tts]`.
+# The SDK's default v3 Turbo CPU path is ONNX and does not require PyTorch.
+tts = ["vieneu>=3.8.1,<4"]
+# WhisperX adds PyTorch/TorchAudio/Transformers. Keep it opt-in so the default
+# worker/install stays small; the Settings page detects whether the runtime is present.
+whisperx = ["whisperx>=3.8.4,<4"]
+
+[tool.setuptools.packages.find]
+include = ["worker*"]
+exclude = ["tests*", "packaging*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

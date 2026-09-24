@@ -1,0 +1,184 @@
+import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
+import { AlertTriangle, Check, Clapperboard, Download, FolderOpen, LoaderCircle, X } from 'lucide-solid';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { currentProject, setActiveWorkspacePanelTab, setNotice } from '../../app/project-state';
+import { renderService } from '../../app/services/render-service';
+import type { ExportHistoryEntry, ExportJobEvent, ExportOptions, ExportValidation } from '../../app/services/render-service';
+import Modal from '../../shared/components/Modal';
+import { flushVisualSettings } from '../overlays/overlay-state';
+
+const terminal = (status?: string) => status === 'completed' || status === 'failed' || status === 'cancelled';
+const formatTime = (seconds: number) => {
+  if (!Number.isFinite(seconds) || seconds < 0) return '00:00';
+  const total = Math.floor(seconds); return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+};
+
+const defaultExportName = () => {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+};
+
+export default function ExportDialog(props: { onClose: () => void }) {
+  const project = () => currentProject();
+  const initialExportName = defaultExportName();
+  const [outputFileName, setOutputFileName] = createSignal(initialExportName);
+  const [options, setOptions] = createSignal<ExportOptions>({ quality: 'balanced', applyBlur: true, applyLogos: true, burnSubtitles: project()?.subtitle.enabled ?? true, enableSubtitleBlurOverride: false, includeOriginalAudio: !(project()?.dubbing.muteOriginal ?? false), includeDubbing: project()?.dubbing.enabled ?? false, ducking: project()?.dubbing.duckingEnabled ?? false, outputDirectory: null, outputFileName: initialExportName, originalVolume: project()?.dubbing.originalVolume ?? 1, dubbedVolume: project()?.dubbing.dubbedVolume ?? 1, duckingAmount: project()?.dubbing.duckingAmount ?? 0.75 });
+  const [validation, setValidation] = createSignal<ExportValidation>();
+  const [validationError, setValidationError] = createSignal('');
+  const [checking, setChecking] = createSignal(false);
+  const [jobId, setJobId] = createSignal<string>();
+  const [job, setJob] = createSignal<ExportJobEvent>();
+  const [history, setHistory] = createSignal<ExportHistoryEntry[]>([]);
+  const [exportDirectory, setExportDirectory] = createSignal('');
+  const [canceling, setCanceling] = createSignal(false);
+  const effectiveExportDirectory = () => options().outputDirectory || exportDirectory();
+  let validationRevision = 0;
+  let unlisten: (() => void) | undefined;
+
+  const subtitleBlur = () => project()?.blurRegions.find((region) => region.role === 'subtitle');
+  const displayExportPath = (relative?: string | null) => {
+    if (relative && /^(?:[a-zA-Z]:[\\/]|\\\\|\/)/.test(relative)) return relative;
+    const filename = relative?.split(/[\\/]/).pop();
+    if (!filename) return exportDirectory();
+    const folder = effectiveExportDirectory();
+    return folder ? `${folder.replace(/[\\/]$/, '')}${folder.includes('\\') ? '\\' : '/'}${filename}` : relative;
+  };
+  const close = () => { if (jobId() && !terminal(job()?.status)) return; props.onClose(); };
+  const refreshHistory = async () => {
+    const id = project()?.id; if (!id) return;
+    try { setHistory(await renderService.history(id)); } catch { /* The export itself remains usable if history is unavailable. */ }
+  };
+  const openExportFolder = async () => {
+    const id = project()?.id;
+    if (!id) return;
+    try { setExportDirectory(await renderService.openExportFolder(id, options().outputDirectory)); }
+    catch (error) { setValidationError(error instanceof Error ? error.message : String(error)); }
+  };
+  const chooseExportDirectory = async () => {
+    try {
+      const selected = await openDialog({ title: 'Chọn thư mục lưu video', directory: true, multiple: false });
+      if (typeof selected === 'string') {
+        setOptions((value) => ({ ...value, outputDirectory: selected }));
+        setExportDirectory(selected);
+        setValidationError('');
+      }
+    } catch (error) {
+      setValidationError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  onMount(() => {
+    void refreshHistory();
+    const id = project()?.id;
+    if (id) void renderService.exportDirectory(id).then(setExportDirectory).catch((error: unknown) => setValidationError(error instanceof Error ? error.message : String(error)));
+    void renderService.onProgress((event) => {
+      if (event.projectId !== project()?.id || event.jobId !== jobId()) return;
+      setJob(event);
+      if (terminal(event.status)) {
+        setCanceling(false);
+        void refreshHistory();
+        if (event.status === 'completed') setNotice({ kind: 'success', message: `Đã xuất video: ${displayExportPath(event.output) ?? 'exports'}` });
+        else if (event.status === 'failed') setNotice({ kind: 'error', message: event.message });
+      }
+    }).then((dispose) => { unlisten = dispose; });
+  });
+  onCleanup(() => unlisten?.());
+
+  createEffect(on(() => {
+    const value = options();
+    const id = project()?.id;
+    return id ? `${id}:${JSON.stringify(value)}` : '';
+  }, (key) => {
+    if (!key || (jobId() && !terminal(job()?.status))) return;
+    const revision = ++validationRevision;
+    const id = project()!.id;
+    setChecking(true); setValidationError(''); setValidation(undefined);
+    void flushVisualSettings(id).then(() => renderService.validate(id, options())).then((value) => {
+      if (revision === validationRevision) setValidation(value);
+    }).catch((error: unknown) => {
+      if (revision === validationRevision) setValidationError(error instanceof Error ? error.message : String(error));
+    }).finally(() => revision === validationRevision && setChecking(false));
+  }));
+
+  const start = async () => {
+    const id = project()?.id; if (!id) return;
+    if (outputNameError()) { setValidationError(outputNameError()); return; }
+    const exportOptions = { ...options(), outputFileName: outputFileName().trim() };
+    try {
+      await flushVisualSettings(id);
+      const latestValidation = await renderService.validate(id, exportOptions);
+      setValidation(latestValidation);
+      if (!latestValidation.valid || latestValidation.warnings.length) {
+        setValidationError(latestValidation.warnings.length ? 'Có phụ đề không vừa Subtitle Blur ở cỡ chữ tối thiểu. Hãy kiểm tra layout trước khi export.' : 'Thiết lập hiện tại chưa sẵn sàng để export.');
+        return;
+      }
+      setValidationError('');
+      const next = await renderService.start(id, exportOptions);
+      setJobId(next); setJob({ projectId: id, jobId: next, status: 'queued', progress: 0, elapsedSeconds: 0, totalSeconds: validation()?.duration ?? 0, speed: null, output: null, message: 'Đang chuẩn bị FFmpeg…', layoutWarnings: [] });
+      setNotice({ kind: 'info', message: 'Đã bắt đầu export. Bạn có thể theo dõi tiến độ tại đây.' });
+    } catch (error) { setValidationError(error instanceof Error ? error.message : String(error)); }
+  };
+
+  const cancel = async () => {
+    if (!jobId()) return;
+    setCanceling(true);
+    try { await renderService.cancel(jobId()!); } catch (error) { setCanceling(false); setValidationError(error instanceof Error ? error.message : String(error)); }
+  };
+
+  const needsSubtitleRegion = () => options().burnSubtitles && !subtitleBlur();
+  const blockedByWarning = () => (validation()?.warnings.length ?? 0) > 0;
+  const outputNameError = () => {
+    const value = outputFileName().trim().replace(/\.mp4$/i, '');
+    if (!value) return 'Nhập tên file export.';
+    if (value.length > 180 || /[<>:"/\\|?*\u0000-\u001f]/.test(value)) return 'Tên file tối đa 180 ký tự và không được chứa \\/:*?"<>|.';
+    if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(value.split('.')[0])) return 'Tên này được Windows dành riêng.';
+    return '';
+  };
+
+  return <Modal title="Export video" description="Chọn nơi lưu video hoàn chỉnh. Video nguồn và dữ liệu project không bị thay đổi." onClose={close}>
+    <div class="export-dialog-content">
+      <div class="export-file-row"><span class="export-file-icon"><Clapperboard size={17} /></span><div class="export-file-details"><label for="export-file-name">Tên file xuất</label><div class="export-file-name-control"><input id="export-file-name" class="text-input" maxlength="180" value={outputFileName()} onInput={(event) => { setOutputFileName(event.currentTarget.value); setValidationError(''); }} /><Show when={!outputFileName().trim().toLowerCase().endsWith('.mp4')}><span>.mp4</span></Show></div><Show when={outputNameError()}><small class="export-name-error" role="alert">{outputNameError()}</small></Show><small>{project()?.source.width ?? '—'} × {project()?.source.height ?? '—'} · {formatTime(project()?.source.duration ?? 0)}</small></div></div>
+      <div class="export-location"><div><strong>Nơi lưu video {options().outputDirectory ? '· đã chọn' : '· mặc định'}</strong><code>{effectiveExportDirectory() || 'Đang lấy đường dẫn…'}</code></div><div class="export-location-actions"><button class="button button-quiet" type="button" onClick={() => void chooseExportDirectory()}><FolderOpen size={14} /> Chọn thư mục</button><Show when={options().outputDirectory}><button class="button button-quiet" type="button" onClick={() => setOptions((value) => ({ ...value, outputDirectory: null }))}>Mặc định</button></Show><button class="button button-quiet" type="button" onClick={() => void openExportFolder()}><FolderOpen size={14} /> Mở</button></div></div>
+
+      <div class="export-section"><h3>VIDEO</h3>
+        <label class="export-option"><span>Áp dụng các vùng blur</span><input type="checkbox" checked={options().applyBlur} onChange={(event) => setOptions((value) => ({ ...value, applyBlur: event.currentTarget.checked }))} /></label>
+        <label class="export-option"><span>Chèn logo</span><input type="checkbox" checked={options().applyLogos} onChange={(event) => setOptions((value) => ({ ...value, applyLogos: event.currentTarget.checked }))} /></label>
+        <label class="export-option"><span>Burn translated subtitle trong Subtitle Blur</span><input type="checkbox" checked={options().burnSubtitles} onChange={(event) => setOptions((value) => ({ ...value, burnSubtitles: event.currentTarget.checked }))} /></label>
+        <Show when={options().burnSubtitles && subtitleBlur() && !subtitleBlur()?.enabled}><label class="export-override"><input type="checkbox" checked={options().enableSubtitleBlurOverride} onChange={(event) => setOptions((value) => ({ ...value, enableSubtitleBlurOverride: event.currentTarget.checked }))} /><span>Bật Subtitle Blur cho lần export này, không đổi cấu hình project</span></label></Show>
+        <div class="export-option"><span>Vùng phụ đề</span><strong>{subtitleBlur() ? 'Subtitle Blur' : 'Chưa chọn'}</strong></div>
+      </div>
+
+      <div class="export-section"><h3>AUDIO & QUALITY</h3>
+        <label class="export-option"><span>Âm thanh gốc</span><input type="checkbox" checked={options().includeOriginalAudio} onChange={(event) => setOptions((value) => ({ ...value, includeOriginalAudio: event.currentTarget.checked }))} /></label>
+        <label class="export-option"><span>Lồng tiếng đã tạo</span><input type="checkbox" checked={options().includeDubbing} onChange={(event) => setOptions((value) => ({ ...value, includeDubbing: event.currentTarget.checked }))} /></label>
+        <Show when={options().includeOriginalAudio}><label class="export-option"><span>Âm lượng gốc <small>{Math.round(options().originalVolume * 100)}%</small></span><input type="range" min="0" max="1" step="0.01" value={options().originalVolume} onInput={(event) => setOptions((value) => ({ ...value, originalVolume: Number(event.currentTarget.value) }))} /></label></Show>
+        <Show when={options().includeDubbing}><label class="export-option"><span>Âm lượng lồng tiếng <small>{Math.round(options().dubbedVolume * 100)}%</small></span><input type="range" min="0" max="1" step="0.01" value={options().dubbedVolume} onInput={(event) => setOptions((value) => ({ ...value, dubbedVolume: Number(event.currentTarget.value) }))} /></label></Show>
+        <Show when={options().includeDubbing && options().includeOriginalAudio}><label class="export-option"><span>Duck original audio</span><input type="checkbox" checked={options().ducking} onChange={(event) => setOptions((value) => ({ ...value, ducking: event.currentTarget.checked }))} /></label></Show>
+        <Show when={options().ducking && options().includeOriginalAudio && options().includeDubbing}><label class="export-option"><span>Mức giảm khi voice hoạt động <small>{Math.round(options().duckingAmount * 100)}%</small></span><input type="range" min="0" max="1" step="0.01" value={options().duckingAmount} onInput={(event) => setOptions((value) => ({ ...value, duckingAmount: Number(event.currentTarget.value) }))} /></label></Show>
+        <label class="export-quality"><span>Chất lượng H.264</span><select class="settings-select" value={options().quality} onChange={(event) => setOptions((value) => ({ ...value, quality: event.currentTarget.value as ExportOptions['quality'] }))}><option value="fast">Nhanh nhất · file lớn hơn</option><option value="balanced">Nén hiệu quả · giữ chất lượng cao</option><option value="high">Chất lượng cao nhất · file lớn hơn</option></select></label>
+      </div>
+
+      <Show when={needsSubtitleRegion()}><div class="export-alert"><AlertTriangle size={15} /><span>Phụ đề dịch được bật nhưng chưa có Subtitle Blur. Hãy chọn vùng blur trong Properties trước khi xuất; không có phụ đề global fallback.</span><button class="button button-quiet" type="button" onClick={() => { close(); setActiveWorkspacePanelTab('properties'); setNotice({ kind: 'info', message: 'Chọn một vùng blur và đặt Loại vùng thành Subtitle Blur.' }); }}>Properties</button></div></Show>
+      <Show when={validationError()}><div class="export-alert export-alert-error" role="alert"><AlertTriangle size={15} /><span>{validationError()}</span></div></Show>
+
+      <Show when={checking()}><div class="export-validation"><LoaderCircle size={14} class="export-spinner" /> Đang kiểm tra layout và media…</div></Show>
+      <Show when={validation()}>{(result) => <div class="export-validation" classList={{ 'export-validation-error': !result().valid }}>
+        <div class="export-validation-title"><Check size={14} /> Layout phụ đề <span>{result().translatedSegments} segments</span></div>
+        <div class="export-validation-row">{result().fitsNormally} vừa cỡ chữ đặt</div>
+        <Show when={result().fitWithSmallerFont}><div class="export-validation-row">{result().fitWithSmallerFont} segment auto-fit; nhỏ nhất {result().smallestFontSize}px (cỡ đã đặt: {project()?.subtitle.fontSize ?? '—'}px)</div></Show>
+        <Show when={blockedByWarning()}><div class="export-alert export-alert-error"><AlertTriangle size={14} /><span>Không thể xuất an toàn: các segment sau không vừa vùng blur ở cỡ chữ tối thiểu. Mở rộng Subtitle Blur, giảm cỡ chữ tối thiểu hoặc rút gọn bản dịch; nội dung sẽ không bị cắt.</span></div><For each={result().warnings}>{(warning, index) => <div class="export-warning-segment">#{index() + 1} · {formatTime(warning.start)} — {warning.segmentId}</div>}</For></Show>
+        <Show when={result().dubbingSegments}><div class="export-validation-row">{result().dubbingSegments} voice clips sẽ được đặt theo timestamp</div></Show>
+      </div>}</Show>
+
+      <Show when={job()}>{(state) => <div class="export-job-progress" role="status"><div class="export-job-header"><strong>{state().status === 'completed' ? 'Export hoàn tất' : state().status === 'failed' ? 'Export thất bại' : state().status === 'cancelled' ? 'Đã hủy export' : 'Đang export'}</strong><span>{Math.round(state().progress * 100)}%</span></div><div class="export-progress-track"><span style={{ width: `${state().progress * 100}%` }} /></div><p>{state().message}</p><small>{formatTime(state().elapsedSeconds)} / {formatTime(state().totalSeconds)}{state().speed ? ` · ${state().speed?.toFixed(1)}×` : ''}</small><Show when={state().output}><code class="export-output-path">{displayExportPath(state().output)}</code></Show><Show when={state().status === 'completed'}><button class="button button-quiet export-reveal-button" type="button" onClick={() => void openExportFolder()}><FolderOpen size={14} /> Mở video trong thư mục</button></Show></div>}</Show>
+
+      <Show when={history().length}><div class="export-history"><h3>LẦN EXPORT GẦN ĐÂY</h3><For each={history().slice(0, 3)}>{(item) => <div class="export-history-item"><span classList={{ 'history-failed': item.status !== 'completed' }}>{item.status === 'completed' ? 'Hoàn tất' : item.status === 'cancelled' ? 'Đã hủy' : 'Lỗi'}</span><strong>{item.file ? displayExportPath(item.file) : item.message ?? 'Export'}</strong><small>{new Date(item.createdAt).toLocaleString('vi-VN')} · {item.sizeBytes ? `${(item.sizeBytes / 1024 / 1024).toFixed(1)} MB` : '—'}</small></div>}</For></div></Show>
+    </div>
+    <footer class="modal-actions export-actions">
+      <button class="button button-quiet" type="button" onClick={close}><X size={14} />{jobId() && !terminal(job()?.status) ? 'Đang chạy…' : 'Đóng'}</button>
+      <Show when={jobId() && !terminal(job()?.status)}><button class="button button-danger" type="button" disabled={canceling()} onClick={() => void cancel()}>{canceling() ? 'Đang hủy…' : 'Hủy export'}</button></Show>
+      <Show when={!jobId() || terminal(job()?.status)}><button class="button button-primary" type="button" disabled={checking() || !validation()?.valid || blockedByWarning() || needsSubtitleRegion() || !!outputNameError()} onClick={() => void start()}><Download size={14} /> Export MP4</button></Show>
+    </footer>
+  </Modal>;
+}

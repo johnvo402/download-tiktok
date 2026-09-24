@@ -1,0 +1,66 @@
+name: JC AI Windows Release
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "desktop-v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: app-desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-windows:
+    name: Build Windows x64 installer
+    runs-on: windows-2022
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Read release version from tag
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -notmatch '^(?:desktop-)?v(?<version>(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?)$') {
+            throw "Expected tag vX.Y.Z or desktop-vX.Y.Z (optionally with a prerelease suffix), got '$tag'."
+          }
+          $tagVersion = $Matches.version
+          "AI_VIDEO_LOCALIZATION_VERSION=$tagVersion" >> $env:GITHUB_ENV
+          "RELEASE_VERSION=$tagVersion" >> $env:GITHUB_ENV
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.12"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Initialize MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build, test, and package installer
+        shell: pwsh
+        working-directory: app-desktop
+        run: ./scripts/build-release.ps1 -Python python
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: JC AI ${{ env.RELEASE_VERSION }}
+          prerelease: ${{ contains(env.RELEASE_VERSION, '-') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: app-desktop/release/*

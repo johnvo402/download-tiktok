@@ -1,0 +1,149 @@
+export interface Project {
+  schemaVersion: number;
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  source: {
+    videoPath: string | null;
+    originalName?: string | null;
+    duration?: number | null;
+    width?: number | null;
+    height?: number | null;
+    fps?: number | null;
+    videoCodec?: string | null;
+    audioCodec?: string | null;
+    fileSize?: number | null;
+    checksumSha256?: string | null;
+    audioStreams?: AudioStreamMetadata[];
+    subtitleTracks?: SubtitleTrackMetadata[];
+  };
+  transcript?: TranscriptMetadata | null;
+  translation: {
+    sourceLanguage: string;
+    targetLanguage: string;
+    customPrompt: string;
+    segments: TranslationSegment[];
+  };
+  subtitle: {
+    enabled: boolean;
+    fontSize: number;
+    textColor: string;
+    outline: boolean;
+    bottomMargin: number;
+    fontFamily: string;
+    fontWeight: number;
+    outlineColor: string;
+    outlineWidth: number;
+    backgroundEnabled: boolean;
+    backgroundColor: string;
+    backgroundOpacity: number;
+    alignment: 'left' | 'center' | 'right';
+    maxWidth: number;
+    lineHeight: number;
+    verticalPosition: number;
+    paddingX: number;
+    paddingY: number;
+    autoFit: boolean;
+    minFontSize: number;
+    verticalAlignment: 'top' | 'middle' | 'bottom';
+  };
+  dubbing: {
+    enabled: boolean;
+    provider: 'vieneu';
+    modelId: string;
+    voice: string | null;
+    voiceProfileId: string | null;
+    speed: number | null;
+    fitMode: 'natural' | 'fit' | 'custom' | null;
+    originalVolume: number;
+    dubbedVolume: number;
+    muteOriginal: boolean;
+    duckingEnabled: boolean;
+    duckingAmount: number;
+  };
+  blurRegions: BlurRegion[];
+  logos: ProjectLogo[];
+}
+
+export interface AudioStreamMetadata {
+  streamIndex: number;
+  codec: string;
+  language: string | null;
+  title: string | null;
+  channels: number | null;
+  sampleRate: number | null;
+}
+
+export interface SubtitleTrackMetadata {
+  streamIndex: number;
+  codec: string;
+  language: string | null;
+  title: string | null;
+  textSupported: boolean;
+  imageBased: boolean;
+}
+
+export interface TranscriptMetadata {
+  status: 'notStarted' | 'running' | 'completed' | 'failed' | 'canceled';
+  path: string;
+  sourceType?: 'subtitle' | 'asr' | null;
+  sourceTrack?: number | null;
+  language?: string | null;
+  segmentCount: number;
+}
+
+export interface TranslationSegment {
+  id: string;
+  startMs: number;
+  endMs: number;
+  speakerId?: string;
+  source: string;
+  translated: string;
+  translationStatus: 'empty' | 'machine' | 'edited';
+  tts?: {
+    audioRelativePath: string;
+    fingerprint: string;
+    durationMs: number;
+    status: 'ready' | 'stale' | 'failed';
+  };
+}
+
+export interface BlurRegion {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  startMs: number;
+  endMs: number | null;
+  enabled: boolean;
+  strength: number;
+  role: 'generic' | 'subtitle';
+  /** Edge feather radius as a percentage of the region's shorter side. */
+  edgeBlend: number;
+  /** FFmpeg noise strength from 0–100, applied only inside the blurred area. */
+  pixelNoise: number;
+}
+
+export interface ProjectLogo {
+  id: string;
+  relativePath: string;
+  originalName: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  enabled: boolean;
+  opacity: number;
+  maintainAspectRatio: boolean;
+}
+
+export interface ProjectListResponse {
+  projects: Project[];
+  warnings: string[];
+}
+
+export interface ProjectSummary extends Pick<Project, 'id' | 'name' | 'createdAt' | 'updatedAt'> {
+  status: 'ready';
+}

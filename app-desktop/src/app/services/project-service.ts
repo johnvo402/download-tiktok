@@ -1,0 +1,67 @@
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import type { Project, ProjectListResponse, SubtitleTrackMetadata } from '../../features/projects/types';
+import type { AsrEnvironment, Transcript } from '../../features/transcript/types';
+
+function asUserMessage(error: unknown): Error {
+  if (error instanceof Error) return error;
+  if (typeof error === 'string') return new Error(error);
+  return new Error('Đã xảy ra lỗi khi thao tác với dự án. Vui lòng thử lại.');
+}
+
+async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (!isTauri()) {
+    throw new Error('Quản lý dự án cần chạy trong ứng dụng desktop Tauri để truy cập dữ liệu trên thiết bị.');
+  }
+  try {
+    return await invoke<T>(command, args);
+  } catch (error) {
+    throw asUserMessage(error);
+  }
+}
+
+export const projectService = {
+  list: () => call<ProjectListResponse>('list_projects'),
+  create: (name: string, storageDirectory: string | null = null) => call<Project>('create_project', { name, storageDirectory }),
+  get: (id: string) => call<Project>('get_project', { id }),
+  rename: (id: string, name: string) => call<Project>('rename_project', { id, name }),
+  delete: (id: string) => call<void>('delete_project', { id }),
+  importVideo: (projectId: string, sourcePath: string, replace = false) => call<{
+    project: Project;
+    duplicate: boolean;
+    replaced: boolean;
+  }>('import_video', { projectId, sourcePath, replace }),
+  getVideoAssetPath: (projectId: string) => call<string>('get_video_asset_path', { projectId }),
+  createPreviewProxy: (projectId: string) => call<string>('create_preview_proxy', { projectId }),
+  getVideoMetadata: (projectId: string) => call<Project['source']>('get_video_metadata', { projectId }),
+  getSubtitleTracks: (projectId: string) => call<SubtitleTrackMetadata[]>('get_subtitle_tracks', { projectId }),
+  extractSubtitle: (projectId: string, trackIndex: number) => call<Transcript>('extract_subtitle', { projectId, trackIndex }),
+  getTranscript: (projectId: string) => call<Transcript | null>('get_transcript', { projectId }),
+  saveTranscript: (projectId: string, transcript: Transcript) => call<Project>('save_transcript', { projectId, transcript }),
+  updateTranslationLanguages: (projectId: string, sourceLanguage: string, targetLanguage: string) => call<Project>('update_translation_languages', { projectId, sourceLanguage, targetLanguage }),
+  updateSubtitleSettings: (projectId: string, subtitle: Project['subtitle']) => call<Project>('update_subtitle_settings', { projectId, subtitle }),
+  saveVisualSettings: (projectId: string, settings: Pick<Project, 'subtitle' | 'blurRegions' | 'logos'>) => call<Project>('save_visual_settings', { projectId, settings }),
+  importLogo: (projectId: string, sourcePath: string) => call<{
+    project: Project;
+    logo: Project['logos'][number] | null;
+    cleanupWarning: string | null;
+  }>('import_logo', { projectId, sourcePath }),
+  replaceLogo: (projectId: string, logoId: string, sourcePath: string) => call<{
+    project: Project;
+    logo: Project['logos'][number] | null;
+    cleanupWarning: string | null;
+  }>('replace_logo', { projectId, logoId, sourcePath }),
+  removeLogo: (projectId: string, logoId: string) => call<{
+    project: Project;
+    logo: Project['logos'][number] | null;
+    cleanupWarning: string | null;
+  }>('remove_logo', { projectId, logoId }),
+  getLogoAssetPath: (projectId: string, logoId: string) => call<string>('get_logo_asset_path', { projectId, logoId }),
+  updateDubbingSettings: (projectId: string, dubbing: Project['dubbing']) => call<Project>('update_dubbing_settings', { projectId, dubbing }),
+  updateProjectPreferences: (projectId: string, preferences: { customPrompt: string; voice: string; voiceProfileId: string | null }) => call<Project>('update_project_preferences', { projectId, ...preferences }),
+  getAsrEnvironment: (model: string, alignmentLanguage?: string) => call<AsrEnvironment>('get_asr_environment', { model, ...(alignmentLanguage ? { alignmentLanguage } : {}) }),
+  installAsrModel: (model: string) => call<void>('install_asr_model', { model }),
+  installWhisperXAlignment: (language: string) => call<void>('install_whisperx_alignment', { language }),
+  removeAsrModel: (model: string) => call<void>('remove_asr_model', { model }),
+  generateTranscript: (projectId: string, options: { engine: 'fasterWhisper' | 'whisperX'; model: string; device: string; language: string }) => call<string>('generate_transcript', { projectId, options }),
+  cancelTranscription: (jobId: string) => call<boolean>('cancel_transcription', { jobId }),
+};

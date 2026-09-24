@@ -1,0 +1,56 @@
+AI VIDEO LOCALIZATION - THIRD-PARTY COMPONENT NOTICES
+====================================================
+
+FFmpeg
+------
+The Windows release bundles FFmpeg and FFprobe built from the pinned BtbN
+FFmpeg-Builds GPL build. This build is licensed under GNU General Public
+License version 3 (GPL-3.0-or-later) because it enables libx264 and other GPL
+components. FFmpeg itself also contains LGPL components. The FFmpeg source and
+build configuration are available at:
+
+  https://github.com/BtbN/FFmpeg-Builds
+  https://ffmpeg.org/download.html
+  https://ffmpeg.org/legal.html
+
+The exact upstream binary archive, checksum, and source revision used for a
+release are recorded in ffmpeg-build.json next to the binaries. Corresponding
+source is available from the URLs above and the source repositories referenced
+by that build metadata. This application does not claim to own FFmpeg.
+
+Python AI worker
+----------------
+The worker bundles third-party Python packages listed in
+`ai-worker/python-packages.json`. Their respective copyright and license terms
+remain with their authors. Corresponding package license files are shipped in
+the worker's `_internal/*.dist-info` directories where available. Review
+`ai-worker/THIRD_PARTY_NOTICES.txt` and the exact bundled inventory before
+redistribution. The worker includes the TikTok downloader runtime (Playwright,
+yt-dlp, and curl-cffi) as well as speech recognition and TTS dependencies.
+
+Application dependencies
+------------------------
+The exact locked production npm and Rust dependency versions, declared license
+identifiers, and discovered license texts for this Windows build are included
+in `dependency-license-inventory.json` and
+`THIRD_PARTY_DEPENDENCY_LICENSES.txt` beside this file.
+
+AI models downloaded on demand
+------------------------------
+Model weights are not included in the installer. When a user installs a model,
+the terms published by its upstream repository apply. Current default model
+references are:
+
+  faster-whisper-small: MIT, https://huggingface.co/Systran/faster-whisper-small
+  VieNeu-TTS v3 Turbo: Apache-2.0, https://huggingface.co/pnnbao-ump/VieNeu-TTS-v3-Turbo
+  MOSS Audio Tokenizer ONNX: Apache-2.0, https://huggingface.co/OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX
+
+Other selectable faster-whisper model sizes are downloaded from the corresponding
+Systran/faster-whisper-* repositories and retain their upstream terms.
+
+Release distribution
+--------------------
+The bundled FFmpeg configuration is GPL. Redistributors must comply with the
+applicable GPL source and notice requirements. Obtain legal review before
+commercial or public distribution. See docs/THIRD_PARTY_NOTICES.md and
+docs/BUILD_WINDOWS.md for the release process and source offer details.
