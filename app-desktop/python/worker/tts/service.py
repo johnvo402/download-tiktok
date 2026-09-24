@@ -57,7 +57,11 @@ def _validate_and_manifest(cache_root: Path, model_path: Path, codec_path: Path)
     try:
         payload = json.loads(manifest.read_text(encoding="utf-8"))
         recorded = {entry["path"] for entry in payload["files"]}
-        current = {path.absolute().relative_to(cache_root.resolve()).as_posix() for path in files}
+        cache_root_resolved = cache_root.resolve(strict=True)
+        current = {
+            path.resolve(strict=True).relative_to(cache_root_resolved).as_posix()
+            for path in files
+        }
         if current != recorded:
             return False, None
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):

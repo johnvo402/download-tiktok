@@ -48,7 +48,11 @@ def create_manifest(
 ) -> None:
     root = root.resolve(strict=True)
     entries: list[dict[str, object]] = []
-    normalized = {file_path.absolute() for file_path in files}
+    # Canonicalize both roots and files before deriving relative paths. On
+    # Windows, absolute() can preserve a short-name/junction path while
+    # root.resolve() returns its canonical form, making safe in-root files
+    # appear outside the root on CI runners.
+    normalized = {file_path.resolve(strict=True) for file_path in files}
     for file_path in sorted(normalized, key=lambda item: item.as_posix()):
         if not _inside(root, file_path) or not file_path.is_file():
             raise ValueError("Model file resolves outside its managed cache or is not a file")
