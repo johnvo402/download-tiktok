@@ -82,6 +82,16 @@ def main() -> int:
                 install_whisperx_alignment(str(request["language"]), str(request["cacheDir"]), emit)
             elif operation == "transcribe":
                 transcribe(request, emit)
+            elif operation in {"ocr_inspect", "ocr_install", "ocr_transcribe"}:
+                # OCR stays optional in development and is loaded only when used.
+                from worker.ocr.service import inspect_ocr, install_ocr, transcribe_frames
+
+                if operation == "ocr_inspect":
+                    emit({"type": "capabilities", **inspect_ocr(str(request["cacheDir"]), str(request.get("model", "tiny")))})
+                elif operation == "ocr_install":
+                    install_ocr(str(request["cacheDir"]), emit, str(request.get("model", "tiny")))
+                else:
+                    transcribe_frames(request, emit)
             elif operation == "tts_inspect":
                 emit({"type": "capabilities", **inspect_tts(str(request["cacheDir"]))})
             elif operation == "tts_install":

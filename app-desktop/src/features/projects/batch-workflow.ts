@@ -136,13 +136,15 @@ export class BatchWorkflowRunner {
 
         if (!transcript && steps.transcriptIfMissing) {
           const textTracks = (project.source.subtitleTracks ?? []).filter((track) => track.textSupported);
-          if (textTracks.length === 1) {
+          const transcriptSettings = project.transcriptSettings ?? { mode: 'speechRecognition' as const, ocrFps: 2 as const, ocrRegion: null };
+          if (transcriptSettings.mode !== 'ocr' && textTracks.length === 1) {
             send('transcript', 'Đang trích subtitle text…');
             await projectService.extractSubtitle(project.id, textTracks[0].streamIndex);
             transcript = await projectService.getTranscript(project.id);
           } else {
             const settings = await translationService.getSettings();
-            if (!project.source.audioStreams?.length) throw new Error(textTracks.length > 1
+            if (transcriptSettings.mode === 'ocr' && !transcriptSettings.ocrRegion) throw new Error('Hãy chọn vùng subtitle trong khung video trước khi chạy batch OCR.');
+            if (transcriptSettings.mode !== 'ocr' && !project.source.audioStreams?.length) throw new Error(textTracks.length > 1
               ? 'Có nhiều subtitle track; hãy chọn một track trong project trước khi chạy batch.'
               : 'Video không có audio để tạo transcript.');
             send('transcript', 'Đang tạo transcript bằng Speech Recognition…');
@@ -154,6 +156,11 @@ export class BatchWorkflowRunner {
                 model: settings.settings.asr.model,
                 device: settings.settings.asr.device,
                 language: settings.settings.asr.language === 'auto' ? 'auto' : settings.settings.asr.language,
+                mode: transcriptSettings.mode,
+                ocrFps: transcriptSettings.ocrFps,
+                ocrRegion: transcriptSettings.ocrRegion,
+                ocrModel: settings.settings.asr.ocrModel,
+                ocrDevice: settings.settings.asr.ocrDevice,
               }),
               (jobId) => projectService.cancelTranscription(jobId),
             );

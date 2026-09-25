@@ -3,13 +3,13 @@ import {
   AlertTriangle, AudioLines, Check, FileImage, FileText, Languages, LoaderCircle,
   Plus, RefreshCw, Search, Settings2, Sparkles, Trash2, Volume2, X, ImagePlus,
 } from 'lucide-solid';
-import { activeWorkspacePanelTab, currentProject, currentTranscript, playbackTime, projectSaveState, selectedOverlay, segmentVoicePreviewActive, setActiveWorkspacePanelTab, setCurrentProject, setCurrentTranscript, setNotice, setProjectSaveState, setSeekRequest, setSegmentVoicePreviewActive, setSelectedOverlay, setTtsEvent, transcriptionEvent, translationEvent, ttsEvent, videoPlaying } from '../../../app/project-state';
+import { activeWorkspacePanelTab, blurRegionPicking, currentProject, currentTranscript, ocrRegionEditing, ocrRegionPicking, playbackTime, projectSaveState, selectedOverlay, segmentVoicePreviewActive, setActiveWorkspacePanelTab, setBlurRegionPicking, setCurrentProject, setCurrentTranscript, setNotice, setOcrRegionEditing, setOcrRegionPicking, setProjectSaveState, setSeekRequest, setSegmentVoicePreviewActive, setSelectedOverlay, setTtsEvent, transcriptionEvent, translationEvent, ttsEvent, videoPlaying } from '../../../app/project-state';
 import { projectService } from '../../../app/services/project-service';
 import { translationService } from '../../../app/services/translation-service';
 import { ttsService } from '../../../app/services/tts-service';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import type { SubtitleTrackMetadata } from '../../projects/types';
-import type { AsrEnvironment, Transcript, TranscriptSegment } from '../../transcript/types';
+import type { AsrEnvironment, OcrEnvironment, Transcript, TranscriptSegment } from '../../transcript/types';
 import type { AppSettings } from '../../../app/services/translation-service';
 import { compareSegmentTime, formatTimestamp, validateTranscript } from '../../transcript/transcript-utils';
 import Modal from '../../../shared/components/Modal';
@@ -19,6 +19,11 @@ import type { WorkspacePanelTab } from '../../../app/project-state';
 
 type PanelTab = WorkspacePanelTab;
 type SaveState = 'saved' | 'saving' | 'error';
+type TranscriptGenerationOptions = AppSettings['asr'] & {
+  mode: 'speechRecognition' | 'ocr';
+  ocrFps: 1 | 2 | 4;
+  ocrRegion: { x: number; y: number; width: number; height: number } | null;
+};
 
 function formatDuration(seconds?: number | null) {
   if (!seconds || !Number.isFinite(seconds)) return '—';
@@ -54,12 +59,13 @@ export default function TranslationPanel() {
   const [asrJobId, setAsrJobId] = createSignal<string>();
   const [checkingAsr, setCheckingAsr] = createSignal(false);
   const [asrEnvironment, setAsrEnvironment] = createSignal<AsrEnvironment>();
+  const [ocrEnvironment, setOcrEnvironment] = createSignal<OcrEnvironment>();
   const [asrMessage, setAsrMessage] = createSignal('');
   const [asrStage, setAsrStage] = createSignal('');
   const [asrProgress, setAsrProgress] = createSignal<number>();
   const [showAsrConfirm, setShowAsrConfirm] = createSignal(false);
   const [showExtractConfirm, setShowExtractConfirm] = createSignal(false);
-  const [asrOptions, setAsrOptions] = createSignal<AppSettings['asr']>({ engine: 'fasterWhisper', model: 'small', device: 'auto', language: 'auto' });
+  const [asrOptions, setAsrOptions] = createSignal<TranscriptGenerationOptions>({ engine: 'fasterWhisper', model: 'small', device: 'auto', language: 'auto', ocrModel: 'tiny', ocrDevice: 'auto', mode: 'speechRecognition', ocrFps: 2, ocrRegion: null });
   const [dirty, setDirty] = createSignal(projectSaveState() !== 'saved');
   const [saveState, setSaveState] = createSignal<SaveState>(projectSaveState());
   const [saveError, setSaveError] = createSignal('');
@@ -234,8 +240,9 @@ export default function TranslationPanel() {
     if (lastTerminalEvent === eventKey) return;
     lastTerminalEvent = eventKey;
     if (payload.status === 'completed') {
+      if (currentProject()?.transcriptSettings?.mode === 'ocr') setOcrRegionEditing(false);
       void reloadProjectTranscript(payload.projectId);
-      setNotice({ kind: 'success', message: asrOptions().engine === 'whisperX' ? 'Đã tạo transcript và căn chỉnh timestamp bằng WhisperX.' : 'Đã tạo transcript bằng faster-whisper.' });
+      setNotice({ kind: 'success', message: currentProject()?.transcriptSettings?.mode === 'ocr' ? 'Đã tạo transcript từ subtitle trên hình bằng OCR.' : asrOptions().engine === 'whisperX' ? 'Đã tạo transcript và căn chỉnh timestamp bằng WhisperX.' : 'Đã tạo transcript bằng faster-whisper.' });
     } else if (payload.status === 'failed' || payload.status === 'canceled') {
       setNotice({ kind: payload.status === 'failed' ? 'error' : 'info', message: payload.message });
     }
@@ -665,6 +672,21 @@ export default function TranslationPanel() {
     }
   };
 
+  const clearOcrRegion = async () => {
+    const project = currentProject();
+    if (!project) return;
+    try {
+      const settings = project.transcriptSettings ?? { mode: 'speechRecognition' as const, ocrFps: 2 as const, ocrRegion: null };
+      const updated = await projectService.updateTranscriptSettings(project.id, { ...settings, ocrRegion: null });
+      setCurrentProject(updated);
+      setOcrRegionPicking(false);
+      setOcrRegionEditing(false);
+      setNotice({ kind: 'success', message: 'Đã xóa vùng OCR của dự án.' });
+    } catch (error) {
+      setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể xóa vùng OCR.' });
+    }
+  };
+
   const requestAsr = async () => {
     if (!currentProject()?.id || asrRunning() || checkingAsr() || translationRunning()) return;
     if (dirty() && !saving) await persistTranscript();
@@ -676,7 +698,44 @@ export default function TranslationPanel() {
     try {
       const saved = await translationService.getSettings();
       const options = saved.settings.asr;
-      setAsrOptions(options);
+      const project = currentProject();
+      const mode = project?.transcriptSettings?.mode ?? 'speechRecognition';
+      const projectTranscriptSettings = project?.transcriptSettings ?? { mode: 'speechRecognition' as const, ocrFps: 2 as const, ocrRegion: null };
+      if (mode === 'ocr') {
+        if (!project?.source.videoPath) {
+          setNotice({ kind: 'error', message: 'Hãy thêm video trước khi tạo transcript bằng OCR.' });
+          return;
+        }
+        if (!projectTranscriptSettings.ocrRegion) {
+          setBlurRegionPicking(false);
+          setOcrRegionEditing(false);
+          setOcrRegionPicking(true);
+          setNotice({ kind: 'info', message: 'Kéo khoanh vùng subtitle trên video. Sau khi lưu vùng, bấm Generate Transcript để chạy OCR.' });
+          return;
+        }
+        setAsrOptions({ ...options, mode, ocrFps: projectTranscriptSettings.ocrFps, ocrRegion: projectTranscriptSettings.ocrRegion });
+        const environment = await projectService.getOcrEnvironment(options.ocrModel);
+        setOcrEnvironment(environment);
+        if (!environment.workerInstalled) {
+          setNotice({ kind: 'error', message: 'AI Worker chưa sẵn sàng. Hãy sửa chữa hoặc cài lại ứng dụng rồi thử lại.' });
+          return;
+        }
+        if (!environment.ocrInstalled || !environment.runtimeInstalled) {
+          setNotice({ kind: 'error', message: 'Runtime RapidOCR chưa sẵn sàng. Mở Cài đặt ứng dụng → Speech Recognition để cấu hình OCR.' });
+          return;
+        }
+        if (!environment.modelCached) {
+          setNotice({ kind: 'error', message: 'Model OCR chưa được cài. Mở Cài đặt ứng dụng → Speech Recognition và cài model OCR trước.' });
+          return;
+        }
+        if (options.ocrDevice === 'cuda' && !environment.cudaAvailable) {
+          setNotice({ kind: 'error', message: 'CUDA OCR chưa khả dụng trong worker hiện tại. Chọn Auto hoặc CPU, hoặc cài worker có ONNX Runtime GPU tương thích.' });
+          return;
+        }
+        setShowAsrConfirm(true);
+        return;
+      }
+      setAsrOptions({ ...options, mode, ocrFps: projectTranscriptSettings.ocrFps, ocrRegion: projectTranscriptSettings.ocrRegion });
       const environment = await projectService.getAsrEnvironment(options.model, options.language);
       if (!environment.workerInstalled) {
         setNotice({ kind: 'error', message: 'AI Worker chưa sẵn sàng. Hãy sửa chữa hoặc cài lại ứng dụng, sau đó thử lại.' });
@@ -720,7 +779,7 @@ export default function TranslationPanel() {
     setAsrProgress(undefined);
     try {
       const options = asrOptions();
-      const jobId = await projectService.generateTranscript(projectId, { engine: options.engine, model: options.model, device: options.device, language: options.language });
+      const jobId = await projectService.generateTranscript(projectId, { engine: options.engine, model: options.model, device: options.device, language: options.language, mode: options.mode, ocrFps: options.ocrFps, ocrRegion: options.ocrRegion, ocrModel: options.ocrModel, ocrDevice: options.ocrDevice });
       const latest = transcriptionEvent();
       if (!latest || latest.jobId !== jobId || latest.status === 'progress') {
         setAsrJobId(jobId);
@@ -777,6 +836,19 @@ export default function TranslationPanel() {
               <button class="mini-tool-button" type="button" disabled={savingLanguages() || translationRunning()} onClick={() => void saveLanguages()}>{savingLanguages() ? 'Đang lưu…' : 'Lưu ngôn ngữ'}</button>
             </div>
             <div class="transcript-actions">
+      <Show when={currentProject()?.transcriptSettings?.mode === 'ocr'}>
+                <button class="mini-tool-button" type="button" disabled={!hasVideo() || asrRunning() || checkingAsr()} onClick={() => { setBlurRegionPicking(false); setOcrRegionEditing(false); setOcrRegionPicking(true); setNotice({ kind: 'info', message: 'Kéo khoanh vùng subtitle trên preview video. Nhấn Esc để hủy.' }); }}>
+                  <ImagePlus size={14} /><span>{ocrRegionPicking() ? 'Đang chọn vùng…' : currentProject()?.transcriptSettings?.ocrRegion ? 'Chọn lại vùng OCR' : 'Chọn vùng OCR'}</span>
+                </button>
+                <Show when={currentProject()?.transcriptSettings?.ocrRegion}>
+                  <button class="mini-tool-button" type="button" disabled={ocrRegionPicking() || blurRegionPicking()} onClick={() => { const editing = !ocrRegionEditing(); setOcrRegionPicking(false); setOcrRegionEditing(editing); setNotice({ kind: 'info', message: editing ? 'Kéo khung OCR để di chuyển; kéo góc phải dưới để đổi kích thước.' : 'Đã ẩn khung OCR.' }); }}>
+                    <Settings2 size={14} /><span>{ocrRegionEditing() ? 'Xong chỉnh sửa' : 'Chỉnh vùng OCR'}</span>
+                  </button>
+                  <button class="mini-tool-button" type="button" disabled={ocrRegionPicking() || blurRegionPicking()} title="Xóa vùng OCR" onClick={() => void clearOcrRegion()}>
+                    <Trash2 size={14} /><span>Xóa vùng</span>
+                  </button>
+                </Show>
+              </Show>
               <Show when={textTracks().length > 0}>
                 <select class="transcript-track-select" aria-label="Chọn subtitle track" value={selectedTrack()} onChange={(event) => setSelectedTrack(event.currentTarget.value)}>
                   <option value="">Chọn subtitle</option>
@@ -786,9 +858,9 @@ export default function TranslationPanel() {
                   <Show when={extracting()} fallback={<FileText size={14} />}><LoaderCircle size={14} class="spin" /></Show><span>{extracting() ? 'Đang trích xuất' : 'Extract Subtitle'}</span>
                 </button>
               </Show>
-              <Show when={hasAudio()}>
+              <Show when={hasAudio() || currentProject()?.transcriptSettings?.mode === 'ocr'}>
               <button class="mini-tool-button" type="button" disabled={asrRunning() || checkingAsr() || extracting() || translationRunning()} onClick={() => void requestAsr()}>
-                  <Show when={asrRunning() || checkingAsr()} fallback={<AudioLines size={14} />}><LoaderCircle size={14} class="spin" /></Show><span>{asrRunning() ? 'Đang tạo transcript' : checkingAsr() ? 'Đang kiểm tra model' : transcript()?.segments.length ? 'Regenerate' : 'Generate Transcript'}</span>
+                  <Show when={asrRunning() || checkingAsr()} fallback={currentProject()?.transcriptSettings?.mode === 'ocr' ? <ImagePlus size={14} /> : <AudioLines size={14} />}><LoaderCircle size={14} class="spin" /></Show><span>{asrRunning() ? 'Đang tạo transcript' : checkingAsr() ? 'Đang kiểm tra model' : currentProject()?.transcriptSettings?.mode === 'ocr' ? transcript()?.segments.length ? 'Tạo lại bằng OCR' : 'Tạo transcript bằng OCR' : transcript()?.segments.length ? 'Regenerate' : 'Generate Transcript'}</span>
                 </button>
               </Show>
             </div>
@@ -818,8 +890,8 @@ export default function TranslationPanel() {
               <div class="transcript-empty-state">
                 <div class="transcript-empty-icon"><FileText size={20} /></div>
                 <span class="transcript-empty-kicker">CHƯA CÓ TRANSCRIPT</span>
-                <h3>{tracks().length ? 'Chọn subtitle hoặc tạo transcript' : hasAudio() ? 'Tạo transcript từ audio' : 'Video không có audio stream'}</h3>
-              <p>{tracks().some((track) => track.imageBased) ? 'Video có subtitle dạng ảnh; không thể trích xuất thành text. Dùng Speech Recognition để tạo transcript.' : 'Chọn một text subtitle track hoặc tạo transcript bằng engine đã chọn trong Speech Recognition.'}</p>
+                <h3>{currentProject()?.transcriptSettings?.mode === 'ocr' ? 'Đọc subtitle đã cháy vào hình' : tracks().length ? 'Chọn subtitle hoặc tạo transcript' : hasAudio() ? 'Tạo transcript từ audio' : 'Video không có audio stream'}</h3>
+              <p>{currentProject()?.transcriptSettings?.mode === 'ocr' ? currentProject()?.transcriptSettings?.ocrRegion ? `Vùng OCR đã chọn · lấy ${currentProject()?.transcriptSettings?.ocrFps ?? 2} frame/s. Bấm Tạo transcript bằng OCR ở phía trên.` : 'Chọn vùng có subtitle trên preview. OCR sẽ đọc chữ trong vùng đó theo tốc độ lấy mẫu đã đặt ở Cài đặt dự án.' : tracks().some((track) => track.imageBased) ? 'Video có subtitle dạng ảnh; không thể trích xuất thành text. Chuyển sang OCR trong Cài đặt dự án hoặc dùng Speech Recognition để tạo transcript.' : 'Chọn một text subtitle track hoặc tạo transcript bằng engine đã chọn trong Speech Recognition.'}</p>
                 <Show when={tracks().length > 0}>
                   <div class="empty-track-list"><For each={tracks()}>{(track) => <span classList={{ 'track-image-based': track.imageBased }}>{trackLabel(track)}</span>}</For></div>
                 </Show>
@@ -941,7 +1013,7 @@ export default function TranslationPanel() {
               </Show>
             </div>
             <div class="resource-subsection"><span class="resource-subtitle">TRANSCRIPT</span>
-              <div class="resource-placeholder-row"><span class="resource-type-icon"><FileText size={15} /></span><span><strong>{transcript()?.segments.length ? `${transcript()!.segments.length} segments` : 'Chưa có transcript'}</strong><small>{transcript()?.sourceType === 'subtitle' ? 'Nguồn: Embedded subtitle' : transcript()?.sourceType === 'asr' ? 'Nguồn: Speech Recognition' : 'Nhập subtitle hoặc tạo từ audio'}</small></span><span class="resource-state-label">{transcript()?.segments.length ? 'READY' : 'EMPTY'}</span></div>
+              <div class="resource-placeholder-row"><span class="resource-type-icon"><FileText size={15} /></span><span><strong>{transcript()?.segments.length ? `${transcript()!.segments.length} segments` : 'Chưa có transcript'}</strong><small>{transcript()?.sourceType === 'subtitle' ? 'Nguồn: Embedded subtitle' : transcript()?.sourceType === 'ocr' ? 'Nguồn: OCR subtitle trên hình' : transcript()?.sourceType === 'asr' ? 'Nguồn: Speech Recognition' : 'Nhập subtitle hoặc tạo transcript'}</small></span><span class="resource-state-label">{transcript()?.segments.length ? 'READY' : 'EMPTY'}</span></div>
               <Show when={hasAudio()}><button class="button button-quiet media-generate-button" type="button" disabled={asrRunning() || checkingAsr() || extracting()} onClick={() => void requestAsr()}><RefreshCw size={14} /> {transcript()?.segments.length ? 'Regenerate Transcript' : 'Generate Transcript'}</button></Show>
             </div>
             <div class="resource-subsection"><span class="resource-subtitle">BLUR REGIONS <button class="inline-add-button" type="button" onClick={() => setNotice({ kind: 'info', message: 'Dùng nút Blur trên thanh công cụ preview để thêm vùng blur.' })}><Plus size={12} /> Thêm trên preview</button></span>
@@ -1025,10 +1097,10 @@ export default function TranslationPanel() {
       </Show>
 
       <Show when={showAsrConfirm()}>
-        <Modal title={asrOptions().engine === 'whisperX' ? 'Tạo transcript bằng WhisperX?' : 'Tạo transcript bằng faster-whisper?'} description="Cấu hình Speech Recognition được quản lý trong Cài đặt. Tác vụ này chỉ sử dụng model đã cài sẵn." onClose={() => setShowAsrConfirm(false)}>
-          <div class="model-confirm-card"><div class="job-banner-icon"><AudioLines size={17} /></div><div><strong>{asrOptions().engine === 'whisperX' ? `WhisperX · ${asrOptions().model} · ${asrOptions().device.toUpperCase()} · ${asrOptions().language.toUpperCase()}` : `${asrOptions().model} · ${asrOptions().device.toUpperCase()} · ${asrOptions().language === 'auto' ? 'tự nhận diện ngôn ngữ' : asrOptions().language.toUpperCase()}`}</strong><p>{asrOptions().engine === 'whisperX' ? 'Nhận dạng bằng faster-whisper và căn chỉnh timestamp bằng aligner WhisperX đã có trong cache. Không tải model trong lúc tạo transcript.' : 'Model đã có trong cache ứng dụng. Quá trình nhận dạng chạy cục bộ trên thiết bị và không tải model.'}</p></div></div>
+        <Modal title={asrOptions().mode === 'ocr' ? 'Tạo transcript bằng OCR?' : asrOptions().engine === 'whisperX' ? 'Tạo transcript bằng WhisperX?' : 'Tạo transcript bằng faster-whisper?'} description={asrOptions().mode === 'ocr' ? 'OCR sẽ lấy frame trong vùng đã chọn và nhận dạng subtitle đã cháy vào hình.' : 'Cấu hình Speech Recognition được quản lý trong Cài đặt. Tác vụ này chỉ sử dụng model đã cài sẵn.'} onClose={() => setShowAsrConfirm(false)}>
+          <div class="model-confirm-card"><div class="job-banner-icon">{asrOptions().mode === 'ocr' ? <ImagePlus size={17} /> : <AudioLines size={17} />}</div><div><strong>{asrOptions().mode === 'ocr' ? `RapidOCR · PP-OCRv6 ${asrOptions().ocrModel} · ${asrOptions().ocrDevice.toUpperCase()} · ${asrOptions().ocrFps} frame/s` : asrOptions().engine === 'whisperX' ? `WhisperX · ${asrOptions().model} · ${asrOptions().device.toUpperCase()} · ${asrOptions().language.toUpperCase()}` : `${asrOptions().model} · ${asrOptions().device.toUpperCase()} · ${asrOptions().language === 'auto' ? 'tự nhận diện ngôn ngữ' : asrOptions().language.toUpperCase()}`}</strong><p>{asrOptions().mode === 'ocr' ? 'Chỉ xử lý vùng crop đã chọn. Model đã có trong cache; không tải model khi tạo transcript.' : asrOptions().engine === 'whisperX' ? 'Nhận dạng bằng faster-whisper và căn chỉnh timestamp bằng aligner WhisperX đã có trong cache. Không tải model trong lúc tạo transcript.' : 'Model đã có trong cache ứng dụng. Quá trình nhận dạng chạy cục bộ trên thiết bị và không tải model.'}</p></div></div>
           <Show when={(transcript()?.segments.length ?? 0) > 0}><div class="asr-overwrite-warning"><AlertTriangle size={15} /><span>Transcript hiện tại sẽ được thay thế khi tác vụ hoàn tất thành công. Nếu tác vụ thất bại, transcript hiện tại vẫn được giữ.</span></div></Show>
-          <footer class="modal-actions"><button class="button button-quiet" type="button" onClick={() => setShowAsrConfirm(false)}>Hủy</button><button class="button button-primary" type="button" disabled={!asrEnvironment()?.workerInstalled || !asrEnvironment()?.modelCached} onClick={() => void startAsr()}><AudioLines size={15} /> Tạo transcript</button></footer>
+          <footer class="modal-actions"><button class="button button-quiet" type="button" onClick={() => setShowAsrConfirm(false)}>Hủy</button><button class="button button-primary" type="button" disabled={asrOptions().mode === 'ocr' ? !ocrEnvironment()?.workerInstalled || !ocrEnvironment()?.ocrInstalled || !ocrEnvironment()?.runtimeInstalled || !ocrEnvironment()?.modelCached || asrOptions().ocrDevice === 'cuda' && !ocrEnvironment()?.cudaAvailable : !asrEnvironment()?.workerInstalled || !asrEnvironment()?.modelCached} onClick={() => void startAsr()}>{asrOptions().mode === 'ocr' ? <ImagePlus size={15} /> : <AudioLines size={15} />} Tạo transcript</button></footer>
         </Modal>
       </Show>
 

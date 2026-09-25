@@ -27,6 +27,8 @@ export interface AppSettings {
     model: 'tiny' | 'base' | 'small' | 'medium' | 'large-v3';
     device: 'auto' | 'cpu' | 'cuda';
     language: 'auto' | 'en' | 'vi' | 'ja' | 'ko' | 'zh' | 'fr' | 'de' | 'es';
+    ocrModel: 'tiny' | 'small' | 'medium';
+    ocrDevice: 'auto' | 'cpu' | 'cuda';
   };
 }
 

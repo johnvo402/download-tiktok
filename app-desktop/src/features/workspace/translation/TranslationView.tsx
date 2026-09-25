@@ -5,7 +5,7 @@ import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } 
 import {
   AlertTriangle, Film, Maximize2, Pause, Play, Plus, Volume1, Volume2, VolumeX,
 } from 'lucide-solid';
-import { currentProject, currentTranscript, playbackTime, seekRequest, segmentVoicePreviewActive, setActiveWorkspacePanelTab, setCurrentProject, setCurrentTranscript, setNotice, setPlaybackTime, setSeekRequest, setSelectedOverlay, setSegmentVoicePreviewActive, setVideoPlaying, selectedOverlay, videoPlaying } from '../../../app/project-state';
+import { blurRegionPicking, currentProject, currentTranscript, ocrRegionEditing, ocrRegionPicking, playbackTime, seekRequest, segmentVoicePreviewActive, setActiveWorkspacePanelTab, setBlurRegionPicking, setCurrentProject, setCurrentTranscript, setNotice, setOcrRegionEditing, setOcrRegionPicking, setPlaybackTime, setSeekRequest, setSelectedOverlay, setSegmentVoicePreviewActive, setVideoPlaying, selectedOverlay, videoPlaying } from '../../../app/project-state';
 import { projectService } from '../../../app/services/project-service';
 import { ttsService } from '../../../app/services/tts-service';
 import { findPlayableDubbingSegmentAtTime, findTranslatedSegmentAtTime } from '../../transcript/transcript-utils';
@@ -149,6 +149,7 @@ export default function TranslationView() {
     projectId: string,
     videoPath: string,
     isCurrent: () => boolean,
+    forceRebuild = false,
   ) => {
     const sourceKey = `${projectId}\0${videoPath}`;
     if (previewAttemptedForSource === sourceKey) return;
@@ -157,7 +158,7 @@ export default function TranslationView() {
     setMediaError('');
     setMediaStatus('Đang chuẩn bị preview tương thích…');
     try {
-      const path = await projectService.createPreviewProxy(projectId);
+      const path = await projectService.createPreviewProxy(projectId, forceRebuild);
       if (!isCurrent()) return;
       setUsingProxy(true);
       setVideoUrl(convertFileSrc(path));
@@ -359,6 +360,9 @@ export default function TranslationView() {
 
   onCleanup(() => {
     componentAlive = false;
+    setOcrRegionPicking(false);
+    setBlurRegionPicking(false);
+    setOcrRegionEditing(false);
     stopPreviewSubtitleSync();
     removeDropListener?.();
     setVideoPlaying(false);
@@ -428,7 +432,15 @@ export default function TranslationView() {
   const handleMediaError = async () => {
     if (creatingProxy()) return;
     if (usingProxy()) {
-      setMediaError('Không phát được preview H.264/AAC. Kiểm tra tệp nguồn và FFmpeg, sau đó thử lại.');
+      const mediaError = videoElement?.error;
+      const explanation = mediaError ? ({
+        1: 'quá trình phát bị hủy',
+        2: 'lỗi đọc dữ liệu preview',
+        3: 'WebView không giải mã được video preview',
+        4: 'WebView không hỗ trợ định dạng preview',
+      } as Record<number, string>)[mediaError.code] ?? 'lỗi phát video không xác định' : 'không đọc được trạng thái phát video';
+      const detail = mediaError?.message?.trim();
+      setMediaError(`Không phát được preview H.264/AAC: ${explanation}${detail ? ` (${detail})` : ''}. Có thể thử tạo lại preview.`);
       return;
     }
     const project = currentProject();
@@ -449,10 +461,12 @@ export default function TranslationView() {
     const project = currentProject();
     if (!project?.source.videoPath) return;
     previewAttemptedForSource = undefined;
+    setVideoUrl('');
     void createCompatibilityPreview(
       project.id,
       project.source.videoPath,
       () => currentProject()?.id === project.id && currentProject()?.source.videoPath === project.source.videoPath,
+      true,
     );
   };
 
@@ -476,7 +490,17 @@ export default function TranslationView() {
   const addBlurRegion = () => {
     const project = currentProject();
     if (!project?.source.videoPath) return;
-    const region = { id: crypto.randomUUID(), x: 0.38, y: 0.38, width: 0.24, height: 0.18, startMs: 0, endMs: null, enabled: true, strength: 24, role: 'generic' as const, edgeBlend: 10, pixelNoise: 0 };
+    setOcrRegionPicking(false);
+    setOcrRegionEditing(false);
+    setBlurRegionPicking(true);
+    setNotice({ kind: 'info', message: 'Kéo trên video để vẽ vùng blur. Nhấn Esc để hủy.' });
+  };
+
+  const createBlurRegion = (rect: { x: number; y: number; width: number; height: number }) => {
+    const project = currentProject();
+    if (!project) return;
+    const region = { id: crypto.randomUUID(), ...rect, startMs: 0, endMs: null, enabled: true, strength: 24, role: 'generic' as const, edgeBlend: 10, pixelNoise: 0 };
+    setBlurRegionPicking(false);
     updateVisualSettings({ blurRegions: [...project.blurRegions, region] }, true);
     setSelectedOverlay({ type: 'blur', id: region.id });
     setActiveWorkspacePanelTab('properties');
@@ -506,6 +530,48 @@ export default function TranslationView() {
 
   const totalDuration = () => Number.isFinite(duration()) && duration() > 0 ? duration() : 0;
 
+  const saveOcrRegion = async (region: { x: number; y: number; width: number; height: number }) => {
+    const project = currentProject();
+    if (!project) return;
+    try {
+      const updated = await projectService.updateTranscriptSettings(project.id, {
+        mode: project.transcriptSettings?.mode ?? 'speechRecognition',
+        ocrFps: project.transcriptSettings?.ocrFps ?? 2,
+        ocrRegion: region,
+      });
+      setCurrentProject(updated);
+      setOcrRegionPicking(false);
+      setBlurRegionPicking(false);
+      setOcrRegionEditing(true);
+      setSelectedOverlay(null);
+      setActiveWorkspacePanelTab('transcript');
+      setNotice({ kind: 'success', message: 'Đã lưu vùng subtitle để OCR cho dự án.' });
+    } catch (error) {
+      setOcrRegionPicking(false);
+      setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể lưu vùng OCR.' });
+    }
+  };
+
+  const updateOcrRegion = async (region: { x: number; y: number; width: number; height: number }) => {
+    await saveOcrRegion(region);
+  };
+
+  const deleteOcrRegion = async () => {
+    const project = currentProject();
+    if (!project?.transcriptSettings) return;
+    try {
+      const updated = await projectService.updateTranscriptSettings(project.id, {
+        ...project.transcriptSettings,
+        ocrRegion: null,
+      });
+      setCurrentProject(updated);
+      setOcrRegionEditing(false);
+      setNotice({ kind: 'success', message: 'Đã xóa vùng OCR của dự án.' });
+    } catch (error) {
+      setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể xóa vùng OCR.' });
+    }
+  };
+
   return (
     <section class="video-stage" aria-label="Khu vực xem trước video">
       <header class="video-stage-toolbar">
@@ -514,7 +580,7 @@ export default function TranslationView() {
           <Show when={currentProject()?.source.width && currentProject()?.source.height}>
             <span class="stage-resolution">{currentProject()?.source.width} × {currentProject()?.source.height}</span>
           </Show>
-          <button class="stage-tool-button" type="button" disabled={!currentProject()?.source.videoPath} title="Thêm vùng blur trên video" onClick={addBlurRegion}>＋ Blur</button>
+          <button class="stage-tool-button" type="button" disabled={!currentProject()?.source.videoPath} title="Kéo để vẽ vùng blur trên video" onClick={addBlurRegion}>{blurRegionPicking() ? 'Đang vẽ…' : '＋ Blur'}</button>
           <button class="stage-tool-button" type="button" disabled={!currentProject()} title="Thêm ảnh logo" onClick={() => void addLogo()}>＋ Logo</button>
           <button class="stage-tool-button" type="button" title="Chỉnh kiểu phụ đề" onClick={selectSubtitleProperties}>Subtitle</button>
           <Show when={currentProject()?.source.videoPath}>
@@ -578,6 +644,13 @@ export default function TranslationView() {
               videoWidth={videoElement?.videoWidth || currentProject()?.source.width || 1920}
               videoHeight={videoElement?.videoHeight || currentProject()?.source.height || 1080}
               previewSubtitleSegmentId={previewSubtitleSegmentId()}
+              regionPicking={ocrRegionPicking()}
+              blurRegionPicking={blurRegionPicking()}
+              ocrRegionEditing={ocrRegionEditing()}
+              ocrRegion={currentProject()?.transcriptSettings?.mode === 'ocr' ? currentProject()?.transcriptSettings?.ocrRegion : null}
+              onRegionSelected={(region, kind) => kind === 'ocr' ? void saveOcrRegion(region) : createBlurRegion(region)}
+              onOcrRegionChange={(region) => void updateOcrRegion(region)}
+              onOcrRegionDelete={() => void deleteOcrRegion()}
             />
             <Show when={!playing() && !mediaError()}>
               <button class="video-center-play" type="button" aria-label="Phát video" onClick={togglePlayback}><Play size={22} fill="currentColor" /></button>
@@ -585,7 +658,7 @@ export default function TranslationView() {
           </Show>
           <Show when={dragging()}><div class="drop-overlay"><div><Film size={25} /><strong>Thả video để nhập vào dự án</strong></div></div></Show>
           <Show when={mediaStatus() && videoUrl()}><div class="media-status-overlay" role="status"><span class="spin status-spinner media-status-spinner" aria-hidden="true" /><span class="media-status-message">{mediaStatus()}</span></div></Show>
-          <Show when={mediaError()}><div class="media-error-overlay" role="alert"><AlertTriangle size={17} /><span class="media-error-message">{mediaError()}</span><Show when={!usingProxy() && currentProject()?.source.videoPath}><button class="media-error-retry" type="button" onClick={retryPreview}>Thử lại preview</button></Show></div></Show>
+          <Show when={mediaError()}><div class="media-error-overlay" role="alert"><AlertTriangle size={17} /><span class="media-error-message">{mediaError()}</span><Show when={currentProject()?.source.videoPath}><button class="media-error-retry" type="button" onClick={retryPreview}>{usingProxy() ? 'Tạo lại preview' : 'Thử tạo preview'}</button></Show></div></Show>
         </div>
       </div>
       <div class="playback-controls" aria-label="Điều khiển phát video">

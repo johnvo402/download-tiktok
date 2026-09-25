@@ -745,6 +745,7 @@ mod tests {
                 pixel_noise: 10,
             }],
             logos: vec![],
+            transcript_settings: crate::project_service::TranscriptSettings::default(),
         }
     }
     fn transcript(text: &str) -> Transcript {

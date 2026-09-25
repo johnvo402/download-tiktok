@@ -9,6 +9,8 @@ import Modal from '../../shared/components/Modal';
 
 export default function ProjectSettingsDialog(props: { project: Project; onClose: () => void }) {
   const [customPrompt, setCustomPrompt] = createSignal(props.project.translation.customPrompt ?? '');
+  const [transcriptMode, setTranscriptMode] = createSignal<'speechRecognition' | 'ocr'>(props.project.transcriptSettings?.mode ?? 'speechRecognition');
+  const [ocrFps, setOcrFps] = createSignal<1 | 2 | 4>(props.project.transcriptSettings?.ocrFps ?? 2);
   const [voiceValue, setVoiceValue] = createSignal('');
   const [voiceProfiles, setVoiceProfiles] = createSignal<Array<{ id: string; name: string; audioPath: string }>>([]);
   const [environment, setEnvironment] = createSignal<TtsEnvironment>();
@@ -51,19 +53,15 @@ export default function ProjectSettingsDialog(props: { project: Project; onClose
     event.preventDefault();
     if (saving()) return;
     const selected = voiceValue();
-    if (!selected) {
-      setError('Chọn một giọng TTS trước khi lưu.');
-      return;
-    }
-    let voice = '';
+    let voice: string | null = null;
     let voiceProfileId: string | null = null;
     if (selected.startsWith('profile:')) {
       voiceProfileId = selected.slice('profile:'.length);
       voice = voiceProfiles().find((item) => item.id === voiceProfileId)?.name ?? '';
-    } else {
+    } else if (selected.startsWith('preset:')) {
       voice = selected.slice('preset:'.length);
     }
-    if (!voice) {
+    if (selected && !voice) {
       setError('Giọng đã chọn không còn khả dụng. Chọn giọng khác trong danh sách.');
       return;
     }
@@ -75,9 +73,14 @@ export default function ProjectSettingsDialog(props: { project: Project; onClose
         customPrompt: customPrompt(),
         voice,
         voiceProfileId,
+        transcriptSettings: {
+          mode: transcriptMode(),
+          ocrFps: ocrFps(),
+          ocrRegion: props.project.transcriptSettings?.ocrRegion ?? null,
+        },
       });
       if (currentProject()?.id === updated.id) setCurrentProject(updated);
-      setNotice({ kind: 'success', message: 'Đã lưu prompt dịch và giọng TTS cho dự án này.' });
+      setNotice({ kind: 'success', message: 'Đã lưu prompt, giọng TTS và cách tạo transcript cho dự án này.' });
       props.onClose();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Không thể lưu cài đặt dự án.');
@@ -124,6 +127,23 @@ export default function ProjectSettingsDialog(props: { project: Project; onClose
           </label>
           <Show when={loading()}><p class="provider-help">Đang đọc danh sách giọng…</p></Show>
           <Show when={!loading() && !environment()?.voices.length && !voiceProfiles().length}><p class="provider-help">Chưa có giọng khả dụng. Cài VieNeu-TTS hoặc thêm voice profile trong Cài đặt ứng dụng → Voice / TTS.</p></Show>
+        </section>
+
+        <section class="project-setting-section" aria-labelledby="project-transcript-mode-title">
+          <div class="project-setting-heading"><div><span class="provider-eyebrow">TRANSCRIPT</span><h3 id="project-transcript-mode-title">Cách lấy transcript</h3></div><span class="project-setting-scope">THEO DỰ ÁN</span></div>
+          <label class="provider-field">
+            <span>Phương thức</span>
+            <select class="settings-select" value={transcriptMode()} onChange={(event) => setTranscriptMode(event.currentTarget.value as 'speechRecognition' | 'ocr')}>
+              <option value="speechRecognition">Lời thoại · faster-whisper / WhisperX</option>
+              <option value="ocr">Subtitle đã cháy vào hình · OCR</option>
+            </select>
+          </label>
+          <Show when={transcriptMode() === 'ocr'}>
+            <div class="provider-config-grid">
+              <label class="provider-field"><span>Lấy mẫu khung hình</span><select class="settings-select" value={ocrFps()} onChange={(event) => setOcrFps(Number(event.currentTarget.value) as 1 | 2 | 4)}><option value="1">1 frame/s · nhanh, ít tài nguyên</option><option value="2">2 frame/s · cân bằng · khuyên dùng</option><option value="4">4 frame/s · bắt câu ngắn tốt hơn</option></select></label>
+            </div>
+            <p class="provider-help">Chọn vùng subtitle bằng cách kéo trên video ở panel Transcript. OCR chỉ xử lý vùng đã chọn, chạy trên CPU và dùng chung model OCR đã cài trong Cài đặt ứng dụng.</p>
+          </Show>
         </section>
 
         <Show when={error()}><div class="provider-feedback provider-feedback-error" role="alert">{error()}</div></Show>

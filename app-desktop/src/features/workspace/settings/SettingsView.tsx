@@ -13,12 +13,17 @@ import { ttsService } from '../../../app/services/tts-service';
 import { formatBytes, storageService, type StorageUsage } from '../../../app/services/storage-service';
 import { runtimeService, type RuntimeHealth } from '../../../app/services/runtime-service';
 import type { TranslationProviderId } from '../../transcript/types';
-import type { AsrEnvironment, TtsEnvironment } from '../../transcript/types';
+import type { AsrEnvironment, OcrEnvironment, TtsEnvironment } from '../../transcript/types';
 import { estimatedModelSize } from '../../transcript/transcript-utils';
 import Modal from '../../../shared/components/Modal';
 import { setAppStartupReady } from '../../../app/project-state';
 
 type SettingsSection = 'General' | 'Translation' | 'Speech Recognition' | 'Voice / TTS' | 'Advanced' | 'About';
+const OCR_MODELS: Array<{ id: AppSettings['asr']['ocrModel']; label: string; hint: string; estimatedMb: number }> = [
+  { id: 'tiny', label: 'PP-OCRv6 Tiny', hint: 'Nhanh, nhẹ · khuyên dùng', estimatedMb: 7 },
+  { id: 'small', label: 'PP-OCRv6 Small', hint: 'Cân bằng tốc độ và độ chính xác', estimatedMb: 31 },
+  { id: 'medium', label: 'PP-OCRv6 Medium', hint: 'Model lớn · ưu tiên độ chính xác', estimatedMb: 136 },
+];
 
 const settingsNavigation: Array<{ name: SettingsSection; caption: string; icon: typeof Monitor }> = [
   { name: 'General', caption: 'Ứng dụng', icon: Monitor },
@@ -51,6 +56,20 @@ export default function SettingsView() {
   const [showAsrModelConfirm, setShowAsrModelConfirm] = createSignal(false);
   const [showRemoveAsrModelConfirm, setShowRemoveAsrModelConfirm] = createSignal(false);
   const [installingWhisperXAlignment, setInstallingWhisperXAlignment] = createSignal(false);
+  const [ocrEnvironment, setOcrEnvironment] = createSignal<OcrEnvironment>();
+  const [ocrEnvironmentError, setOcrEnvironmentError] = createSignal('');
+  const [ocrEnvironmentLoading, setOcrEnvironmentLoading] = createSignal(false);
+  const [installingOcrRuntime, setInstallingOcrRuntime] = createSignal(false);
+  const [installingOcrModel, setInstallingOcrModel] = createSignal(false);
+  const [removingOcrModel, setRemovingOcrModel] = createSignal(false);
+  const [showOcrModelConfirm, setShowOcrModelConfirm] = createSignal(false);
+  const [showRemoveOcrModelConfirm, setShowRemoveOcrModelConfirm] = createSignal(false);
+  const [ocrModelProgress, setOcrModelProgress] = createSignal({
+    progress: 0,
+    downloadedBytes: 0,
+    totalBytes: 7 * 1024 * 1024,
+    message: 'Đang chuẩn bị tải model…',
+  });
   const [ttsEnvironment, setTtsEnvironment] = createSignal<TtsEnvironment>();
   const [ttsEnvironmentError, setTtsEnvironmentError] = createSignal('');
   const [ttsEnvironmentLoading, setTtsEnvironmentLoading] = createSignal(false);
@@ -74,7 +93,9 @@ export default function SettingsView() {
   const [runtimeHealthError, setRuntimeHealthError] = createSignal('');
   const [diagnosticsBusy, setDiagnosticsBusy] = createSignal(false);
   let unlistenTtsModel: (() => void) | undefined;
+  let unlistenOcrModel: (() => void) | undefined;
   let asrEnvironmentRevision = 0;
+  let ocrEnvironmentRevision = 0;
   const returnPath = () => {
     const value = searchParams.returnTo;
     return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') ? value : '/';
@@ -117,6 +138,7 @@ export default function SettingsView() {
       setGeminiConfigured(result.geminiCredentialConfigured);
       setCloudConfigured(result.googleCloudCredentialConfigured);
       void refreshAsrEnvironment(result.settings.asr.model, result.settings.asr.language);
+      void refreshOcrEnvironment(result.settings.asr.ocrModel);
     }).catch((error: unknown) => showMessage(error, true));
     void refreshTtsEnvironment();
     void refreshStorage();
@@ -125,8 +147,16 @@ export default function SettingsView() {
       setTtsModelProgress(event.payload.progress ?? 0);
       setTtsModelMessage(event.payload.message ?? 'Đang tải model…');
     }).then((unlisten) => { unlistenTtsModel = unlisten; }).catch(() => undefined);
+    void listen<{ progress?: number; downloadedBytes?: number; totalBytes?: number; message?: string }>('ocr-model-progress', (event) => {
+      setOcrModelProgress((value) => ({
+        progress: Math.max(0, Math.min(1, event.payload.progress ?? value.progress)),
+        downloadedBytes: Math.max(0, event.payload.downloadedBytes ?? value.downloadedBytes),
+        totalBytes: Math.max(1, event.payload.totalBytes ?? value.totalBytes),
+        message: event.payload.message ?? value.message,
+      }));
+    }).then((unlisten) => { unlistenOcrModel = unlisten; }).catch(() => undefined);
   });
-  onCleanup(() => unlistenTtsModel?.());
+  onCleanup(() => { unlistenTtsModel?.(); unlistenOcrModel?.(); });
   const refreshTtsEnvironment = async () => {
     setTtsEnvironmentLoading(true);
     setTtsEnvironmentError('');
@@ -148,6 +178,17 @@ export default function SettingsView() {
       if (revision === asrEnvironmentRevision) setAsrEnvironmentLoading(false);
     }
   };
+  const refreshOcrEnvironment = async (model = settings()?.asr.ocrModel ?? 'tiny') => {
+    const revision = ++ocrEnvironmentRevision;
+    setOcrEnvironmentLoading(true);
+    setOcrEnvironmentError('');
+    try {
+      const environment = await projectService.getOcrEnvironment(model);
+      if (revision === ocrEnvironmentRevision) setOcrEnvironment(environment);
+    } catch (error) {
+      if (revision === ocrEnvironmentRevision) setOcrEnvironmentError(error instanceof Error ? error.message : 'Không thể kiểm tra RapidOCR.');
+    } finally { if (revision === ocrEnvironmentRevision) setOcrEnvironmentLoading(false); }
+  };
   const updateTranslation = (update: Partial<AppSettings['translation']>) => {
     setSettings((value) => value ? { ...value, translation: { ...value.translation, ...update } } : value);
   };
@@ -166,7 +207,7 @@ export default function SettingsView() {
       setSettings(result.settings);
       setGeminiConfigured(result.geminiCredentialConfigured);
       setCloudConfigured(result.googleCloudCredentialConfigured);
-      showMessage('Đã lưu cài đặt translation trên thiết bị.', false);
+      showMessage('Đã lưu cấu hình ứng dụng trên thiết bị.', false);
     } catch (error) { showMessage(error, true); }
     finally { setBusy(false); }
   };
@@ -284,6 +325,58 @@ export default function SettingsView() {
     } catch (error) {
       setAsrEnvironmentError(error instanceof Error ? error.message : 'Không thể cài WhisperX aligner.');
     } finally { setInstallingWhisperXAlignment(false); }
+  };
+  const installOcrModel = async () => {
+    const value = settings();
+    if (!value || installingOcrModel()) return;
+    const profile = value.asr.ocrModel;
+    const profileLabel = OCR_MODELS.find((item) => item.id === profile)?.label ?? 'PP-OCRv6 Tiny';
+    setShowOcrModelConfirm(false);
+    setInstallingOcrModel(true);
+    setOcrModelProgress({
+      progress: 0,
+      downloadedBytes: 0,
+      totalBytes: ocrEnvironment()?.estimatedDownloadBytes ?? 7 * 1024 * 1024,
+      message: `Đang chuẩn bị tải ${profileLabel}…`,
+    });
+    setOcrEnvironmentError('');
+    try {
+      const saved = await translationService.saveSettings(value);
+      setSettings(saved.settings);
+      await projectService.installOcrModel(profile);
+      await refreshOcrEnvironment(profile);
+      await refreshStorage();
+      setOcrModelProgress((progress) => ({ ...progress, progress: 1, downloadedBytes: ocrEnvironment()?.modelBytes ?? progress.downloadedBytes, message: `Đã cài ${profileLabel}.` }));
+      showMessage(`Đã cài ${profileLabel} trong thư mục Models dùng chung.`, false);
+    } catch (error) {
+      setOcrEnvironmentError(error instanceof Error ? error.message : 'Không thể cài model OCR.');
+    } finally { setInstallingOcrModel(false); }
+  };
+  const removeOcrModel = async () => {
+    const profile = settings()?.asr.ocrModel ?? 'tiny';
+    setShowRemoveOcrModelConfirm(false);
+    setRemovingOcrModel(true);
+    setOcrEnvironmentError('');
+    try {
+      const removedBytes = await projectService.removeOcrModel(profile);
+      await refreshOcrEnvironment(profile);
+      await refreshStorage();
+      showMessage(`Đã xóa file model OCR và giải phóng ${formatBytes(removedBytes)}. Runtime RapidOCR và dữ liệu dự án được giữ nguyên.`, false);
+    } catch (error) {
+      setOcrEnvironmentError(error instanceof Error ? error.message : 'Không thể gỡ model OCR.');
+    } finally { setRemovingOcrModel(false); }
+  };
+  const installOcrRuntime = async () => {
+    if (installingOcrRuntime() || !import.meta.env.DEV) return;
+    setInstallingOcrRuntime(true);
+    setOcrEnvironmentError('');
+    try {
+      await projectService.installOcrRuntime();
+      await refreshOcrEnvironment();
+      showMessage('Runtime RapidOCR đã sẵn sàng. Tiếp theo, cài model OCR trong thẻ này.', false);
+    } catch (error) {
+      setOcrEnvironmentError(error instanceof Error ? error.message : 'Không thể cài runtime RapidOCR.');
+    } finally { setInstallingOcrRuntime(false); }
   };
   const previewTtsVoice = async () => {
     const voice = settings()?.tts.defaultVoice;
@@ -454,6 +547,65 @@ export default function SettingsView() {
                 </div>
               </div>
             </Show>
+            <div class="settings-card ocr-settings-card">
+              <div class="ocr-card-heading">
+                <div class="provider-card-icon"><Sparkles size={18} /></div>
+                <div class="ocr-card-title"><span class="provider-eyebrow">LOCAL · IMAGE TEXT</span><h3>Đọc subtitle bằng OCR</h3><p>RapidOCR · ONNX Runtime · {settings()!.asr.ocrDevice === 'cuda' ? 'NVIDIA CUDA' : settings()!.asr.ocrDevice === 'cpu' ? 'CPU' : ocrEnvironment()?.cudaAvailable ? 'Auto · NVIDIA CUDA' : 'Auto · CPU'}</p></div>
+                <span class="ocr-overall-status" classList={{ ready: !!ocrEnvironment()?.ocrInstalled && !!ocrEnvironment()?.runtimeInstalled && !!ocrEnvironment()?.modelCached, loading: ocrEnvironmentLoading() || installingOcrRuntime() || installingOcrModel() || removingOcrModel() }}>
+                  <span class="provider-status-dot" />{ocrEnvironmentLoading() ? 'Đang kiểm tra' : removingOcrModel() ? 'Đang gỡ model' : ocrEnvironment()?.modelCached ? 'Sẵn sàng' : ocrEnvironment()?.ocrInstalled && ocrEnvironment()?.runtimeInstalled ? 'Cần model' : 'Chưa cài'}
+                </span>
+              </div>
+
+              <div class="provider-config-grid">
+                <label class="provider-field"><span>Model OCR</span><select class="settings-select" value={settings()!.asr.ocrModel} onChange={(event) => { const model = event.currentTarget.value as AppSettings['asr']['ocrModel']; updateAsr({ ocrModel: model }); void refreshOcrEnvironment(model); }}>
+                  <For each={OCR_MODELS}>{(model) => <option value={model.id}>{model.label} · khoảng {model.estimatedMb} MB</option>}</For>
+                </select></label>
+                <label class="provider-field"><span>Thiết bị</span><select class="settings-select" value={settings()!.asr.ocrDevice} onChange={(event) => updateAsr({ ocrDevice: event.currentTarget.value as AppSettings['asr']['ocrDevice'] })}>
+                  <option value="auto">Auto · dùng CUDA nếu có, còn lại CPU</option><option value="cpu">CPU</option><option value="cuda" disabled={!ocrEnvironment()?.cudaAvailable}>NVIDIA GPU · CUDA</option>
+                </select></label>
+              </div>
+              <Show when={!ocrEnvironmentLoading() && !ocrEnvironment()?.cudaAvailable}>
+                <p class="provider-help">CUDA đang tắt vì worker hiện tại không có ONNX Runtime CUDA. Trong development có thể cài runtime tùy chọn bằng <code>scripts/setup-ocr-cuda-dev.ps1</code>; bản release mặc định giữ CPU để giảm dung lượng cài đặt.</p>
+              </Show>
+
+              <div class="ocr-component-grid" aria-label="Thành phần OCR">
+                <div class="ocr-component"><span>ENGINE</span><strong>{ocrEnvironment()?.engine ?? 'RapidOCR · ONNX Runtime'}</strong><small>{ocrEnvironment()?.runtimeInstalled ? ocrEnvironment()?.cudaAvailable ? 'CPU và CUDA khả dụng' : 'CPU khả dụng · CUDA chưa có trong worker' : 'Thiếu ONNX Runtime'}</small></div>
+                <div class="ocr-component"><span>MODEL ĐANG CHỌN</span><strong>{OCR_MODELS.find((model) => model.id === settings()!.asr.ocrModel)?.label}</strong><small>{OCR_MODELS.find((model) => model.id === settings()!.asr.ocrModel)?.hint}</small></div>
+                <div class="ocr-component"><span>DUNG LƯỢNG MODEL</span><strong>{ocrEnvironment()?.modelCached ? formatBytes(ocrEnvironment()!.modelBytes) : `Khoảng ${formatBytes(ocrEnvironment()?.estimatedDownloadBytes ?? 7 * 1024 * 1024)}`}</strong><small>{ocrEnvironment()?.modelCached ? 'Đã có trong Models' : 'Tải một lần, dùng offline'}</small></div>
+              </div>
+
+              <p class="ocr-card-help">Dùng cho subtitle đã cháy vào hình. Chọn chế độ OCR trong Cài đặt dự án, rồi kéo chọn vùng subtitle tại preview. Tốc độ lấy mẫu 1/2/4 frame mỗi giây được cài riêng theo project. Auto dùng CUDA nếu worker hỗ trợ, nếu không sẽ chạy CPU.</p>
+              <Show when={settings()!.asr.ocrDevice === 'cuda' && !ocrEnvironment()?.cudaAvailable}><p class="asr-config-warning" role="alert">Worker hiện tại không có ONNX Runtime CUDA. Bản cài mặc định đi kèm CPU; CUDA cần worker GPU riêng cùng driver/CUDA tương thích. Chọn Auto hoặc CPU để chạy ngay.</p></Show>
+
+              <Show when={!ocrEnvironmentLoading() && ocrEnvironment()?.workerInstalled && (!ocrEnvironment()?.ocrInstalled || !ocrEnvironment()?.runtimeInstalled)}>
+                <div class="ocr-install-callout">
+                  <div class="ocr-install-copy"><strong>Thiếu runtime OCR</strong><span>{import.meta.env.DEV ? 'Cài RapidOCR và ONNX Runtime CPU trực tiếp trong môi trường development. Nếu đã cài ONNX Runtime GPU, installer sẽ giữ nguyên runtime đó.' : 'Bản cài hiện tại cần được Repair hoặc cập nhật để khôi phục RapidOCR/ONNX Runtime.'}</span></div>
+                  <Show when={import.meta.env.DEV}><button class="button button-primary" type="button" disabled={installingOcrRuntime()} onClick={() => void installOcrRuntime()}>{installingOcrRuntime() ? <><span class="spin status-spinner" /> Đang cài runtime…</> : 'Cài runtime OCR'}</button></Show>
+                </div>
+              </Show>
+
+              <Show when={ocrEnvironment()?.ocrInstalled && ocrEnvironment()?.runtimeInstalled && !ocrEnvironment()?.modelCached && !ocrEnvironmentLoading()}>
+                <div class="ocr-install-callout ocr-install-callout-ready">
+                  <div class="ocr-install-copy"><strong>Runtime đã sẵn sàng</strong><span>Tải {ocrEnvironment()?.model ?? 'PP-OCRv6 Tiny'} · khoảng {formatBytes(ocrEnvironment()?.estimatedDownloadBytes ?? 7 * 1024 * 1024)}. Trọng số được dùng offline sau khi cài.</span></div>
+                  <button class="button button-primary" type="button" disabled={installingOcrModel() || removingOcrModel()} onClick={() => setShowOcrModelConfirm(true)}>{installingOcrModel() ? 'Đang cài model…' : 'Tải model OCR'}</button>
+                </div>
+              </Show>
+
+              <Show when={installingOcrRuntime() || installingOcrModel()}>
+                <div class="ocr-install-progress" role="status" aria-live="polite">
+                    <div class="ocr-progress-copy"><span class="spin status-spinner" /><span><strong>{installingOcrRuntime() ? 'Đang cài runtime RapidOCR' : `Đang tải ${ocrEnvironment()?.model ?? 'model OCR'}`}</strong><small>{installingOcrRuntime() ? 'Đang cài thư viện xử lý OCR…' : `${ocrModelProgress().message} · ${formatBytes(ocrModelProgress().downloadedBytes)} / khoảng ${formatBytes(ocrModelProgress().totalBytes)}`}</small></span><strong>{installingOcrRuntime() ? '' : `${Math.round(ocrModelProgress().progress * 100)}%`}</strong></div>
+                  <div class="job-progress-track" role={installingOcrRuntime() ? undefined : 'progressbar'} aria-valuemin={installingOcrRuntime() ? undefined : 0} aria-valuemax={installingOcrRuntime() ? undefined : 100} aria-valuenow={installingOcrRuntime() ? undefined : Math.round(ocrModelProgress().progress * 100)}><span class={installingOcrRuntime() ? 'job-progress-indeterminate' : ''} style={installingOcrRuntime() ? undefined : { width: `${Math.max(2, ocrModelProgress().progress * 100)}%` }} /></div>
+                </div>
+              </Show>
+              <Show when={ocrEnvironmentError()}><div class="provider-feedback provider-feedback-error" role="alert">{ocrEnvironmentError()}</div></Show>
+
+              <div class="ocr-footer">
+                <span class="ocr-footer-path">{storageUsage()?.ocrDirectory ?? 'Thư mục model dùng chung của ứng dụng'}</span>
+                <button class="button button-quiet provider-action-secondary" type="button" disabled={busy() || installingOcrRuntime() || installingOcrModel() || removingOcrModel()} onClick={() => void saveSettings()}>{busy() ? 'Đang lưu…' : 'Lưu cấu hình OCR'}</button>
+                <button class="button button-quiet provider-action-secondary" type="button" disabled={ocrEnvironmentLoading() || installingOcrRuntime() || installingOcrModel() || removingOcrModel()} onClick={() => void refreshOcrEnvironment(settings()!.asr.ocrModel)}>{ocrEnvironmentLoading() ? 'Đang kiểm tra…' : 'Kiểm tra lại'}</button>
+                <Show when={ocrEnvironment()?.modelCached}><span class="version-chip">Đã cài · {formatBytes(ocrEnvironment()!.modelBytes)}</span><button class="button button-danger provider-action-secondary" type="button" disabled={installingOcrModel() || removingOcrModel()} onClick={() => setShowRemoveOcrModelConfirm(true)}>{removingOcrModel() ? 'Đang gỡ…' : `Gỡ ${settings()!.asr.ocrModel}`}</button></Show>
+              </div>
+            </div>
             <div class="settings-info-note"><Cpu size={15} /><span>Model faster-whisper và aligner WhisperX được lưu một lần trong thư mục model dùng chung. Nếu chỉ dùng faster-whisper, không cần cài PyTorch hoặc aligner.</span></div>
           </Show>
 
@@ -522,6 +674,7 @@ export default function SettingsView() {
                   <small>Models · tổng</small><strong>{storageUsage() ? formatBytes(storageUsage()!.modelsBytes) : '—'}</strong>
                   <div class="storage-model-breakdown">
                     <div class="storage-model-location"><span><b>faster-whisper</b><small title={storageUsage()?.fasterWhisperDirectory}>{storageUsage()?.fasterWhisperDirectory ?? 'Đường dẫn model Speech Recognition'}</small></span><strong>{storageUsage() ? formatBytes(storageUsage()!.fasterWhisperBytes) : '—'}</strong><button class="storage-model-open" type="button" aria-label="Mở thư mục faster-whisper" title="Mở thư mục faster-whisper" onClick={() => void openStorageFolder(() => storageService.openModelFolder('fasterWhisper'))}><FolderOpen size={13} /></button></div>
+                    <div class="storage-model-location"><span><b>RapidOCR</b><small title={storageUsage()?.ocrDirectory}>{storageUsage()?.ocrDirectory ?? 'Đường dẫn model OCR'}</small></span><strong>{storageUsage() ? formatBytes(storageUsage()!.ocrBytes) : '—'}</strong><button class="storage-model-open" type="button" aria-label="Mở thư mục RapidOCR" title="Mở thư mục RapidOCR" onClick={() => void openStorageFolder(() => storageService.openModelFolder('ocr'))}><FolderOpen size={13} /></button></div>
                     <div class="storage-model-location"><span><b>VieNeu-TTS</b><small title={storageUsage()?.vieNeuTtsDirectory}>{storageUsage()?.vieNeuTtsDirectory ?? 'Đường dẫn model Voice / TTS'}</small></span><strong>{storageUsage() ? formatBytes(storageUsage()!.vieNeuTtsBytes) : '—'}</strong><button class="storage-model-open" type="button" aria-label="Mở thư mục VieNeu-TTS" title="Mở thư mục VieNeu-TTS" onClick={() => void openStorageFolder(() => storageService.openModelFolder('vieNeuTts'))}><FolderOpen size={13} /></button></div>
                     <Show when={(storageUsage()?.otherModelDataBytes ?? 0) > 0}><span class="storage-model-other">Khác · profile giọng hoặc model cũ: {formatBytes(storageUsage()!.otherModelDataBytes)}</span></Show>
                   </div>
@@ -562,6 +715,18 @@ export default function SettingsView() {
       <Show when={showRemoveAsrModelConfirm()}>
         <Modal title={`Gỡ model faster-whisper ${settings()?.asr.model ?? ''}?`} description="Chỉ xóa model faster-whisper đã cài. Transcript và dữ liệu dự án không bị xóa." onClose={() => setShowRemoveAsrModelConfirm(false)}>
           <footer class="modal-actions"><button class="button button-quiet" type="button" onClick={() => setShowRemoveAsrModelConfirm(false)}>Hủy</button><button class="button button-primary" type="button" onClick={() => void removeAsrModel()}>Gỡ model</button></footer>
+        </Modal>
+      </Show>
+      <Show when={showOcrModelConfirm()}>
+        <Modal title={`Cài ${ocrEnvironment()?.model ?? 'PP-OCRv6 Tiny'}?`} description="Trọng số OCR được tải riêng vào thư mục Models dùng chung. Tải chỉ bắt đầu sau khi bạn xác nhận." onClose={() => setShowOcrModelConfirm(false)}>
+          <div class="model-confirm-card"><div class="job-banner-icon"><Sparkles size={17} /></div><div><strong>{ocrEnvironment()?.model ?? 'PP-OCRv6 Tiny'} · khoảng {formatBytes(ocrEnvironment()?.estimatedDownloadBytes ?? 7 * 1024 * 1024)}</strong><p>{settings()?.asr.ocrModel === 'tiny' ? 'Tiny ưu tiên tốc độ và dung lượng nhỏ.' : settings()?.asr.ocrModel === 'small' ? 'Small cân bằng tốc độ và độ chính xác, dung lượng lớn hơn Tiny.' : 'Medium là model lớn, dùng nhiều bộ nhớ và phù hợp khi ưu tiên độ chính xác.'} Lần đầu cần Internet; sau khi cài, transcript chạy offline. Tiến trình sẽ hiển thị dung lượng tải.</p></div></div>
+          <footer class="modal-actions"><button class="button button-quiet" type="button" onClick={() => setShowOcrModelConfirm(false)}>Hủy</button><button class="button button-primary" type="button" onClick={() => void installOcrModel()}>Tải model OCR</button></footer>
+        </Modal>
+      </Show>
+      <Show when={showRemoveOcrModelConfirm()}>
+        <Modal title={`Gỡ ${ocrEnvironment()?.model ?? 'model OCR'}?`} description="Chỉ xóa profile model đang chọn trong thư mục Models. Các profile khác, runtime RapidOCR, project, transcript và dữ liệu khác được giữ nguyên." onClose={() => setShowRemoveOcrModelConfirm(false)}>
+          <div class="model-confirm-card"><div class="job-banner-icon"><Sparkles size={17} /></div><div><strong>{formatBytes(ocrEnvironment()?.modelBytes ?? 0)} sẽ được giải phóng</strong><p>Các file trọng số của {ocrEnvironment()?.model ?? 'profile đang chọn'} sẽ bị xóa. Bạn có thể tải lại bất cứ lúc nào trong Cài đặt → Speech Recognition.</p></div></div>
+          <footer class="modal-actions"><button class="button button-quiet" type="button" onClick={() => setShowRemoveOcrModelConfirm(false)}>Giữ model</button><button class="button button-danger" type="button" disabled={removingOcrModel()} onClick={() => void removeOcrModel()}>{removingOcrModel() ? 'Đang xóa…' : 'Xóa model và file'}</button></footer>
         </Modal>
       </Show>
       <Show when={showTtsModelConfirm()}>

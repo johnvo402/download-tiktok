@@ -21,6 +21,12 @@ tts = ["vieneu>=3.8.1,<4"]
 # WhisperX adds PyTorch/TorchAudio/Transformers. Keep it opt-in so the default
 # worker/install stays small; the Settings page detects whether the runtime is present.
 whisperx = ["whisperx>=3.8.4,<4"]
+# Hard-subtitle OCR uses the mobile ONNX models. The package is opt-in for
+# development; the release worker is built with this extra by the release lock.
+ocr = ["rapidocr==3.9.2", "onnxruntime==1.30.0"]
+# Optional NVIDIA CUDA provider for development machines. Default release builds
+# remain CPU-first; CUDA release packaging needs a separately validated worker.
+ocr-cuda = ["rapidocr==3.9.2", "onnxruntime-gpu==1.30.0"]
 
 [tool.setuptools.packages.find]
 include = ["worker*"]

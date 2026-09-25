@@ -115,6 +115,10 @@ pub struct AsrSettings {
     pub device: String,
     #[serde(default = "default_asr_language")]
     pub language: String,
+    #[serde(default = "default_ocr_model")]
+    pub ocr_model: String,
+    #[serde(default = "default_ocr_device")]
+    pub ocr_device: String,
 }
 
 impl Default for AsrSettings {
@@ -124,6 +128,8 @@ impl Default for AsrSettings {
             model: default_asr_model(),
             device: default_asr_device(),
             language: default_asr_language(),
+            ocr_model: default_ocr_model(),
+            ocr_device: default_ocr_device(),
         }
     }
 }
@@ -140,6 +146,8 @@ fn default_asr_device() -> String {
 fn default_asr_language() -> String {
     "auto".to_string()
 }
+fn default_ocr_model() -> String { "tiny".to_string() }
+fn default_ocr_device() -> String { "auto".to_string() }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -277,7 +285,7 @@ impl Default for TranslationSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            schema_version: 3,
+            schema_version: 4,
             translation: TranslationSettings::default(),
             tts: TtsSettings::default(),
             asr: AsrSettings::default(),
@@ -310,7 +318,7 @@ pub fn save_settings(
     validate_settings(&settings.translation)?;
     validate_tts_settings(&settings.tts)?;
     validate_asr_settings(&settings.asr)?;
-    settings.schema_version = 3;
+    settings.schema_version = 4;
     write_settings(&settings_path(app)?, &settings)?;
     get_settings(app)
 }
@@ -397,13 +405,13 @@ fn migrate_legacy_tts_voice(settings: &mut AppSettings) -> bool {
 fn parse_settings(bytes: &[u8]) -> Result<AppSettings, String> {
     let mut settings: AppSettings = serde_json::from_slice(bytes)
         .map_err(|error| format!("File cài đặt bị lỗi hoặc không hợp lệ: {error}"))?;
-    if !(1..=3).contains(&settings.schema_version) {
+    if !(1..=4).contains(&settings.schema_version) {
         return Err(format!(
             "Phiên bản cài đặt {} chưa được hỗ trợ.",
             settings.schema_version
         ));
     }
-    settings.schema_version = 3;
+    settings.schema_version = 4;
     validate_settings(&settings.translation)?;
     validate_tts_settings(&settings.tts)?;
     validate_asr_settings(&settings.asr)?;
@@ -447,6 +455,12 @@ pub fn validate_asr_settings(settings: &AsrSettings) -> Result<(), String> {
         .contains(&settings.language.as_str())
     {
         return Err("Ngôn ngữ Speech Recognition không được hỗ trợ.".to_string());
+    }
+    if !["tiny", "small", "medium"].contains(&settings.ocr_model.as_str()) {
+        return Err("Model OCR phải là PP-OCRv6 Tiny, Small hoặc Medium.".to_string());
+    }
+    if !["auto", "cpu", "cuda"].contains(&settings.ocr_device.as_str()) {
+        return Err("Thiết bị OCR phải là Auto, CPU hoặc CUDA.".to_string());
     }
     Ok(())
 }

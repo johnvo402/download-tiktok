@@ -41,6 +41,10 @@ pub fn run() {
             if let Err(error) = log_service::initialize(&logs) {
                 eprintln!("Application file logger unavailable: {error}");
             }
+            match storage_service::migrate_local_storage(app.handle()) {
+                Ok(warnings) => for warning in warnings { log::warn!("Storage migration: {warning}"); },
+                Err(error) => log::warn!("Storage migration could not finish: {error}"),
+            }
             log::info!("Application startup; version={}", env!("CARGO_PKG_VERSION"));
             let path = app_data.join("jobs.json");
             app.state::<job_service::JobStore>()
@@ -72,6 +76,10 @@ pub fn run() {
             commands::get_transcript,
             commands::save_transcript,
             commands::get_asr_environment,
+            commands::get_ocr_environment,
+            commands::install_ocr_runtime,
+            commands::install_ocr_model,
+            commands::remove_ocr_model,
             commands::install_asr_model,
             commands::install_whisperx_alignment,
             commands::remove_asr_model,
@@ -102,6 +110,7 @@ pub fn run() {
             commands::get_tts_audio_path,
             commands::update_dubbing_settings,
             commands::update_project_preferences,
+            commands::update_transcript_settings,
             commands::validate_export,
             commands::start_export,
             commands::cancel_export,

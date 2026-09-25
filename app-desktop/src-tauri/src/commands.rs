@@ -806,36 +806,73 @@ pub fn update_project_preferences(
     app: tauri::AppHandle,
     project_id: String,
     custom_prompt: String,
-    voice: String,
+    voice: Option<String>,
     voice_profile_id: Option<String>,
+    transcript_settings: Option<crate::project_service::TranscriptSettings>,
 ) -> Result<Project, String> {
     crate::project_service::validate_translation_custom_prompt(&custom_prompt)?;
-    let voice = voice.trim();
-    if voice.is_empty() || voice.chars().count() > 100 || voice.chars().any(char::is_control) {
-        return Err("Giọng TTS của dự án không hợp lệ.".to_string());
-    }
-
-    let settings = settings_service::read_settings(&settings_service::settings_path(&app)?)?;
     let selected_voice = if let Some(profile_id) = voice_profile_id.as_deref() {
         uuid::Uuid::parse_str(profile_id)
             .map_err(|_| "Voice profile của dự án không hợp lệ.".to_string())?;
-        settings
+        let settings = settings_service::read_settings(&settings_service::settings_path(&app)?)?;
+        Some(settings
             .tts
             .voice_profiles
             .iter()
             .find(|profile| profile.id == profile_id)
             .map(|profile| profile.name.clone())
-            .ok_or_else(|| "Voice profile không còn tồn tại trong cài đặt ứng dụng.".to_string())?
+            .ok_or_else(|| "Voice profile không còn tồn tại trong cài đặt ứng dụng.".to_string())?)
     } else {
-        voice.to_string()
+        if let Some(voice) = voice.as_deref() {
+            let voice = voice.trim();
+            if voice.is_empty() || voice.chars().count() > 100 || voice.chars().any(char::is_control) {
+                return Err("Giọng TTS của dự án không hợp lệ.".to_string());
+            }
+            Some(voice.to_string())
+        } else { None }
     };
 
     let projects = store(&app)?;
     let mut project = projects.get(&project_id)?;
+    if let Some(settings) = transcript_settings {
+        validate_transcript_settings(&settings)?;
+        project.transcript_settings = settings;
+    }
     project.translation.custom_prompt = custom_prompt;
-    project.dubbing.voice = Some(selected_voice);
-    project.dubbing.voice_profile_id = voice_profile_id;
+    if let Some(selected_voice) = selected_voice { project.dubbing.voice = Some(selected_voice); }
+    if voice.is_some() || voice_profile_id.is_some() { project.dubbing.voice_profile_id = voice_profile_id; }
     projects.update_project(&project)
+}
+
+#[tauri::command]
+pub fn update_transcript_settings(
+    app: tauri::AppHandle,
+    project_id: String,
+    settings: crate::project_service::TranscriptSettings,
+) -> Result<Project, String> {
+    validate_transcript_settings(&settings)?;
+    let projects = store(&app)?;
+    let mut project = projects.get(&project_id)?;
+    project.transcript_settings = settings;
+    projects.update_project(&project)
+}
+
+fn validate_transcript_settings(settings: &crate::project_service::TranscriptSettings) -> Result<(), String> {
+    if ![1.0, 2.0, 4.0].contains(&settings.ocr_fps) {
+        return Err("Tốc độ lấy mẫu OCR chỉ hỗ trợ 1, 2 hoặc 4 khung hình/giây.".into());
+    }
+    if let Some(region) = settings.ocr_region.as_ref() {
+        let values = [region.x, region.y, region.width, region.height];
+        if values.iter().any(|value| !value.is_finite())
+            || region.x < 0.0 || region.y < 0.0
+            || region.width <= 0.0 || region.height <= 0.0
+            || region.x + region.width > 1.000001
+            || region.y + region.height > 1.000001
+        {
+            return Err("Vùng OCR không hợp lệ. Hãy chọn lại vùng bên trong khung video.".into());
+        }
+    }
+    Ok(())
 }
 
 fn validate_language(value: &str, allow_auto: bool) -> Result<(), String> {
@@ -897,19 +934,40 @@ pub async fn import_video(
 
 #[tauri::command]
 pub fn get_video_asset_path(app: tauri::AppHandle, project_id: String) -> Result<String, String> {
-    video_service::resolve_video(&store(&app)?, &project_id)
-        .map(|path| path.to_string_lossy().into_owned())
+    let path = video_service::resolve_video(&store(&app)?, &project_id)?;
+    allow_verified_media_asset(&app, &path)?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+fn allow_verified_media_asset(app: &tauri::AppHandle, path: &std::path::Path) -> Result<(), String> {
+    let path = path
+        .canonicalize()
+        .map_err(|error| format!("Không thể xác minh đường dẫn media: {error}"))?;
+    let metadata = std::fs::symlink_metadata(&path)
+        .map_err(|error| format!("Không thể xác minh tệp media: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("Tệp media không hợp lệ hoặc là liên kết ngoài.".into());
+    }
+    app.asset_protocol_scope()
+        .allow_file(&path)
+        .map_err(|error| format!("Không thể cấp quyền đọc preview media: {error}"))
 }
 
 #[tauri::command]
 pub async fn create_preview_proxy(
     app: tauri::AppHandle,
     project_id: String,
+    force_rebuild: bool,
 ) -> Result<String, String> {
     let root = projects_root(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
-        video_service::create_preview_proxy(&ProjectStore::new(root), &project_id)
-            .map(|path| path.to_string_lossy().into_owned())
+        let path = video_service::create_preview_proxy(
+            &ProjectStore::new(root),
+            &project_id,
+            force_rebuild,
+        )?;
+        allow_verified_media_asset(&app, &path)?;
+        Ok(path.to_string_lossy().into_owned())
     })
     .await
     .map_err(|error| format!("Không thể tạo preview video: {error}"))?
@@ -977,6 +1035,34 @@ pub async fn get_asr_environment(
     tauri::async_runtime::spawn_blocking(move || asr_service::get_asr_environment(app, model, alignment_language))
         .await
         .map_err(|error| format!("Không thể kiểm tra môi trường Speech Recognition: {error}"))?
+}
+
+#[tauri::command]
+pub async fn get_ocr_environment(app: tauri::AppHandle, model: String) -> Result<asr_service::OcrEnvironment, String> {
+    tauri::async_runtime::spawn_blocking(move || asr_service::get_ocr_environment(app, model))
+        .await
+        .map_err(|error| format!("Không thể kiểm tra môi trường OCR: {error}"))?
+}
+
+#[tauri::command]
+pub async fn install_ocr_runtime(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || asr_service::install_ocr_runtime(app))
+        .await
+        .map_err(|error| format!("Không thể cài runtime OCR: {error}"))?
+}
+
+#[tauri::command]
+pub async fn install_ocr_model(app: tauri::AppHandle, model: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || asr_service::install_ocr_model(app, model))
+        .await
+        .map_err(|error| format!("Không thể cài model OCR: {error}"))?
+}
+
+#[tauri::command]
+pub async fn remove_ocr_model(app: tauri::AppHandle, model: String) -> Result<u64, String> {
+    tauri::async_runtime::spawn_blocking(move || asr_service::remove_ocr_model(app, model))
+        .await
+        .map_err(|error| format!("Không thể gỡ model OCR: {error}"))?
 }
 
 #[tauri::command]

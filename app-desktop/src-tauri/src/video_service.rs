@@ -35,6 +35,8 @@ struct ProbeFormat {
 struct ProbeStream {
     index: u32,
     codec_name: Option<String>,
+    profile: Option<String>,
+    pix_fmt: Option<String>,
     codec_type: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
@@ -55,6 +57,8 @@ pub struct ProbeMetadata {
     pub height: Option<u32>,
     pub fps: Option<f64>,
     pub video_codec: Option<String>,
+    pub video_profile: Option<String>,
+    pub video_pixel_format: Option<String>,
     pub audio_codec: Option<String>,
     pub file_size: u64,
     pub audio_streams: Vec<AudioStreamMetadata>,
@@ -216,7 +220,11 @@ pub fn resolve_video(store: &ProjectStore, project_id: &str) -> Result<PathBuf, 
     resolve_project_file(store, project_id, relative, "media/source")
 }
 
-pub fn create_preview_proxy(store: &ProjectStore, project_id: &str) -> Result<PathBuf, String> {
+pub fn create_preview_proxy(
+    store: &ProjectStore,
+    project_id: &str,
+    force_rebuild: bool,
+) -> Result<PathBuf, String> {
     let project = store.get(project_id)?;
     let source = resolve_video(store, project_id)?;
     let checksum = project
@@ -232,10 +240,23 @@ pub fn create_preview_proxy(store: &ProjectStore, project_id: &str) -> Result<Pa
     if checksum_prefix.len() < 24 || !checksum_prefix.chars().all(|ch| ch.is_ascii_hexdigit()) {
         return Err("Checksum video không hợp lệ để tạo preview.".to_string());
     }
-    let filename = format!("{checksum_prefix}.mp4");
+    // Version the proxy cache so older H.264 profiles from previous app builds
+    // are not reused after tightening WebView compatibility requirements.
+    let filename = format!("{checksum_prefix}-webview-v2.mp4");
     let destination = preview_dir.join(&filename);
-    if destination.is_file() {
-        return Ok(destination);
+    if let Ok(metadata) = fs::symlink_metadata(&destination) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("Tệp cache preview không hợp lệ; hãy xóa cache preview của project rồi thử lại.".into());
+        }
+        if !force_rebuild
+            && validate_preview_proxy(&destination, !project.source.audio_streams.is_empty()).is_ok()
+        {
+            return Ok(destination);
+        }
+        // A proxy left by an older or interrupted run must never be treated as
+        // ready just because a file with the expected checksum name exists.
+        fs::remove_file(&destination)
+            .map_err(|error| format!("Không thể dọn preview H.264/AAC bị lỗi: {error}"))?;
     }
     let temporary = preview_dir.join(format!(".preview-{}.mp4", Uuid::new_v4()));
     let output = crate::runtime_paths::ffmpeg_command()?
@@ -250,12 +271,16 @@ pub fn create_preview_proxy(store: &ProjectStore, project_id: &str) -> Result<Pa
             "scale='min(1280,iw)':'min(1280,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
             "-c:v",
             "libx264",
+            "-profile:v",
+            "baseline",
             "-preset",
             "ultrafast",
             "-crf",
             "27",
             "-pix_fmt",
             "yuv420p",
+            "-tag:v",
+            "avc1",
             "-c:a",
             "aac",
             "-b:a",
@@ -275,9 +300,40 @@ pub fn create_preview_proxy(store: &ProjectStore, project_id: &str) -> Result<Pa
             format!("Không thể tạo preview H.264: {detail}")
         });
     }
-    fs::rename(&temporary, &destination)
-        .map_err(|error| format!("Không thể lưu video preview: {error}"))?;
+    if let Err(error) = validate_preview_proxy(&temporary, !project.source.audio_streams.is_empty()) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("FFmpeg kết thúc nhưng preview không hợp lệ: {error}"));
+    }
+    fs::rename(&temporary, &destination).map_err(|error| {
+        let _ = fs::remove_file(&temporary);
+        format!("Không thể lưu video preview: {error}")
+    })?;
     Ok(destination)
+}
+
+fn validate_preview_proxy(path: &Path, require_audio: bool) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("Không đọc được tệp preview: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() == 0 {
+        return Err("Tệp preview rỗng hoặc không phải file thường.".into());
+    }
+    let probe = probe_video(path, metadata.len())?;
+    if !probe.has_video || probe.video_codec.as_deref() != Some("h264") {
+        return Err("Không tìm thấy video stream H.264 hợp lệ trong preview.".into());
+    }
+    if !probe.video_profile.as_deref().is_some_and(|profile| {
+        profile.to_ascii_lowercase().contains("baseline")
+    }) || probe.video_pixel_format.as_deref() != Some("yuv420p")
+    {
+        return Err("Preview không dùng profile H.264 Baseline / pixel format yuv420p tương thích WebView.".into());
+    }
+    if require_audio && probe.audio_codec.as_deref() != Some("aac") {
+        return Err("Video nguồn có audio nhưng preview không có audio stream AAC hợp lệ.".into());
+    }
+    if !probe.duration.is_some_and(|duration| duration.is_finite() && duration > 0.0) {
+        return Err("Preview không có thời lượng hợp lệ.".into());
+    }
+    Ok(())
 }
 
 pub fn resolve_project_file(
@@ -399,6 +455,8 @@ pub fn probe_video(path: &Path, file_size: u64) -> Result<ProbeMetadata, String>
         height: video.and_then(|stream| stream.height),
         fps,
         video_codec: video.and_then(|stream| stream.codec_name.clone()),
+        video_profile: video.and_then(|stream| stream.profile.clone()),
+        video_pixel_format: video.and_then(|stream| stream.pix_fmt.clone()),
         audio_codec: audio_streams.first().map(|stream| stream.codec.clone()),
         file_size: parsed
             .format

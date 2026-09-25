@@ -1,4 +1,4 @@
-export type TranscriptSourceType = 'subtitle' | 'asr';
+export type TranscriptSourceType = 'subtitle' | 'asr' | 'ocr';
 export type TranslationStatus = 'pending' | 'translated' | 'edited' | 'failed';
 
 export interface TranscriptSegment {
@@ -109,4 +109,18 @@ export interface AsrEnvironment {
   whisperXInstalled: boolean;
   alignmentModelCached: boolean;
   alignmentLanguage: string | null;
+}
+
+export interface OcrEnvironment {
+  workerInstalled: boolean;
+  ocrInstalled: boolean;
+  runtimeInstalled: boolean;
+  modelCached: boolean;
+  engine: string;
+  model: string;
+  modelProfile: 'tiny' | 'small' | 'medium';
+  modelBytes: number;
+  estimatedDownloadBytes: number;
+  cudaAvailable: boolean;
+  activeDevice: 'cpu' | 'cuda';
 }

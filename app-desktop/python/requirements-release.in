@@ -1,6 +1,7 @@
 # Release runtime is CPU-first. Do not add torch/CUDA packages to the default
 # installer; users with a supported GPU can use a separately validated build.
 faster-whisper==1.2.1
+rapidocr==3.9.2
 vieneu==3.8.3
 playwright==1.63.0
 yt-dlp==2026.8.19

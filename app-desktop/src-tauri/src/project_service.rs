@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
-const SCHEMA_VERSION: u32 = 6;
+const SCHEMA_VERSION: u32 = 7;
 const LEGACY_TTS_VOICE: &str = "Ngọc Lan";
 const DEFAULT_TTS_VOICE: &str = "Ngọc Huyền";
 const MAX_NAME_CHARS: usize = 100;
@@ -44,6 +44,41 @@ pub struct Project {
     pub blur_regions: Vec<BlurRegion>,
     #[serde(default)]
     pub logos: Vec<ProjectLogo>,
+    #[serde(default)]
+    pub transcript_settings: TranscriptSettings,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TranscriptSettings {
+    pub mode: TranscriptMode,
+    /// Frames sampled per second for on-screen subtitle OCR (1, 2, or 4).
+    pub ocr_fps: f64,
+    /// Normalized [0,1] rectangle in source video coordinates.
+    pub ocr_region: Option<OcrRegion>,
+}
+
+impl Default for TranscriptSettings {
+    fn default() -> Self {
+        Self { mode: TranscriptMode::SpeechRecognition, ocr_fps: 2.0, ocr_region: None }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TranscriptMode {
+    #[default]
+    SpeechRecognition,
+    Ocr,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrRegion {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -126,6 +161,7 @@ pub enum TranscriptStatus {
 pub enum TranscriptSourceType {
     Subtitle,
     Asr,
+    Ocr,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -446,6 +482,7 @@ impl ProjectStore {
             dubbing: DubbingSettings::default(),
             blur_regions: Vec::new(),
             logos: Vec::new(),
+            transcript_settings: TranscriptSettings::default(),
         };
 
         let result: Result<Project, String> = (|| {

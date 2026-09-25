@@ -64,6 +64,13 @@ export interface Project {
   };
   blurRegions: BlurRegion[];
   logos: ProjectLogo[];
+  transcriptSettings: TranscriptSettings;
+}
+
+export interface TranscriptSettings {
+  mode: 'speechRecognition' | 'ocr';
+  ocrFps: 1 | 2 | 4;
+  ocrRegion: { x: number; y: number; width: number; height: number } | null;
 }
 
 export interface AudioStreamMetadata {
@@ -87,7 +94,7 @@ export interface SubtitleTrackMetadata {
 export interface TranscriptMetadata {
   status: 'notStarted' | 'running' | 'completed' | 'failed' | 'canceled';
   path: string;
-  sourceType?: 'subtitle' | 'asr' | null;
+  sourceType?: 'subtitle' | 'asr' | 'ocr' | null;
   sourceTrack?: number | null;
   language?: string | null;
   segmentCount: number;

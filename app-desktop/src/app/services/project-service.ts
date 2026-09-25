@@ -1,6 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import type { Project, ProjectListResponse, SubtitleTrackMetadata } from '../../features/projects/types';
-import type { AsrEnvironment, Transcript } from '../../features/transcript/types';
+import type { Project, ProjectListResponse, SubtitleTrackMetadata, TranscriptSettings } from '../../features/projects/types';
+import type { AsrEnvironment, OcrEnvironment, Transcript } from '../../features/transcript/types';
 
 function asUserMessage(error: unknown): Error {
   if (error instanceof Error) return error;
@@ -31,7 +31,7 @@ export const projectService = {
     replaced: boolean;
   }>('import_video', { projectId, sourcePath, replace }),
   getVideoAssetPath: (projectId: string) => call<string>('get_video_asset_path', { projectId }),
-  createPreviewProxy: (projectId: string) => call<string>('create_preview_proxy', { projectId }),
+  createPreviewProxy: (projectId: string, forceRebuild = false) => call<string>('create_preview_proxy', { projectId, forceRebuild }),
   getVideoMetadata: (projectId: string) => call<Project['source']>('get_video_metadata', { projectId }),
   getSubtitleTracks: (projectId: string) => call<SubtitleTrackMetadata[]>('get_subtitle_tracks', { projectId }),
   extractSubtitle: (projectId: string, trackIndex: number) => call<Transcript>('extract_subtitle', { projectId, trackIndex }),
@@ -57,11 +57,16 @@ export const projectService = {
   }>('remove_logo', { projectId, logoId }),
   getLogoAssetPath: (projectId: string, logoId: string) => call<string>('get_logo_asset_path', { projectId, logoId }),
   updateDubbingSettings: (projectId: string, dubbing: Project['dubbing']) => call<Project>('update_dubbing_settings', { projectId, dubbing }),
-  updateProjectPreferences: (projectId: string, preferences: { customPrompt: string; voice: string; voiceProfileId: string | null }) => call<Project>('update_project_preferences', { projectId, ...preferences }),
+  updateProjectPreferences: (projectId: string, preferences: { customPrompt: string; voice: string | null; voiceProfileId: string | null; transcriptSettings: TranscriptSettings }) => call<Project>('update_project_preferences', { projectId, ...preferences }),
+  updateTranscriptSettings: (projectId: string, settings: TranscriptSettings) => call<Project>('update_transcript_settings', { projectId, settings }),
   getAsrEnvironment: (model: string, alignmentLanguage?: string) => call<AsrEnvironment>('get_asr_environment', { model, ...(alignmentLanguage ? { alignmentLanguage } : {}) }),
+  getOcrEnvironment: (model: 'tiny' | 'small' | 'medium' = 'tiny') => call<OcrEnvironment>('get_ocr_environment', { model }),
+  installOcrRuntime: () => call<void>('install_ocr_runtime'),
+  installOcrModel: (model: 'tiny' | 'small' | 'medium' = 'tiny') => call<void>('install_ocr_model', { model }),
+  removeOcrModel: (model: 'tiny' | 'small' | 'medium' = 'tiny') => call<number>('remove_ocr_model', { model }),
   installAsrModel: (model: string) => call<void>('install_asr_model', { model }),
   installWhisperXAlignment: (language: string) => call<void>('install_whisperx_alignment', { language }),
   removeAsrModel: (model: string) => call<void>('remove_asr_model', { model }),
-  generateTranscript: (projectId: string, options: { engine: 'fasterWhisper' | 'whisperX'; model: string; device: string; language: string }) => call<string>('generate_transcript', { projectId, options }),
+  generateTranscript: (projectId: string, options: { engine: 'fasterWhisper' | 'whisperX'; model: string; device: string; language: string; mode: 'speechRecognition' | 'ocr'; ocrFps: 1 | 2 | 4; ocrRegion: TranscriptSettings['ocrRegion']; ocrModel: 'tiny' | 'small' | 'medium'; ocrDevice: 'auto' | 'cpu' | 'cuda' }) => call<string>('generate_transcript', { projectId, options }),
   cancelTranscription: (jobId: string) => call<boolean>('cancel_transcription', { jobId }),
 };

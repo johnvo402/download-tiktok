@@ -89,6 +89,23 @@ pub fn worker_dir() -> Result<PathBuf, String> {
 }
 
 pub fn worker_command(worker_root: &Path) -> Command {
+    // Development settings install Python extras into the selected Python
+    // environment. Run that same interpreter for the source worker so newly
+    // installed OCR/WhisperX packages are visible immediately.
+    if cfg!(debug_assertions) {
+        if let Ok(mut command) = development_python_command() {
+            command
+                .arg("-m")
+                .arg("worker")
+                .current_dir(worker_root)
+                .env("PYTHONPATH", worker_root)
+                .env("PYTHONUNBUFFERED", "1")
+                .env("PYTHONUTF8", "1")
+                .env("PYTHONIOENCODING", "utf-8:backslashreplace");
+            return command;
+        }
+    }
+
     let executable = worker_root.join(if cfg!(windows) {
         "ai-worker.exe"
     } else {
@@ -125,6 +142,25 @@ pub fn worker_command(worker_root: &Path) -> Command {
         .env("PYTHONIOENCODING", "utf-8:backslashreplace");
     hide_console(&mut command);
     command
+}
+
+pub fn development_python_command() -> Result<Command, String> {
+    if !cfg!(debug_assertions) {
+        return Err("Python package cài đặt trong ứng dụng chỉ khả dụng ở môi trường development.".into());
+    }
+    let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let local_python = repository_root
+        .join(".venv")
+        .join("Scripts")
+        .join("python.exe");
+    let executable = std::env::var_os("LOCALIZATION_PYTHON")
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .or_else(|| local_python.is_file().then_some(local_python))
+        .ok_or_else(|| "Không tìm thấy Python environment của dự án. Hãy tạo `.venv` hoặc đặt LOCALIZATION_PYTHON rồi thử lại.".to_string())?;
+    let mut command = Command::new(executable);
+    hide_console(&mut command);
+    Ok(command)
 }
 
 pub fn binary_available(path: Result<PathBuf, String>) -> bool {
