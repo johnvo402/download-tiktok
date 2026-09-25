@@ -98,6 +98,13 @@ def main() -> int:
                 install_tts_model(request, emit)
             elif operation == "tts_generate":
                 synthesize(request, emit)
+            elif operation in {"dialogue_inspect", "dialogue_separate"}:
+                from worker.dialogue.service import inspect_runtime, separate_dialogue
+
+                if operation == "dialogue_inspect":
+                    emit({"type": "capabilities", **inspect_runtime()})
+                else:
+                    separate_dialogue(request, emit)
             elif operation == "tiktok_drama_download":
                 # TikTok scraping dependencies are loaded only for this operation.
                 # A missing downloader package must not take ASR/TTS offline.

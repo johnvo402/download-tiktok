@@ -15,6 +15,8 @@ export interface ExportOptions {
   originalVolume: number;
   dubbedVolume: number;
   duckingAmount: number;
+  dialogueReduction: boolean;
+  dialogueReductionAmount: number;
 }
 
 export interface SubtitleLayoutWarning {

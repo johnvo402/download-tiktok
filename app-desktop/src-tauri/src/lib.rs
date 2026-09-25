@@ -1,6 +1,7 @@
 mod asr_service;
 mod commands;
 mod diagnostics_service;
+mod dialogue_service;
 mod job_service;
 mod log_service;
 mod overlays_service;
@@ -100,6 +101,9 @@ pub fn run() {
             commands::remove_logo,
             commands::get_logo_asset_path,
             commands::get_tts_environment,
+            commands::get_dialogue_environment,
+            commands::install_dialogue_model,
+            commands::remove_dialogue_model,
             commands::install_tts_model,
             commands::remove_tts_model,
             commands::preview_tts_voice,

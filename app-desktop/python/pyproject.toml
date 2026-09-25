@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-video-localization-worker"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local JSON Lines worker for JC AI desktop app"
 requires-python = ">=3.10"
 dependencies = [
@@ -27,6 +27,12 @@ ocr = ["rapidocr==3.9.2", "onnxruntime==1.30.0"]
 # Optional NVIDIA CUDA provider for development machines. Default release builds
 # remain CPU-first; CUDA release packaging needs a separately validated worker.
 ocr-cuda = ["rapidocr==3.9.2", "onnxruntime-gpu==1.30.0"]
+# Optional, large runtime for cinematic dialogue/music/effects separation.
+# Install CPU PyTorch first with scripts/setup-dialogue-dev.ps1.
+dialogue = [
+    "soundfile>=0.12,<1",
+    "bandit-infer @ git+https://github.com/openmirlab/bandit-infer.git@7ec03cb568811958db65a96a10fdb8879922b2ac",
+]
 
 [tool.setuptools.packages.find]
 include = ["worker*"]

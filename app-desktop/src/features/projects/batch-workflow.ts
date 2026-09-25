@@ -208,6 +208,8 @@ export class BatchWorkflowRunner {
             outputDirectory: null, outputFileName: `${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`,
             originalVolume: latest.dubbing.originalVolume,
             dubbedVolume: latest.dubbing.dubbedVolume, duckingAmount: latest.dubbing.duckingAmount,
+            dialogueReduction: latest.dubbing.dialogueReductionEnabled,
+            dialogueReductionAmount: latest.dubbing.dialogueReductionAmount,
           };
           const validation = await renderService.validate(project.id, options);
           if (!validation.valid || validation.warnings.length) {

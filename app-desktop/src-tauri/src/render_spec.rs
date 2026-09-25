@@ -67,6 +67,10 @@ pub struct ExportOptions {
     pub dubbed_volume: f64,
     #[serde(default = "default_ducking_amount")]
     pub ducking_amount: f64,
+    #[serde(default)]
+    pub dialogue_reduction: bool,
+    #[serde(default = "default_dialogue_reduction_amount")]
+    pub dialogue_reduction_amount: f64,
 }
 
 fn default_quality() -> String {
@@ -81,6 +85,7 @@ fn default_one() -> f64 {
 fn default_ducking_amount() -> f64 {
     0.75
 }
+fn default_dialogue_reduction_amount() -> f64 { 0.65 }
 fn default_output_file_name() -> String {
     chrono::Utc::now().format("%Y-%m-%d_%H-%M-%S").to_string()
 }
@@ -101,6 +106,8 @@ impl Default for ExportOptions {
             original_volume: 1.0,
             dubbed_volume: 1.0,
             ducking_amount: 0.75,
+            dialogue_reduction: false,
+            dialogue_reduction_amount: default_dialogue_reduction_amount(),
         }
     }
 }
@@ -183,6 +190,8 @@ pub struct RenderAudioConfig {
     pub dubbed_volume: f64,
     pub ducking: bool,
     pub ducking_amount: f64,
+    pub dialogue_reduction: bool,
+    pub dialogue_reduction_amount: f64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -318,6 +327,8 @@ pub fn build_render_specification(
             dubbed_volume: options.dubbed_volume,
             ducking: options.ducking,
             ducking_amount: options.ducking_amount,
+            dialogue_reduction: options.dialogue_reduction,
+            dialogue_reduction_amount: options.dialogue_reduction_amount,
         },
         quality: options.quality.clone(),
         output: RenderOutputConfig {

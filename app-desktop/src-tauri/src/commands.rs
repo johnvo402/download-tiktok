@@ -3,7 +3,7 @@ use crate::project_service::{
 };
 use crate::render_spec;
 use crate::{
-    asr_service, overlays_service, project_service::SubtitleSettings, render_service,
+    asr_service, dialogue_service, overlays_service, project_service::SubtitleSettings, render_service,
     settings_service, transcript_service, translation_service, tts_service, video_service,
     video_tools_service,
 };
@@ -634,6 +634,25 @@ pub async fn get_tts_environment(
 }
 
 #[tauri::command]
+pub async fn get_dialogue_environment(app: tauri::AppHandle) -> Result<dialogue_service::DialogueEnvironment, String> {
+    tauri::async_runtime::spawn_blocking(move || dialogue_service::get_environment(&app))
+        .await.map_err(|error| format!("Không thể kiểm tra model tách thoại: {error}"))?
+}
+
+#[tauri::command]
+pub async fn install_dialogue_model(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || dialogue_service::install_model(&app))
+        .await.map_err(|error| format!("Không thể tải model tách thoại: {error}"))?
+}
+
+#[tauri::command]
+pub async fn remove_dialogue_model(app: tauri::AppHandle, jobs: tauri::State<'_, render_service::RenderJobs>) -> Result<(), String> {
+    let jobs = jobs.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || dialogue_service::remove_model(&app, &jobs))
+        .await.map_err(|error| format!("Không thể gỡ model tách thoại: {error}"))?
+}
+
+#[tauri::command]
 pub async fn install_tts_model(app: tauri::AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || tts_service::install_model(app))
         .await
@@ -775,6 +794,8 @@ pub fn update_dubbing_settings(
         || !(0.0..=1.0).contains(&dubbing.dubbed_volume)
         || !dubbing.ducking_amount.is_finite()
         || !(0.0..=1.0).contains(&dubbing.ducking_amount)
+        || !dubbing.dialogue_reduction_amount.is_finite()
+        || !(0.0..=1.0).contains(&dubbing.dialogue_reduction_amount)
         || !matches!(dubbing.provider.as_str(), "vieneu")
         || dubbing.model_id != "v3-turbo"
         || dubbing

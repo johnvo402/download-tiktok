@@ -61,6 +61,8 @@ export interface Project {
     muteOriginal: boolean;
     duckingEnabled: boolean;
     duckingAmount: number;
+    dialogueReductionEnabled: boolean;
+    dialogueReductionAmount: number;
   };
   blurRegions: BlurRegion[];
   logos: ProjectLogo[];

@@ -9,6 +9,7 @@ import {
 } from 'lucide-solid';
 import { translationService, type AppSettings } from '../../../app/services/translation-service';
 import { projectService } from '../../../app/services/project-service';
+import { dialogueService, type DialogueEnvironment, type DialogueModelProgress } from '../../../app/services/dialogue-service';
 import { ttsService } from '../../../app/services/tts-service';
 import { formatBytes, storageService, type StorageUsage } from '../../../app/services/storage-service';
 import { runtimeService, type RuntimeHealth } from '../../../app/services/runtime-service';
@@ -76,6 +77,14 @@ export default function SettingsView() {
   const [showTtsModelConfirm, setShowTtsModelConfirm] = createSignal(false);
   const [installingTtsModel, setInstallingTtsModel] = createSignal(false);
   const [removingTtsModel, setRemovingTtsModel] = createSignal(false);
+  const [dialogueEnvironment, setDialogueEnvironment] = createSignal<DialogueEnvironment>();
+  const [dialogueEnvironmentLoading, setDialogueEnvironmentLoading] = createSignal(false);
+  const [dialogueEnvironmentError, setDialogueEnvironmentError] = createSignal('');
+  const [installingDialogueModel, setInstallingDialogueModel] = createSignal(false);
+  const [removingDialogueModel, setRemovingDialogueModel] = createSignal(false);
+  const [showDialogueModelConfirm, setShowDialogueModelConfirm] = createSignal(false);
+  const [showRemoveDialogueModelConfirm, setShowRemoveDialogueModelConfirm] = createSignal(false);
+  const [dialogueModelProgress, setDialogueModelProgress] = createSignal<DialogueModelProgress>({ progress: 0, downloadedBytes: 0, totalBytes: 446_680_129, message: 'Đang chuẩn bị tải model…' });
   const [showRemoveTtsModelConfirm, setShowRemoveTtsModelConfirm] = createSignal(false);
   const [ttsModelProgress, setTtsModelProgress] = createSignal(0);
   const [ttsModelMessage, setTtsModelMessage] = createSignal('');
@@ -94,6 +103,7 @@ export default function SettingsView() {
   const [diagnosticsBusy, setDiagnosticsBusy] = createSignal(false);
   let unlistenTtsModel: (() => void) | undefined;
   let unlistenOcrModel: (() => void) | undefined;
+  let unlistenDialogueModel: (() => void) | undefined;
   let asrEnvironmentRevision = 0;
   let ocrEnvironmentRevision = 0;
   const returnPath = () => {
@@ -141,6 +151,7 @@ export default function SettingsView() {
       void refreshOcrEnvironment(result.settings.asr.ocrModel);
     }).catch((error: unknown) => showMessage(error, true));
     void refreshTtsEnvironment();
+    void refreshDialogueEnvironment();
     void refreshStorage();
     void refreshRuntimeHealth();
     void listen<{ progress?: number; message?: string }>('tts-model-progress', (event) => {
@@ -155,8 +166,17 @@ export default function SettingsView() {
         message: event.payload.message ?? value.message,
       }));
     }).then((unlisten) => { unlistenOcrModel = unlisten; }).catch(() => undefined);
+    void dialogueService.onModelProgress(setDialogueModelProgress)
+      .then((unlisten) => { unlistenDialogueModel = unlisten; }).catch(() => undefined);
   });
-  onCleanup(() => { unlistenTtsModel?.(); unlistenOcrModel?.(); });
+  onCleanup(() => { unlistenTtsModel?.(); unlistenOcrModel?.(); unlistenDialogueModel?.(); });
+  const refreshDialogueEnvironment = async () => {
+    setDialogueEnvironmentLoading(true);
+    setDialogueEnvironmentError('');
+    try { setDialogueEnvironment(await dialogueService.environment()); }
+    catch (error) { setDialogueEnvironmentError(error instanceof Error ? error.message : 'Không thể kiểm tra model tách thoại.'); }
+    finally { setDialogueEnvironmentLoading(false); }
+  };
   const refreshTtsEnvironment = async () => {
     setTtsEnvironmentLoading(true);
     setTtsEnvironmentError('');
@@ -365,6 +385,34 @@ export default function SettingsView() {
     } catch (error) {
       setOcrEnvironmentError(error instanceof Error ? error.message : 'Không thể gỡ model OCR.');
     } finally { setRemovingOcrModel(false); }
+  };
+  const installDialogueModel = async () => {
+    if (installingDialogueModel()) return;
+    setShowDialogueModelConfirm(false);
+    setInstallingDialogueModel(true);
+    setDialogueEnvironmentError('');
+    setDialogueModelProgress({ progress: 0, downloadedBytes: 0, totalBytes: dialogueEnvironment()?.estimatedDownloadBytes ?? 446_680_129, message: 'Đang kết nối tới Zenodo…' });
+    try {
+      await dialogueService.installModel();
+      await refreshDialogueEnvironment();
+      await refreshStorage();
+      showMessage('Đã cài model BandIt v2 trong Models dùng chung.', false);
+    } catch (error) {
+      setDialogueEnvironmentError(error instanceof Error ? error.message : 'Không thể cài model BandIt v2.');
+    } finally { setInstallingDialogueModel(false); }
+  };
+  const removeDialogueModel = async () => {
+    setShowRemoveDialogueModelConfirm(false);
+    setRemovingDialogueModel(true);
+    setDialogueEnvironmentError('');
+    try {
+      await dialogueService.removeModel();
+      await refreshDialogueEnvironment();
+      await refreshStorage();
+      showMessage('Đã xóa checkpoint BandIt v2 khỏi thư mục Models.', false);
+    } catch (error) {
+      setDialogueEnvironmentError(error instanceof Error ? error.message : 'Không thể gỡ model BandIt v2.');
+    } finally { setRemovingDialogueModel(false); }
   };
   const installOcrRuntime = async () => {
     if (installingOcrRuntime() || !import.meta.env.DEV) return;
@@ -606,6 +654,35 @@ export default function SettingsView() {
                 <Show when={ocrEnvironment()?.modelCached}><span class="version-chip">Đã cài · {formatBytes(ocrEnvironment()!.modelBytes)}</span><button class="button button-danger provider-action-secondary" type="button" disabled={installingOcrModel() || removingOcrModel()} onClick={() => setShowRemoveOcrModelConfirm(true)}>{removingOcrModel() ? 'Đang gỡ…' : `Gỡ ${settings()!.asr.ocrModel}`}</button></Show>
               </div>
             </div>
+            <div class="settings-card ocr-settings-card dialogue-settings-card">
+              <div class="ocr-card-heading">
+                <div class="provider-card-icon"><AudioLines size={18} /></div>
+                <div class="ocr-card-title"><span class="provider-eyebrow">LOCAL · AUDIO SEPARATION</span><h3>Tách thoại gốc</h3><p>BandIt v2 · tách thoại khỏi nhạc và hiệu ứng âm thanh</p></div>
+                <span class="ocr-overall-status" classList={{ ready: !!dialogueEnvironment()?.modelCached && !!dialogueEnvironment()?.runtimeInstalled, loading: dialogueEnvironmentLoading() || installingDialogueModel() || removingDialogueModel() }}>
+                  <span class="provider-status-dot" />{dialogueEnvironmentLoading() ? 'Đang kiểm tra' : removingDialogueModel() ? 'Đang gỡ model' : dialogueEnvironment()?.modelCached && dialogueEnvironment()?.runtimeInstalled ? 'Sẵn sàng' : dialogueEnvironment()?.modelCached ? 'Thiếu runtime' : 'Chưa cài model'}
+                </span>
+              </div>
+              <div class="ocr-component-grid" aria-label="Thành phần tách thoại">
+                <div class="ocr-component"><span>RUNTIME</span><strong>{dialogueEnvironment()?.runtimeInstalled ? 'PyTorch · BandIt' : 'Chưa cài'}</strong><small>{dialogueEnvironment()?.runtimeInstalled ? dialogueEnvironment()?.cudaAvailable ? 'CUDA khả dụng · thiết bị Auto' : 'CPU khả dụng · thiết bị Auto' : import.meta.env.DEV ? 'Development runtime tùy chọn' : 'Không nằm trong bộ cài mặc định'}</small></div>
+                <div class="ocr-component"><span>MODEL</span><strong>BandIt v2 · Multi</strong><small>{dialogueEnvironment()?.modelCached ? `${formatBytes(dialogueEnvironment()!.modelBytes)} · đã cài` : 'Chưa tải về'}</small></div>
+                <div class="ocr-component"><span>DUNG LƯỢNG</span><strong>{formatBytes(dialogueEnvironment()?.estimatedDownloadBytes ?? 446_680_129)}</strong><small>{dialogueEnvironment()?.modelCached ? 'Đã lưu trong Models dùng chung' : 'Checkpoint tải một lần, dùng offline'}</small></div>
+              </div>
+              <p class="ocr-card-help">Trong export, tách stem thoại một lần rồi lưu cache theo mã video. Mức giảm áp dụng riêng cho stem thoại; nhạc và hiệu ứng gốc được giữ. Tách thoại chậm hơn ducking thông thường, nhất là trên CPU.</p>
+              <Show when={!dialogueEnvironment()?.runtimeInstalled && import.meta.env.DEV}><p class="provider-help">Cài runtime CPU development bằng <code>scripts/setup-dialogue-dev.ps1</code>, sau đó khởi động lại ứng dụng. Script tải PyTorch và các phụ thuộc BandIt.</p></Show>
+              <Show when={!dialogueEnvironment()?.runtimeInstalled && !import.meta.env.DEV}><p class="asr-config-warning" role="status">Runtime PyTorch tùy chọn chưa có trong bản cài để giữ installer gọn. Cần đóng gói/cài runtime tương thích trước khi dùng giảm thoại.</p></Show>
+              <Show when={installingDialogueModel()}>
+                <div class="ocr-install-progress" role="status" aria-live="polite"><div class="ocr-progress-copy"><span class="spin status-spinner" /><span><strong>Đang tải model BandIt v2</strong><small>{dialogueModelProgress().message} · {formatBytes(dialogueModelProgress().downloadedBytes)} / {formatBytes(dialogueModelProgress().totalBytes)}</small></span><strong>{Math.round(dialogueModelProgress().progress * 100)}%</strong></div><div class="job-progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(dialogueModelProgress().progress * 100)}><span style={{ width: `${Math.max(2, dialogueModelProgress().progress * 100)}%` }} /></div></div>
+              </Show>
+              <Show when={dialogueEnvironmentError()}><div class="provider-feedback provider-feedback-error" role="alert">{dialogueEnvironmentError()}</div></Show>
+              <div class="ocr-footer">
+                <span class="ocr-footer-path" title={storageUsage()?.dialogueSeparationDirectory}>{storageUsage()?.dialogueSeparationDirectory ?? 'Thư mục model dùng chung của ứng dụng'}</span>
+                <button class="button button-quiet provider-action-secondary" type="button" disabled={dialogueEnvironmentLoading() || installingDialogueModel() || removingDialogueModel()} onClick={() => void refreshDialogueEnvironment()}>{dialogueEnvironmentLoading() ? 'Đang kiểm tra…' : 'Kiểm tra lại'}</button>
+                <button class="button button-quiet provider-action-secondary" type="button" onClick={() => void openStorageFolder(() => storageService.openModelFolder('dialogueSeparation'))}><FolderOpen size={13} /> Mở Models</button>
+                <Show when={dialogueEnvironment()?.modelCached} fallback={<button class="button button-primary" type="button" disabled={installingDialogueModel() || dialogueEnvironmentLoading()} onClick={() => setShowDialogueModelConfirm(true)}>{installingDialogueModel() ? 'Đang tải…' : `Tải model · ${formatBytes(dialogueEnvironment()?.estimatedDownloadBytes ?? 446_680_129)}`}</button>}>
+                  <span class="version-chip">Đã cài · {formatBytes(dialogueEnvironment()!.modelBytes)}</span><button class="button button-danger provider-action-secondary" type="button" disabled={installingDialogueModel() || removingDialogueModel()} onClick={() => setShowRemoveDialogueModelConfirm(true)}>{removingDialogueModel() ? 'Đang gỡ…' : 'Xóa model và file'}</button>
+                </Show>
+              </div>
+            </div>
             <div class="settings-info-note"><Cpu size={15} /><span>Model faster-whisper và aligner WhisperX được lưu một lần trong thư mục model dùng chung. Nếu chỉ dùng faster-whisper, không cần cài PyTorch hoặc aligner.</span></div>
           </Show>
 
@@ -676,6 +753,7 @@ export default function SettingsView() {
                     <div class="storage-model-location"><span><b>faster-whisper</b><small title={storageUsage()?.fasterWhisperDirectory}>{storageUsage()?.fasterWhisperDirectory ?? 'Đường dẫn model Speech Recognition'}</small></span><strong>{storageUsage() ? formatBytes(storageUsage()!.fasterWhisperBytes) : '—'}</strong><button class="storage-model-open" type="button" aria-label="Mở thư mục faster-whisper" title="Mở thư mục faster-whisper" onClick={() => void openStorageFolder(() => storageService.openModelFolder('fasterWhisper'))}><FolderOpen size={13} /></button></div>
                     <div class="storage-model-location"><span><b>RapidOCR</b><small title={storageUsage()?.ocrDirectory}>{storageUsage()?.ocrDirectory ?? 'Đường dẫn model OCR'}</small></span><strong>{storageUsage() ? formatBytes(storageUsage()!.ocrBytes) : '—'}</strong><button class="storage-model-open" type="button" aria-label="Mở thư mục RapidOCR" title="Mở thư mục RapidOCR" onClick={() => void openStorageFolder(() => storageService.openModelFolder('ocr'))}><FolderOpen size={13} /></button></div>
                     <div class="storage-model-location"><span><b>VieNeu-TTS</b><small title={storageUsage()?.vieNeuTtsDirectory}>{storageUsage()?.vieNeuTtsDirectory ?? 'Đường dẫn model Voice / TTS'}</small></span><strong>{storageUsage() ? formatBytes(storageUsage()!.vieNeuTtsBytes) : '—'}</strong><button class="storage-model-open" type="button" aria-label="Mở thư mục VieNeu-TTS" title="Mở thư mục VieNeu-TTS" onClick={() => void openStorageFolder(() => storageService.openModelFolder('vieNeuTts'))}><FolderOpen size={13} /></button></div>
+                    <div class="storage-model-location"><span><b>BandIt v2 · giảm thoại</b><small title={storageUsage()?.dialogueSeparationDirectory}>{storageUsage()?.dialogueSeparationDirectory ?? 'Đường dẫn model tách thoại'}</small></span><strong>{storageUsage() ? formatBytes(storageUsage()!.dialogueSeparationBytes) : '—'}</strong><button class="storage-model-open" type="button" aria-label="Mở thư mục BandIt" title="Mở thư mục BandIt" onClick={() => void openStorageFolder(() => storageService.openModelFolder('dialogueSeparation'))}><FolderOpen size={13} /></button></div>
                     <Show when={(storageUsage()?.otherModelDataBytes ?? 0) > 0}><span class="storage-model-other">Khác · profile giọng hoặc model cũ: {formatBytes(storageUsage()!.otherModelDataBytes)}</span></Show>
                   </div>
                 </div>
@@ -727,6 +805,18 @@ export default function SettingsView() {
         <Modal title={`Gỡ ${ocrEnvironment()?.model ?? 'model OCR'}?`} description="Chỉ xóa profile model đang chọn trong thư mục Models. Các profile khác, runtime RapidOCR, project, transcript và dữ liệu khác được giữ nguyên." onClose={() => setShowRemoveOcrModelConfirm(false)}>
           <div class="model-confirm-card"><div class="job-banner-icon"><Sparkles size={17} /></div><div><strong>{formatBytes(ocrEnvironment()?.modelBytes ?? 0)} sẽ được giải phóng</strong><p>Các file trọng số của {ocrEnvironment()?.model ?? 'profile đang chọn'} sẽ bị xóa. Bạn có thể tải lại bất cứ lúc nào trong Cài đặt → Speech Recognition.</p></div></div>
           <footer class="modal-actions"><button class="button button-quiet" type="button" onClick={() => setShowRemoveOcrModelConfirm(false)}>Giữ model</button><button class="button button-danger" type="button" disabled={removingOcrModel()} onClick={() => void removeOcrModel()}>{removingOcrModel() ? 'Đang xóa…' : 'Xóa model và file'}</button></footer>
+        </Modal>
+      </Show>
+      <Show when={showDialogueModelConfirm()}>
+        <Modal title="Tải model giảm thoại BandIt v2?" description="Checkpoint tải riêng vào Models dùng chung. Tải chỉ bắt đầu sau khi bạn xác nhận." onClose={() => setShowDialogueModelConfirm(false)}>
+          <div class="model-confirm-card"><div class="job-banner-icon"><AudioLines size={17} /></div><div><strong>BandIt v2 · khoảng {formatBytes(dialogueEnvironment()?.estimatedDownloadBytes ?? 446_680_129)}</strong><p>Model tách riêng thoại, nhạc và hiệu ứng. File chỉ được tải một lần, được xác minh SHA-256 và có thể xóa từ màn hình này. Runtime PyTorch là thành phần riêng.</p></div></div>
+          <footer class="modal-actions"><button class="button button-quiet" type="button" onClick={() => setShowDialogueModelConfirm(false)}>Hủy</button><button class="button button-primary" type="button" onClick={() => void installDialogueModel()}>Tải model</button></footer>
+        </Modal>
+      </Show>
+      <Show when={showRemoveDialogueModelConfirm()}>
+        <Modal title="Xóa model BandIt v2?" description="Thao tác sẽ xóa checkpoint khỏi thư mục Models. Cache stem thoại trong từng project được giữ nguyên." onClose={() => setShowRemoveDialogueModelConfirm(false)}>
+          <div class="model-confirm-card"><div class="job-banner-icon"><AudioLines size={17} /></div><div><strong>{formatBytes(dialogueEnvironment()?.modelBytes ?? 0)} sẽ được giải phóng</strong><p>Đang export thì không thể gỡ model. Có thể tải lại model sau.</p></div></div>
+          <footer class="modal-actions"><button class="button button-quiet" type="button" onClick={() => setShowRemoveDialogueModelConfirm(false)}>Giữ model</button><button class="button button-danger" type="button" disabled={removingDialogueModel()} onClick={() => void removeDialogueModel()}>{removingDialogueModel() ? 'Đang xóa…' : 'Xóa model và file'}</button></footer>
         </Modal>
       </Show>
       <Show when={showTtsModelConfirm()}>

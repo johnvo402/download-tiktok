@@ -5,6 +5,7 @@ export interface StorageUsage {
   fasterWhisperBytes: number;
   ocrBytes: number;
   vieNeuTtsBytes: number;
+  dialogueSeparationBytes: number;
   otherModelDataBytes: number;
   projectsBytes: number;
   projectCacheBytes: number;
@@ -14,6 +15,7 @@ export interface StorageUsage {
   fasterWhisperDirectory: string;
   ocrDirectory: string;
   vieNeuTtsDirectory: string;
+  dialogueSeparationDirectory: string;
   warnings: string[];
 }
 
@@ -27,7 +29,7 @@ export const storageService = {
   usage: () => call<StorageUsage>('get_storage_usage'),
   clearTemporary: () => call<number>('clear_temporary_cache'),
   openCacheFolder: () => call<string>('open_cache_folder'),
-  openModelFolder: (kind: 'fasterWhisper' | 'vieNeuTts' | 'ocr') => call<string>('open_model_folder', { kind }),
+  openModelFolder: (kind: 'fasterWhisper' | 'vieNeuTts' | 'ocr' | 'dialogueSeparation') => call<string>('open_model_folder', { kind }),
 };
 
 export function formatBytes(value: number): string {

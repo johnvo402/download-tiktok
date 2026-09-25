@@ -7,6 +7,7 @@ import { activeWorkspacePanelTab, blurRegionPicking, currentProject, currentTran
 import { projectService } from '../../../app/services/project-service';
 import { translationService } from '../../../app/services/translation-service';
 import { ttsService } from '../../../app/services/tts-service';
+import { dialogueService, type DialogueEnvironment } from '../../../app/services/dialogue-service';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import type { SubtitleTrackMetadata } from '../../projects/types';
 import type { AsrEnvironment, OcrEnvironment, Transcript, TranscriptSegment } from '../../transcript/types';
@@ -76,6 +77,7 @@ export default function TranslationPanel() {
   const [ttsMessage, setTtsMessage] = createSignal('');
   const [previewingTtsSegment, setPreviewingTtsSegment] = createSignal<string>();
   const [ttsSettings, setTtsSettings] = createSignal<AppSettings['tts']>();
+  const [dialogueEnvironment, setDialogueEnvironment] = createSignal<DialogueEnvironment>();
   const [translationJobId, setTranslationJobId] = createSignal<string>();
   const [translationMessage, setTranslationMessage] = createSignal('');
   const [translationSearch, setTranslationSearch] = createSignal('');
@@ -95,7 +97,10 @@ export default function TranslationPanel() {
 
   onMount(() => {
     void translationService.getSettings().then((response) => setTtsSettings(response.settings.tts)).catch(() => undefined);
+    void dialogueService.environment().then(setDialogueEnvironment).catch(() => setDialogueEnvironment(undefined));
   });
+
+  const dialogueReductionReady = () => !!dialogueEnvironment()?.runtimeInstalled && !!dialogueEnvironment()?.modelCached;
 
   const tracks = () => currentProject()?.source.subtitleTracks ?? [];
   const textTracks = () => tracks().filter((track) => track.textSupported && !track.imageBased);
@@ -1089,6 +1094,8 @@ export default function TranslationPanel() {
             <label class="property-control-row"><span>Tắt âm thanh gốc</span><input type="checkbox" checked={currentProject()?.dubbing.muteOriginal ?? false} onChange={(event) => updateDubbingSettings({ muteOriginal: event.currentTarget.checked })} /></label>
             <label class="property-control-row"><span>Giảm âm thanh gốc khi có lời đọc</span><input type="checkbox" checked={currentProject()?.dubbing.duckingEnabled ?? false} onChange={(event) => updateDubbingSettings({ duckingEnabled: event.currentTarget.checked })} /></label>
             <Show when={currentProject()?.dubbing.duckingEnabled}><label class="property-control-row"><span>Mức giảm gốc <small>{Math.round((currentProject()?.dubbing.duckingAmount ?? 0.75) * 100)}%</small></span><input type="range" min="0" max="1" step="0.01" value={currentProject()?.dubbing.duckingAmount ?? 0.75} onInput={(event) => updateDubbingSettings({ duckingAmount: Number(event.currentTarget.value) })} /></label></Show>
+            <label class="property-control-row" title={dialogueReductionReady() ? 'Giảm phần thoại trong âm thanh gốc bằng BandIt v2.' : 'Cài runtime tách thoại và model BandIt v2 trong Cài đặt → Speech Recognition.'} style={{ opacity: dialogueReductionReady() ? 1 : 0.48 }}><span>Giảm thoại gốc <small>{dialogueEnvironment()?.modelCached ? 'BandIt v2' : 'Chưa cài model'}</small></span><input type="checkbox" disabled={!dialogueReductionReady()} checked={dialogueReductionReady() && (currentProject()?.dubbing.dialogueReductionEnabled ?? false)} onChange={(event) => updateDubbingSettings({ dialogueReductionEnabled: event.currentTarget.checked })} /></label>
+            <Show when={dialogueReductionReady() && currentProject()?.dubbing.dialogueReductionEnabled}><label class="property-control-row"><span>Mức giảm thoại <small>{Math.round((currentProject()?.dubbing.dialogueReductionAmount ?? 0.65) * 100)}%</small></span><input type="range" min="0" max="1" step="0.01" value={currentProject()?.dubbing.dialogueReductionAmount ?? 0.65} onInput={(event) => updateDubbingSettings({ dialogueReductionAmount: Number(event.currentTarget.value) })} /></label></Show>
             <button class="button button-quiet media-generate-button" type="button" disabled={ttsRunning() || !transcript()?.segments.some((segment) => segment.translated.trim())} onClick={() => void launchTts('missing')}><Volume2 size={14} /> {ttsRunning() ? 'Đang tạo audio…' : 'Tạo phần audio còn thiếu'}</button>
           </div>
           <div class="property-placeholder-note"><Sparkles size={14} /><span>Audio TTS được lưu theo từng segment và căn theo timestamp khi export.</span></div>

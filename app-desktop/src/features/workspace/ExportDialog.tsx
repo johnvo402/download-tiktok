@@ -3,6 +3,7 @@ import { AlertTriangle, Check, Clapperboard, Download, FolderOpen, LoaderCircle,
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { currentProject, setActiveWorkspacePanelTab, setNotice } from '../../app/project-state';
 import { renderService } from '../../app/services/render-service';
+import { dialogueService, type DialogueEnvironment } from '../../app/services/dialogue-service';
 import type { ExportHistoryEntry, ExportJobEvent, ExportOptions, ExportValidation } from '../../app/services/render-service';
 import Modal from '../../shared/components/Modal';
 import { flushVisualSettings } from '../overlays/overlay-state';
@@ -23,7 +24,8 @@ export default function ExportDialog(props: { onClose: () => void }) {
   const project = () => currentProject();
   const initialExportName = defaultExportName();
   const [outputFileName, setOutputFileName] = createSignal(initialExportName);
-  const [options, setOptions] = createSignal<ExportOptions>({ quality: 'balanced', applyBlur: true, applyLogos: true, burnSubtitles: project()?.subtitle.enabled ?? true, enableSubtitleBlurOverride: false, includeOriginalAudio: !(project()?.dubbing.muteOriginal ?? false), includeDubbing: project()?.dubbing.enabled ?? false, ducking: project()?.dubbing.duckingEnabled ?? false, outputDirectory: null, outputFileName: initialExportName, originalVolume: project()?.dubbing.originalVolume ?? 1, dubbedVolume: project()?.dubbing.dubbedVolume ?? 1, duckingAmount: project()?.dubbing.duckingAmount ?? 0.75 });
+  const [options, setOptions] = createSignal<ExportOptions>({ quality: 'balanced', applyBlur: true, applyLogos: true, burnSubtitles: project()?.subtitle.enabled ?? true, enableSubtitleBlurOverride: false, includeOriginalAudio: !(project()?.dubbing.muteOriginal ?? false), includeDubbing: project()?.dubbing.enabled ?? false, ducking: project()?.dubbing.duckingEnabled ?? false, outputDirectory: null, outputFileName: initialExportName, originalVolume: project()?.dubbing.originalVolume ?? 1, dubbedVolume: project()?.dubbing.dubbedVolume ?? 1, duckingAmount: project()?.dubbing.duckingAmount ?? 0.75, dialogueReduction: false, dialogueReductionAmount: project()?.dubbing.dialogueReductionAmount ?? 0.65 });
+  const [dialogueEnvironment, setDialogueEnvironment] = createSignal<DialogueEnvironment>();
   const [validation, setValidation] = createSignal<ExportValidation>();
   const [validationError, setValidationError] = createSignal('');
   const [checking, setChecking] = createSignal(false);
@@ -33,6 +35,7 @@ export default function ExportDialog(props: { onClose: () => void }) {
   const [exportDirectory, setExportDirectory] = createSignal('');
   const [canceling, setCanceling] = createSignal(false);
   const effectiveExportDirectory = () => options().outputDirectory || exportDirectory();
+  const dialogueReductionReady = () => !!dialogueEnvironment()?.runtimeInstalled && !!dialogueEnvironment()?.modelCached;
   let validationRevision = 0;
   let unlisten: (() => void) | undefined;
 
@@ -69,6 +72,10 @@ export default function ExportDialog(props: { onClose: () => void }) {
   };
 
   onMount(() => {
+    void dialogueService.environment().then((environment) => {
+      setDialogueEnvironment(environment);
+      setOptions((value) => ({ ...value, dialogueReduction: environment.runtimeInstalled && environment.modelCached && !!project()?.dubbing.dialogueReductionEnabled }));
+    }).catch(() => setDialogueEnvironment(undefined));
     void refreshHistory();
     const id = project()?.id;
     if (id) void renderService.exportDirectory(id).then(setExportDirectory).catch((error: unknown) => setValidationError(error instanceof Error ? error.message : String(error)));
@@ -156,6 +163,8 @@ export default function ExportDialog(props: { onClose: () => void }) {
         <Show when={options().includeDubbing}><label class="export-option"><span>Âm lượng lồng tiếng <small>{Math.round(options().dubbedVolume * 100)}%</small></span><input type="range" min="0" max="1" step="0.01" value={options().dubbedVolume} onInput={(event) => setOptions((value) => ({ ...value, dubbedVolume: Number(event.currentTarget.value) }))} /></label></Show>
         <Show when={options().includeDubbing && options().includeOriginalAudio}><label class="export-option"><span>Duck original audio</span><input type="checkbox" checked={options().ducking} onChange={(event) => setOptions((value) => ({ ...value, ducking: event.currentTarget.checked }))} /></label></Show>
         <Show when={options().ducking && options().includeOriginalAudio && options().includeDubbing}><label class="export-option"><span>Mức giảm khi voice hoạt động <small>{Math.round(options().duckingAmount * 100)}%</small></span><input type="range" min="0" max="1" step="0.01" value={options().duckingAmount} onInput={(event) => setOptions((value) => ({ ...value, duckingAmount: Number(event.currentTarget.value) }))} /></label></Show>
+        <label class="export-option" title={dialogueReductionReady() ? 'Tách stem thoại rồi giảm riêng thoại nhân vật.' : 'Cài runtime tách thoại và model BandIt v2 trong Cài đặt → Speech Recognition.'} style={{ opacity: dialogueReductionReady() ? 1 : 0.48 }}><span>Giảm thoại gốc <small>{dialogueReductionReady() ? 'BandIt v2' : 'Chưa cài model/runtime'}</small></span><input type="checkbox" disabled={!dialogueReductionReady() || !options().includeOriginalAudio} checked={dialogueReductionReady() && options().dialogueReduction} onChange={(event) => setOptions((value) => ({ ...value, dialogueReduction: event.currentTarget.checked }))} /></label>
+        <Show when={dialogueReductionReady() && options().dialogueReduction}><label class="export-option"><span>Mức giảm thoại <small>{Math.round(options().dialogueReductionAmount * 100)}%</small></span><input type="range" min="0" max="1" step="0.01" value={options().dialogueReductionAmount} onInput={(event) => setOptions((value) => ({ ...value, dialogueReductionAmount: Number(event.currentTarget.value) }))} /></label></Show>
         <label class="export-quality"><span>Chất lượng H.264</span><select class="settings-select" value={options().quality} onChange={(event) => setOptions((value) => ({ ...value, quality: event.currentTarget.value as ExportOptions['quality'] }))}><option value="fast">Nhanh nhất · file lớn hơn</option><option value="balanced">Nén hiệu quả · giữ chất lượng cao</option><option value="high">Chất lượng cao nhất · file lớn hơn</option></select></label>
       </div>
 

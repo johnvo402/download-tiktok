@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
-const SCHEMA_VERSION: u32 = 7;
+const SCHEMA_VERSION: u32 = 8;
 const LEGACY_TTS_VOICE: &str = "Ngọc Lan";
 const DEFAULT_TTS_VOICE: &str = "Ngọc Huyền";
 const MAX_NAME_CHARS: usize = 100;
@@ -380,7 +380,13 @@ pub struct DubbingSettings {
     pub mute_original: bool,
     pub ducking_enabled: bool,
     pub ducking_amount: f64,
+    #[serde(default)]
+    pub dialogue_reduction_enabled: bool,
+    #[serde(default = "default_dialogue_reduction_amount")]
+    pub dialogue_reduction_amount: f64,
 }
+
+fn default_dialogue_reduction_amount() -> f64 { 0.65 }
 
 impl Default for DubbingSettings {
     fn default() -> Self {
@@ -397,6 +403,8 @@ impl Default for DubbingSettings {
             mute_original: false,
             ducking_enabled: false,
             ducking_amount: 0.75,
+            dialogue_reduction_enabled: false,
+            dialogue_reduction_amount: default_dialogue_reduction_amount(),
         }
     }
 }
@@ -1112,7 +1120,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec_pretty(&old).unwrap()).unwrap();
 
         let upgraded = store.get(&project.id).unwrap();
-        assert_eq!(upgraded.schema_version, 6);
+        assert_eq!(upgraded.schema_version, 8);
         assert_eq!(upgraded.id, project.id);
         assert_eq!(upgraded.name, "Legacy project");
         assert_eq!(upgraded.source.video_path, None);
@@ -1121,7 +1129,7 @@ mod tests {
         assert_eq!(upgraded.subtitle.alignment, "center");
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(persisted["schemaVersion"], 6);
+        assert_eq!(persisted["schemaVersion"], 8);
         assert_eq!(
             fs::read_dir(path.parent().unwrap())
                 .unwrap()
@@ -1153,10 +1161,10 @@ mod tests {
         assert_eq!(loaded.blur_regions[0].role, BlurRegionRole::Generic);
         assert_eq!(loaded.blur_regions[0].edge_blend, 0);
         assert_eq!(loaded.blur_regions[0].pixel_noise, 0);
-        assert_eq!(loaded.schema_version, 6);
+        assert_eq!(loaded.schema_version, 8);
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(file).unwrap()).unwrap();
-        assert_eq!(persisted["schemaVersion"], 6);
+        assert_eq!(persisted["schemaVersion"], 8);
         assert_eq!(persisted["blurRegions"][0]["role"], "generic");
     }
 

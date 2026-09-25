@@ -5,6 +5,7 @@ use crate::video_service::{resolve_project_file, resolve_video};
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -85,6 +86,10 @@ pub fn has_active_project_job(jobs: &RenderJobs, project_id: &str) -> bool {
         .lock()
         .map(|jobs| jobs.values().any(|job| job.project_id == project_id))
         .unwrap_or(true)
+}
+
+pub fn has_any_active_job(jobs: &RenderJobs) -> bool {
+    jobs.inner.lock().map(|jobs| !jobs.is_empty()).unwrap_or(true)
 }
 
 pub fn validate_export(
@@ -429,6 +434,9 @@ fn prepare(
     if options.include_dubbing && dub_paths.is_empty() {
         return Err("Đã chọn lồng tiếng nhưng chưa có các tệp giọng đọc hợp lệ. Hãy tạo TTS trước khi export.".into());
     }
+    if options.dialogue_reduction && (!options.include_original_audio || project.source.audio_streams.is_empty()) {
+        return Err("Giảm thoại gốc cần bật Âm thanh gốc và video phải có audio.".into());
+    }
     let source_meta =
         fs::metadata(source).map_err(|error| format!("Không đọc được video nguồn: {error}"))?;
     if source_meta.len() == 0 {
@@ -443,12 +451,14 @@ fn validate_export_options(options: &ExportOptions) -> Result<(), String> {
         options.original_volume,
         options.dubbed_volume,
         options.ducking_amount,
+        options.dialogue_reduction_amount,
     ]
     .into_iter()
     .all(f64::is_finite)
         || !(0.0..=1.0).contains(&options.original_volume)
         || !(0.0..=1.0).contains(&options.dubbed_volume)
         || !(0.0..=1.0).contains(&options.ducking_amount)
+        || !(0.0..=1.0).contains(&options.dialogue_reduction_amount)
     {
         return Err("Mức âm lượng export phải nằm trong khoảng 0–100%.".into());
     }
@@ -631,8 +641,14 @@ fn run_export_inner(
         fs::write(&ass_path, render_spec::generate_ass(&spec)?)
             .map_err(|error| format!("Không thể tạo phụ đề ASS: {error}"))?;
     }
+    let source_duration = spec.duration;
+    let dialogue_stem = if options.dialogue_reduction {
+        prepare_dialogue_stem(app, store, project_id, &project, &source_path, &render_dir, job_id, source_duration, started, state)?
+    } else {
+        None
+    };
     let (graph, dub_items, logo_paths, audio_expected) =
-        build_filtergraph(store, project_id, &transcript, &spec, options, &ass_path)?;
+        build_filtergraph(store, project_id, &transcript, &spec, options, &ass_path, dialogue_stem.as_deref())?;
     let filter_path = render_dir.join("filtergraph.txt");
     fs::write(&filter_path, &graph)
         .map_err(|error| format!("Không thể ghi filtergraph: {error}"))?;
@@ -649,12 +665,12 @@ fn run_export_inner(
         .tempfile_in(&export_dir)
         .map_err(|error| format!("Không thể tạo tệp render tạm trong thư mục đích: {error}"))?;
     let staging_path = staging_file.into_temp_path();
-    let source_duration = spec.duration;
     let mut command = build_ffmpeg_command(
         crate::runtime_paths::ffmpeg_command()?,
         &source_path,
         &dub_items,
         &logo_paths,
+        dialogue_stem.as_deref(),
         &filter_path,
         &staging_path,
         &spec,
@@ -767,6 +783,92 @@ fn run_export_inner(
     Ok((final_path.to_string_lossy().into_owned(), source_duration))
 }
 
+fn prepare_dialogue_stem(
+    app: &AppHandle,
+    store: &ProjectStore,
+    project_id: &str,
+    project: &Project,
+    source: &Path,
+    render_dir: &Path,
+    job_id: &str,
+    duration: f64,
+    started: Instant,
+    state: &Arc<AtomicU8>,
+) -> Result<Option<PathBuf>, String> {
+    if !crate::dialogue_service::get_environment(app)?.ready() {
+        return Err("Giảm thoại gốc cần runtime PyTorch và model BandIt v2 đã cài. Mở Cài đặt → Xử lý âm thanh để kiểm tra.".into());
+    }
+    let project_root = store.project_directory(project_id)?;
+    let cache_dir = project_root.join("cache").join("audio-separation");
+    fs::create_dir_all(&cache_dir).map_err(|error| format!("Không thể tạo cache tách thoại: {error}"))?;
+    for path in [project_root.join("cache"), cache_dir.clone()] {
+        let metadata = fs::symlink_metadata(&path).map_err(|error| format!("Không thể xác minh cache tách thoại: {error}"))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err("Thư mục cache tách thoại không hợp lệ hoặc là symlink.".into());
+        }
+    }
+    let source_hash = project.source.checksum_sha256.as_deref()
+        .filter(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .map(str::to_ascii_lowercase)
+        .map(Ok)
+        .unwrap_or_else(|| file_sha256(source))?;
+    let cached = cache_dir.join(format!("{source_hash}_bandit-v2-multi_speech.wav"));
+    if let Ok(metadata) = fs::symlink_metadata(&cached) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("Cache stem thoại không hợp lệ; không sử dụng file này.".into());
+        }
+        if metadata.len() > 44 { return Ok(Some(cached)); }
+        fs::remove_file(&cached).map_err(|error| format!("Không thể dọn stem thoại lỗi: {error}"))?;
+    }
+    if state.load(Ordering::SeqCst) == JOB_CANCELLED { return Err("Đã hủy export.".into()); }
+    emit_event(app, event(project_id, job_id, "running", 0.01, started.elapsed().as_secs_f64(), duration, None, None,
+        "Đang chuẩn bị audio 48 kHz để tách thoại…".into(), Vec::new()));
+    let input_wav = render_dir.join("dialogue-input.wav");
+    let mut extract = crate::runtime_paths::ffmpeg_command()?;
+    extract.args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+        .arg(source)
+        .args(["-map", "0:a:0", "-vn", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le"])
+        .arg(&input_wav)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = extract.spawn().map_err(|error| format!("Không thể trích audio để tách thoại: {error}"))?;
+    loop {
+        if state.load(Ordering::SeqCst) == JOB_CANCELLED {
+            let _ = child.kill(); let _ = child.wait();
+            return Err("Đã hủy export.".into());
+        }
+        if let Some(status) = child.try_wait().map_err(|error| format!("Không thể kiểm tra FFmpeg trích audio: {error}"))? {
+            if !status.success() || !input_wav.is_file() || fs::metadata(&input_wav).map(|meta| meta.len()).unwrap_or(0) <= 44 {
+                return Err("FFmpeg không trích được audio stereo để tách thoại.".into());
+            }
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    let partial = render_dir.join("dialogue-speech.partial.wav");
+    let separation = crate::dialogue_service::separate(
+        app, &input_wav, &partial,
+        || state.load(Ordering::SeqCst) == JOB_CANCELLED,
+        |message| emit_event(app, event(project_id, job_id, "running", 0.02, started.elapsed().as_secs_f64(), duration, None, None, message, Vec::new())),
+    );
+    let _ = fs::remove_file(input_wav);
+    if let Err(error) = separation { let _ = fs::remove_file(partial); return Err(error); }
+    fs::rename(&partial, &cached).map_err(|error| format!("Không thể lưu stem thoại trong cache project: {error}"))?;
+    Ok(Some(cached))
+}
+
+fn file_sha256(path: &Path) -> Result<String, String> {
+    let mut file = fs::File::open(path).map_err(|error| format!("Không thể đọc video để tạo cache audio: {error}"))?;
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0u8; 1024 * 1024];
+    loop {
+        let count = std::io::Read::read(&mut file, &mut buffer).map_err(|error| format!("Không thể tính mã video: {error}"))?;
+        if count == 0 { break; }
+        digest.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
 fn build_filtergraph(
     store: &ProjectStore,
     project_id: &str,
@@ -774,6 +876,7 @@ fn build_filtergraph(
     spec: &RenderSpecification,
     options: &ExportOptions,
     ass_path: &Path,
+    dialogue_stem: Option<&Path>,
 ) -> Result<(String, Vec<(PathBuf, f64, f64, String)>, Vec<PathBuf>, bool), String> {
     let dub_items = resolve_dubbing(store, project_id, transcript, options.include_dubbing)?;
     let logos: Vec<PathBuf> = if options.apply_logos {
@@ -787,11 +890,13 @@ fn build_filtergraph(
     };
     let audio_expected =
         spec.audio.include_original || (spec.audio.include_dubbing && !dub_items.is_empty());
+    let dialogue_input = dialogue_stem.map(|_| 1 + dub_items.len() + logos.len());
     let mut graph = build_video_filtergraph(spec, options, ass_path, dub_items.len());
     graph.push_str(&build_audio_filtergraph(
         &spec.audio,
         &dub_items,
         audio_expected,
+        dialogue_input,
     ));
     Ok((graph, dub_items, logos, audio_expected))
 }
@@ -886,6 +991,7 @@ fn build_audio_filtergraph(
     audio: &render_spec::RenderAudioConfig,
     dub_items: &[(PathBuf, f64, f64, String)],
     audio_expected: bool,
+    dialogue_input: Option<usize>,
 ) -> String {
     let mut graph = String::new();
     let has_original = audio.include_original;
@@ -907,7 +1013,16 @@ fn build_audio_filtergraph(
             } else {
                 format!("{gain:.4}")
             };
-            graph.push_str(&format!("[0:a:0]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,volume='{}':eval=frame[origmix];", volume));
+            if audio.dialogue_reduction {
+                if let Some(input) = dialogue_input {
+                    let speech_gain = (1.0 - audio.dialogue_reduction_amount).clamp(0.0, 1.0);
+                    graph.push_str(&format!("[0:a:0]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[origbase];[{input}:a:0]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[dialogue_stem];[dialogue_stem]asplit=2[dialogue_sub_src][dialogue_gain_src];[dialogue_sub_src]volume=-1[dialogue_negative];[origbase][dialogue_negative]amix=inputs=2:duration=first:normalize=0[original_bed];[dialogue_gain_src]volume={speech_gain:.5}[dialogue_lowered];[original_bed][dialogue_lowered]amix=inputs=2:duration=first:normalize=0[dialogue_mix];[dialogue_mix]volume='{}':eval=frame[origmix];", volume));
+                } else {
+                    graph.push_str(&format!("[0:a:0]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,volume='{}':eval=frame[origmix];", volume));
+                }
+            } else {
+                graph.push_str(&format!("[0:a:0]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,volume='{}':eval=frame[origmix];", volume));
+            }
             audio_labels.push("origmix".to_string());
         }
         if has_dubs {
@@ -946,6 +1061,7 @@ fn build_ffmpeg_command(
     source: &Path,
     dubs: &[(PathBuf, f64, f64, String)],
     logos: &[PathBuf],
+    dialogue_stem: Option<&Path>,
     filter_script: &Path,
     output: &Path,
     spec: &RenderSpecification,
@@ -960,6 +1076,7 @@ fn build_ffmpeg_command(
     for path in logos {
         command.args(["-loop", "1", "-i"]).arg(path);
     }
+    if let Some(path) = dialogue_stem { command.arg("-i").arg(path); }
     command
         .args(["-filter_complex_script"])
         .arg(filter_script)
@@ -1512,7 +1629,7 @@ mod tests {
         let ass = project_root.join("cache/translated.ass");
         fs::write(&ass, render_spec::generate_ass(&spec).unwrap()).unwrap();
         let (graph, dubs, logos, expected_audio) =
-            build_filtergraph(&store, &project.id, &transcript, &spec, &options, &ass).unwrap();
+            build_filtergraph(&store, &project.id, &transcript, &spec, &options, &ass, None).unwrap();
         assert!(
             graph.find("boxblur").unwrap() < graph.find("subtitles=").unwrap(),
             "blur must precede translated subtitles"

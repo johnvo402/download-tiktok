@@ -15,6 +15,7 @@ pub struct StorageUsage {
     pub faster_whisper_bytes: u64,
     pub ocr_bytes: u64,
     pub vie_neu_tts_bytes: u64,
+    pub dialogue_separation_bytes: u64,
     pub other_model_data_bytes: u64,
     pub projects_bytes: u64,
     pub project_cache_bytes: u64,
@@ -24,6 +25,7 @@ pub struct StorageUsage {
     pub faster_whisper_directory: String,
     pub ocr_directory: String,
     pub vie_neu_tts_directory: String,
+    pub dialogue_separation_directory: String,
     pub warnings: Vec<String>,
 }
 
@@ -35,6 +37,8 @@ pub enum ModelFolderKind {
     VieNeuTts,
     #[serde(rename = "ocr")]
     Ocr,
+    #[serde(rename = "dialogueSeparation")]
+    DialogueSeparation,
 }
 
 /// Move only application-owned model/cache directories from Tauri's Local
@@ -224,15 +228,18 @@ pub fn usage(app: &AppHandle, jobs: &JobStore) -> Result<StorageUsage, String> {
     let faster_whisper_directory = app_models.join("fw");
     let ocr_directory = app_models.join("rapidocr");
     let vie_neu_tts_directory = app_models.join("huggingface");
+    let dialogue_separation_directory = app_models.join("audio-separation");
     let faster_whisper_bytes = directory_size(&faster_whisper_directory);
     let ocr_bytes = directory_size(&ocr_directory);
     let vie_neu_tts_bytes = directory_size(&vie_neu_tts_directory);
+    let dialogue_separation_bytes = directory_size(&dialogue_separation_directory);
     let models_bytes = directory_size(&app_models)
         .saturating_sub(directory_size(&app_models.join("tts-preview")));
     let other_model_data_bytes = models_bytes
         .saturating_sub(faster_whisper_bytes)
         .saturating_sub(ocr_bytes)
         .saturating_sub(vie_neu_tts_bytes);
+    let other_model_data_bytes = other_model_data_bytes.saturating_sub(dialogue_separation_bytes);
     let mut project_cache_all = 0_u64;
     let mut project_temporary = 0_u64;
     let mut projects_bytes = 0_u64;
@@ -259,6 +266,7 @@ pub fn usage(app: &AppHandle, jobs: &JobStore) -> Result<StorageUsage, String> {
         faster_whisper_bytes,
         ocr_bytes,
         vie_neu_tts_bytes,
+        dialogue_separation_bytes,
         other_model_data_bytes,
         projects_bytes,
         project_cache_bytes: project_cache_all.saturating_sub(project_temporary),
@@ -268,6 +276,7 @@ pub fn usage(app: &AppHandle, jobs: &JobStore) -> Result<StorageUsage, String> {
         faster_whisper_directory: faster_whisper_directory.to_string_lossy().into_owned(),
         ocr_directory: ocr_directory.to_string_lossy().into_owned(),
         vie_neu_tts_directory: vie_neu_tts_directory.to_string_lossy().into_owned(),
+        dialogue_separation_directory: dialogue_separation_directory.to_string_lossy().into_owned(),
         warnings,
     })
 }
@@ -318,6 +327,7 @@ pub fn open_model_folder(app: &AppHandle, kind: ModelFolderKind) -> Result<Strin
             .join("models")
             .join("huggingface"),
         ModelFolderKind::Ocr => app.path().app_data_dir().map_err(|error| error.to_string())?.join("models").join("rapidocr"),
+        ModelFolderKind::DialogueSeparation => app.path().app_data_dir().map_err(|error| error.to_string())?.join("models").join("audio-separation"),
     };
     open_directory(&folder)?;
     Ok(folder.to_string_lossy().into_owned())

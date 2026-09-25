@@ -42,6 +42,7 @@ hiddenimports += [
     "worker.tts.service",
     "worker.ocr.service",
     "worker.tts.providers",
+    "worker.dialogue.service",
     "worker.tiktok_drama.service",
     "worker.tiktok_drama.browser",
     "worker.tiktok_drama.config",
