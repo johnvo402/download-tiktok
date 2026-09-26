@@ -195,7 +195,7 @@ export default function StartPage() {
                 <Show when={selectionMode()} fallback={<button class="sort-button project-select-mode" type="button" onClick={() => { setSelectionMode(true); setSelectedProjectIds([]); }}><ListChecks size={15} /><span>Chọn project</span></button>}>
                   <button class="sort-button" type="button" onClick={toggleSelectAll}><Check size={15} /><span>Chọn tất cả hiện</span></button>
                   <span class="selected-project-count">Đã chọn {selectedProjectIds().length}</span>
-                  <button class="button button-primary batch-process-button" type="button" disabled={!selectedProjectIds().length} onClick={() => setBatchOpen(true)}><Layers3 size={15} /> Batch Process</button>
+                  <button class="button button-primary batch-process-button" type="button" disabled={!selectedProjectIds().length} onClick={() => setBatchOpen(true)}><Layers3 size={15} /> Xử lý nhiều project</button>
                   <button class="sort-button" type="button" onClick={() => { setSelectionMode(false); setSelectedProjectIds([]); }}>Xong</button>
                 </Show>
               </Show>

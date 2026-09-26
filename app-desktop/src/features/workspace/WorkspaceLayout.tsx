@@ -3,7 +3,7 @@ import { createEffect, createSignal, Show, onCleanup } from 'solid-js';
 import {
   ArrowLeft, AudioLines, ChevronRight, CircleHelp, PanelLeftClose,
   PanelLeftOpen, Settings2, Video, SlidersHorizontal,
-  Download,
+  Download, Layers3,
 } from 'lucide-solid';
 import { currentProject, projectSaveState, setAppStartupReady, setCurrentProject, setNotice } from '../../app/project-state';
 import { projectService } from '../../app/services/project-service';
@@ -12,6 +12,7 @@ import TranslationPanel from './translation/TranslationPanel';
 import ImportPlaceholder from './ImportPlaceholder';
 import ExportDialog from './ExportDialog';
 import ProjectSettingsDialog from './ProjectSettingsDialog';
+import BatchVideoDialog from './batch/BatchVideoDialog';
 import jcAiLogo from '../../shared/assets/jc-ai-logo.png';
 
 type Section = 'translate' | 'import';
@@ -26,6 +27,7 @@ export default function WorkspaceLayout() {
   const [loading, setLoading] = createSignal(false);
   const [exportOpen, setExportOpen] = createSignal(false);
   const [projectSettingsOpen, setProjectSettingsOpen] = createSignal(false);
+  const [batchOpen, setBatchOpen] = createSignal(false);
 
   createEffect(() => {
     const id = params.projectId;
@@ -128,6 +130,7 @@ export default function WorkspaceLayout() {
           <div class="workspace-topbar-right">
             <button class="button button-quiet workspace-settings-button" type="button" onClick={() => setProjectSettingsOpen(true)}><SlidersHorizontal size={14} /> Cài đặt dự án</button>
             <button class="button button-quiet workspace-settings-button" type="button" onClick={() => navigate(`/settings?returnTo=${encodeURIComponent(location.pathname)}`)}><Settings2 size={14} /> Cài đặt ứng dụng</button>
+            <Show when={currentProject()}><button class="button button-quiet workspace-batch-button" type="button" aria-label="Dịch hàng loạt video" onClick={() => setBatchOpen(true)} title="Thêm video và xử lý lần lượt bằng cấu hình mẫu"><Layers3 size={14} /> Dịch hàng loạt</button></Show>
             <Show when={currentProject()?.source.videoPath}>
               <button class="button button-primary workspace-export-button" type="button" onClick={() => setExportOpen(true)}><Download size={14} /> Export</button>
             </Show>
@@ -161,6 +164,7 @@ export default function WorkspaceLayout() {
       </div>
       <Show when={exportOpen()}><ExportDialog onClose={() => setExportOpen(false)} /></Show>
       <Show when={projectSettingsOpen() && currentProject()}><ProjectSettingsDialog project={currentProject()!} onClose={() => setProjectSettingsOpen(false)} /></Show>
+      <Show when={batchOpen() && currentProject()}>{(project) => <BatchVideoDialog project={project()} onClose={() => setBatchOpen(false)} />}</Show>
     </div>
   );
 }

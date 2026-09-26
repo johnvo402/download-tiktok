@@ -1,6 +1,15 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
+async function call<T>(command: string): Promise<T> {
+  try {
+    return await invoke<T>(command);
+  } catch (error) {
+    if (error instanceof Error) throw error;
+    throw new Error(typeof error === 'string' ? error : 'Không thể thao tác với model tách thoại.');
+  }
+}
+
 export interface DialogueEnvironment {
   runtimeInstalled: boolean;
   cudaAvailable: boolean;
@@ -17,9 +26,9 @@ export interface DialogueModelProgress {
 }
 
 export const dialogueService = {
-  environment: () => invoke<DialogueEnvironment>('get_dialogue_environment'),
-  installModel: () => invoke<void>('install_dialogue_model'),
-  removeModel: () => invoke<void>('remove_dialogue_model'),
+  environment: () => call<DialogueEnvironment>('get_dialogue_environment'),
+  installModel: () => call<void>('install_dialogue_model'),
+  removeModel: () => call<void>('remove_dialogue_model'),
   onModelProgress: (handler: (progress: DialogueModelProgress) => void) =>
     listen<DialogueModelProgress>('dialogue-model-progress', ({ payload }) => handler(payload)),
 };

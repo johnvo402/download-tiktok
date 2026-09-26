@@ -3,7 +3,7 @@ use crate::project_service::{
 };
 use crate::render_spec;
 use crate::{
-    asr_service, dialogue_service, overlays_service, project_service::SubtitleSettings, render_service,
+    asr_service, batch_service, dialogue_service, overlays_service, project_service::SubtitleSettings, render_service,
     settings_service, transcript_service, translation_service, tts_service, video_service,
     video_tools_service,
 };
@@ -20,6 +20,28 @@ fn store(app: &tauri::AppHandle) -> Result<ProjectStore, String> {
         .map_err(|error| format!("Không thể xác định thư mục dữ liệu ứng dụng: {error}"))?;
     root.push("projects");
     Ok(ProjectStore::new(root))
+}
+
+#[tauri::command]
+pub fn get_batch_video_queue(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<Option<batch_service::BatchVideoQueue>, String> {
+    batch_service::load(&store(&app)?, &project_id)
+}
+
+#[tauri::command]
+pub fn save_batch_video_queue(
+    app: tauri::AppHandle,
+    project_id: String,
+    queue: batch_service::BatchVideoQueue,
+) -> Result<batch_service::BatchVideoQueue, String> {
+    batch_service::save(&store(&app)?, &project_id, queue)
+}
+
+#[tauri::command]
+pub fn clear_batch_video_queue(app: tauri::AppHandle, project_id: String) -> Result<(), String> {
+    batch_service::clear(&store(&app)?, &project_id)
 }
 
 #[tauri::command]

@@ -8,6 +8,7 @@ export default function Modal(props: {
   onClose: () => void;
   children: JSX.Element;
   danger?: boolean;
+  wide?: boolean;
 }) {
   let panel!: HTMLElement;
   onMount(() => panel.focus());
@@ -17,7 +18,7 @@ export default function Modal(props: {
       <section
         ref={panel}
         class="modal-panel"
-        classList={{ 'modal-panel-danger': !!props.danger }}
+        classList={{ 'modal-panel-wide': !!props.wide, 'modal-panel-danger': !!props.danger }}
         role="dialog"
         aria-modal="true"
         aria-labelledby="modal-title"

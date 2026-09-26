@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -13,6 +13,7 @@ const MODEL_FILE: &str = "checkpoint-multi.ckpt";
 const MODEL_BYTES: u64 = 446_680_129;
 const MODEL_SHA256: &str = "abcfccf65446752a057f4a302c941479a54b7560ebf8d7bca039d2ea98e64cfc";
 const MODEL_URL: &str = "https://zenodo.org/api/records/12701995/files/checkpoint-multi.ckpt/content";
+const MODEL_DOWNLOAD_ATTEMPTS: usize = 4;
 static MODEL_LOCK: Mutex<()> = Mutex::new(());
 static MODEL_CHECK: Mutex<Option<(PathBuf, u64, SystemTime, bool)>> = Mutex::new(None);
 
@@ -54,44 +55,148 @@ pub fn install_model(app: &AppHandle) -> Result<(), String> {
     let partial = parent.join(format!(".{MODEL_FILE}.download"));
     if let Ok(meta) = fs::symlink_metadata(&partial) {
         if meta.file_type().is_symlink() || !meta.is_file() { return Err("Tệp tải model tạm không hợp lệ.".into()); }
-        fs::remove_file(&partial).map_err(|error| format!("Không thể dọn lượt tải model lỗi trước đó: {error}"))?;
+        if meta.len() > MODEL_BYTES {
+            fs::remove_file(&partial).map_err(|error| format!("Không thể dọn tệp tải BandIt lỗi: {error}"))?;
+        }
     }
     let result = (|| {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(60 * 60))
+            .connect_timeout(std::time::Duration::from_secs(30))
             .build().map_err(|error| format!("Không thể khởi tạo lượt tải model: {error}"))?;
-        let mut response = client.get(MODEL_URL).send()
-            .and_then(reqwest::blocking::Response::error_for_status)
-            .map_err(|error| format!("Không thể tải BandIt v2: {error}"))?;
-        let total = response.content_length().unwrap_or(MODEL_BYTES);
-        let mut file = File::create(&partial).map_err(|error| format!("Không thể tạo file model: {error}"))?;
-        let mut buffer = vec![0u8; 1024 * 1024];
-        let mut downloaded = 0u64;
-        loop {
-            let count = response.read(&mut buffer).map_err(|error| format!("Lỗi mạng khi tải BandIt v2: {error}"))?;
-            if count == 0 { break; }
-            file.write_all(&buffer[..count]).map_err(|error| format!("Không thể ghi file model: {error}"))?;
-            downloaded += count as u64;
-            let _ = app.emit("dialogue-model-progress", json!({
-                "downloadedBytes": downloaded,
-                "totalBytes": total,
-                "progress": (downloaded as f64 / total.max(1) as f64).clamp(0.0, 0.99),
-                "message": "Đang tải BandIt v2 · tách thoại, nhạc và hiệu ứng…"
-            }));
-        }
-        file.sync_all().map_err(|error| format!("Không thể hoàn tất ghi model: {error}"))?;
-        if downloaded != MODEL_BYTES {
-            return Err(format!("Kích thước model không đúng ({downloaded} byte, cần {MODEL_BYTES}). Lượt tải đã bị hủy."));
+        download_model_with_resume(app, &client, &partial)?;
+        let file = OpenOptions::new().read(true).open(&partial)
+            .map_err(|error| format!("Không thể mở file BandIt đã tải: {error}"))?;
+        if file.metadata().map_err(|error| format!("Không thể kiểm tra file BandIt đã tải: {error}"))?.len() != MODEL_BYTES {
+            return Err("Tệp BandIt tải về chưa đủ kích thước; phần đã tải được giữ để tiếp tục lần sau.".into());
         }
         let digest = file_sha256(&partial)?;
-        if digest != MODEL_SHA256 { return Err("Checksum BandIt v2 không khớp; file tải về đã bị loại bỏ.".into()); }
+        if digest != MODEL_SHA256 {
+            let _ = fs::remove_file(&partial);
+            return Err("Checksum BandIt v2 không khớp; file tải về đã bị loại bỏ. Hãy thử tải lại.".into());
+        }
         fs::rename(&partial, &destination).map_err(|error| format!("Không thể hoàn tất cài model: {error}"))?;
         if let Ok(mut cache) = MODEL_CHECK.lock() { *cache = None; }
         let _ = app.emit("dialogue-model-progress", json!({"downloadedBytes": MODEL_BYTES, "totalBytes": MODEL_BYTES, "progress": 1.0, "message": "BandIt v2 đã cài xong"}));
         Ok(())
     })();
-    if result.is_err() { let _ = fs::remove_file(&partial); }
     result
+}
+
+fn download_model_with_resume(
+    app: &AppHandle,
+    client: &reqwest::blocking::Client,
+    partial: &Path,
+) -> Result<(), String> {
+    let mut buffer = vec![0u8; 1024 * 1024];
+    let mut last_error = String::new();
+    for attempt in 0..MODEL_DOWNLOAD_ATTEMPTS {
+        let mut offset = match fs::symlink_metadata(partial) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                return Err("Tệp tải model tạm không hợp lệ.".into());
+            }
+            Ok(metadata) => metadata.len(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(format!("Không thể đọc trạng thái tải BandIt: {error}")),
+        };
+        if offset == MODEL_BYTES { return Ok(()); }
+        if offset > MODEL_BYTES { return Err("Tệp tải BandIt tạm vượt quá kích thước dự kiến.".into()); }
+
+        let mut request = client.get(MODEL_URL);
+        if offset > 0 {
+            request = request.header(reqwest::header::RANGE, format!("bytes={offset}-"));
+        }
+        let mut response = match request.send() {
+            Ok(response) => response,
+            Err(error) => {
+                last_error = format!("Lỗi kết nối tới Zenodo: {error}");
+                if attempt + 1 == MODEL_DOWNLOAD_ATTEMPTS { break; }
+                emit_download_retry(app, offset, attempt + 1);
+                std::thread::sleep(std::time::Duration::from_secs((attempt as u64 + 1) * 2));
+                continue;
+            }
+        };
+        let status = response.status();
+        if !status.is_success() {
+            last_error = format!("Zenodo trả HTTP {status} khi tải BandIt v2.");
+            if !status.is_server_error() && status.as_u16() != 408 && status.as_u16() != 429 {
+                return Err(last_error);
+            }
+            if attempt + 1 == MODEL_DOWNLOAD_ATTEMPTS { break; }
+            emit_download_retry(app, offset, attempt + 1);
+            std::thread::sleep(std::time::Duration::from_secs((attempt as u64 + 1) * 2));
+            continue;
+        }
+
+        let append = if offset > 0 && status == reqwest::StatusCode::PARTIAL_CONTENT {
+            let range = response.headers().get(reqwest::header::CONTENT_RANGE)
+                .and_then(|value| value.to_str().ok()).unwrap_or_default();
+            if !content_range_starts_at(range, offset) {
+                return Err("Zenodo trả phạm vi byte không khớp khi tiếp tục tải model BandIt.".into());
+            }
+            true
+        } else {
+            if status == reqwest::StatusCode::PARTIAL_CONTENT {
+                return Err("Zenodo trả một phần file dù chưa yêu cầu tiếp tục tải.".into());
+            }
+            offset = 0;
+            false
+        };
+        let mut options = OpenOptions::new();
+        options.write(true).create(true);
+        if append { options.append(true); } else { options.truncate(true); }
+        let mut file = options.open(partial)
+            .map_err(|error| format!("Không thể ghi file tải BandIt: {error}"))?;
+        let mut downloaded = offset;
+        let mut read_error = None;
+        loop {
+            match response.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => {
+                    if downloaded.saturating_add(count as u64) > MODEL_BYTES {
+                        let _ = fs::remove_file(partial);
+                        return Err("Zenodo gửi dữ liệu BandIt vượt quá kích thước dự kiến; file tạm đã bị xóa.".into());
+                    }
+                    file.write_all(&buffer[..count])
+                        .map_err(|error| format!("Không thể ghi file tải BandIt: {error}"))?;
+                    downloaded += count as u64;
+                    let _ = app.emit("dialogue-model-progress", json!({
+                        "downloadedBytes": downloaded,
+                        "totalBytes": MODEL_BYTES,
+                        "progress": (downloaded as f64 / MODEL_BYTES as f64).clamp(0.0, 0.99),
+                        "message": "Đang tải BandIt v2 · tách thoại, nhạc và hiệu ứng…"
+                    }));
+                }
+                Err(error) => { read_error = Some(error); break; }
+            }
+        }
+        file.sync_all().map_err(|error| format!("Không thể hoàn tất ghi model: {error}"))?;
+        if downloaded == MODEL_BYTES { return Ok(()); }
+        last_error = if let Some(error) = read_error {
+            format!("Kết nối bị ngắt khi tải BandIt: {error}")
+        } else {
+            format!("Tải BandIt chưa hoàn tất ({downloaded}/{MODEL_BYTES} byte); phần đã tải được giữ để tiếp tục.")
+        };
+        if attempt + 1 == MODEL_DOWNLOAD_ATTEMPTS { break; }
+        emit_download_retry(app, downloaded, attempt + 1);
+        std::thread::sleep(std::time::Duration::from_secs((attempt as u64 + 1) * 2));
+    }
+    Err(format!("{last_error} Có thể bấm tải lại để tiếp tục từ phần đã có."))
+}
+
+fn content_range_starts_at(value: &str, offset: u64) -> bool {
+    value.strip_prefix("bytes ")
+        .and_then(|range| range.split_once('-'))
+        .and_then(|(start, _)| start.parse::<u64>().ok()) == Some(offset)
+}
+
+fn emit_download_retry(app: &AppHandle, downloaded: u64, attempt: usize) {
+    let _ = app.emit("dialogue-model-progress", json!({
+        "downloadedBytes": downloaded,
+        "totalBytes": MODEL_BYTES,
+        "progress": (downloaded as f64 / MODEL_BYTES as f64).clamp(0.0, 0.99),
+        "message": format!("Mạng chập chờn · đang tiếp tục tải (lần thử {})…", attempt + 1)
+    }));
 }
 
 pub fn remove_model(app: &AppHandle, export_jobs: &crate::render_service::RenderJobs) -> Result<(), String> {
@@ -236,4 +341,17 @@ fn ensure_managed_directory(path: &Path) -> Result<(), String> {
     let meta = fs::symlink_metadata(path).map_err(|error| format!("Không thể xác minh thư mục Models: {error}"))?;
     if meta.file_type().is_symlink() || !meta.is_dir() { return Err("Thư mục model không hợp lệ hoặc là symlink.".into()); }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::content_range_starts_at;
+
+    #[test]
+    fn validates_resumed_download_range_before_appending_bytes() {
+        assert!(content_range_starts_at("bytes 1048576-446680128/446680129", 1_048_576));
+        assert!(!content_range_starts_at("bytes 0-446680128/446680129", 1_048_576));
+        assert!(!content_range_starts_at("items 1048576-446680128/446680129", 1_048_576));
+        assert!(!content_range_starts_at("bytes */446680129", 1_048_576));
+    }
 }

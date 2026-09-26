@@ -16,6 +16,7 @@ export const [projectSaveState, setProjectSaveState] = createSignal<'saved' | 's
 export const [transcriptionEvent, setTranscriptionEvent] = createSignal<TranscriptionEvent>();
 export const [translationEvent, setTranslationEvent] = createSignal<TranslationJobEvent>();
 export const [ttsEvent, setTtsEvent] = createSignal<TtsJobEvent>();
+export const [batchProcessingActive, setBatchProcessingActive] = createSignal(false);
 export const [projectLoadWarnings, setProjectLoadWarnings] = createSignal<string[]>([]);
 export const [projectsLoading, setProjectsLoading] = createSignal(true);
 export const [appStartupReady, setAppStartupReady] = createSignal(false);

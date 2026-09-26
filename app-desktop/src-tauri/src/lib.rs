@@ -1,4 +1,5 @@
 mod asr_service;
+mod batch_service;
 mod commands;
 mod diagnostics_service;
 mod dialogue_service;
@@ -84,6 +85,9 @@ pub fn run() {
             commands::install_asr_model,
             commands::install_whisperx_alignment,
             commands::remove_asr_model,
+            commands::get_batch_video_queue,
+            commands::save_batch_video_queue,
+            commands::clear_batch_video_queue,
             commands::generate_transcript,
             commands::cancel_transcription,
             commands::get_app_settings,

@@ -60,7 +60,7 @@ export default function BatchProcessDialog(props: { projectIds: string[]; onClos
 
   const close = () => { if (running()) void cancel(); props.onClose(); };
 
-  return <Modal title="Batch Process" description={`${props.projectIds.length} project${props.projectIds.length === 1 ? '' : 's'} được chọn. Các project chạy lần lượt; lỗi của một project không dừng project kế tiếp.`} onClose={close}>
+  return <Modal title="Xử lý nhiều project" description={`${props.projectIds.length} project riêng được chọn. Mỗi project dùng nguồn video và cấu hình của chính nó; một project lỗi không dừng project kế tiếp.`} onClose={close}>
     <div class="batch-dialog-content">
       <div class="batch-workflow-card"><div class="batch-workflow-icon"><Layers3 size={17} /></div><div><strong>Full Localization</strong><small>Mỗi project dùng cấu hình ngôn ngữ, voice, subtitle và export riêng.</small></div><span class="batch-project-count">{props.projectIds.length} PROJECT</span></div>
       <section class="batch-step-section"><h3>WORKFLOW STEPS</h3>

@@ -3,7 +3,7 @@ import {
   AlertTriangle, AudioLines, Check, FileImage, FileText, Languages, LoaderCircle,
   Plus, RefreshCw, Search, Settings2, Sparkles, Trash2, Volume2, X, ImagePlus,
 } from 'lucide-solid';
-import { activeWorkspacePanelTab, blurRegionPicking, currentProject, currentTranscript, ocrRegionEditing, ocrRegionPicking, playbackTime, projectSaveState, selectedOverlay, segmentVoicePreviewActive, setActiveWorkspacePanelTab, setBlurRegionPicking, setCurrentProject, setCurrentTranscript, setNotice, setOcrRegionEditing, setOcrRegionPicking, setProjectSaveState, setSeekRequest, setSegmentVoicePreviewActive, setSelectedOverlay, setTtsEvent, transcriptionEvent, translationEvent, ttsEvent, videoPlaying } from '../../../app/project-state';
+import { activeWorkspacePanelTab, batchProcessingActive, blurRegionPicking, currentProject, currentTranscript, ocrRegionEditing, ocrRegionPicking, playbackTime, projectSaveState, selectedOverlay, segmentVoicePreviewActive, setActiveWorkspacePanelTab, setBlurRegionPicking, setCurrentProject, setCurrentTranscript, setNotice, setOcrRegionEditing, setOcrRegionPicking, setProjectSaveState, setSeekRequest, setSegmentVoicePreviewActive, setSelectedOverlay, setTtsEvent, transcriptionEvent, translationEvent, ttsEvent, videoPlaying } from '../../../app/project-state';
 import { projectService } from '../../../app/services/project-service';
 import { translationService } from '../../../app/services/translation-service';
 import { ttsService } from '../../../app/services/tts-service';
@@ -173,8 +173,10 @@ export default function TranslationPanel() {
     setTtsRunning(false);
     setTtsJobId(undefined);
     setTtsEvent((current) => current?.jobId === payload.jobId && current.status === payload.status ? undefined : current);
-    void reloadProjectTranscript(payload.projectId);
-    setNotice({ kind: payload.status === 'completed' ? 'success' : payload.status === 'partial' || payload.status === 'cancelled' ? 'info' : 'error', message: payload.message });
+    if (!batchProcessingActive()) {
+      void reloadProjectTranscript(payload.projectId);
+      setNotice({ kind: payload.status === 'completed' ? 'success' : payload.status === 'partial' || payload.status === 'cancelled' ? 'info' : 'error', message: payload.message });
+    }
   });
 
   createEffect(() => {
@@ -246,10 +248,12 @@ export default function TranslationPanel() {
     lastTerminalEvent = eventKey;
     if (payload.status === 'completed') {
       if (currentProject()?.transcriptSettings?.mode === 'ocr') setOcrRegionEditing(false);
-      void reloadProjectTranscript(payload.projectId);
-      setNotice({ kind: 'success', message: currentProject()?.transcriptSettings?.mode === 'ocr' ? 'Đã tạo transcript từ subtitle trên hình bằng OCR.' : asrOptions().engine === 'whisperX' ? 'Đã tạo transcript và căn chỉnh timestamp bằng WhisperX.' : 'Đã tạo transcript bằng faster-whisper.' });
+      if (!batchProcessingActive()) {
+        void reloadProjectTranscript(payload.projectId);
+        setNotice({ kind: 'success', message: currentProject()?.transcriptSettings?.mode === 'ocr' ? 'Đã tạo transcript từ subtitle trên hình bằng OCR.' : asrOptions().engine === 'whisperX' ? 'Đã tạo transcript và căn chỉnh timestamp bằng WhisperX.' : 'Đã tạo transcript bằng faster-whisper.' });
+      }
     } else if (payload.status === 'failed' || payload.status === 'canceled') {
-      setNotice({ kind: payload.status === 'failed' ? 'error' : 'info', message: payload.message });
+      if (!batchProcessingActive()) setNotice({ kind: payload.status === 'failed' ? 'error' : 'info', message: payload.message });
     }
   });
 
@@ -290,11 +294,13 @@ export default function TranslationPanel() {
     const eventKey = `${payload.jobId}:${payload.status}`;
     if (lastTranslationTerminalEvent === eventKey) return;
     lastTranslationTerminalEvent = eventKey;
-    void reloadProjectTranscript(payload.projectId);
-    setNotice({
-      kind: payload.status === 'completed' ? 'success' : payload.status === 'partial' || payload.status === 'cancelled' ? 'info' : 'error',
-      message: payload.message,
-    });
+    if (!batchProcessingActive()) {
+      void reloadProjectTranscript(payload.projectId);
+      setNotice({
+        kind: payload.status === 'completed' ? 'success' : payload.status === 'partial' || payload.status === 'cancelled' ? 'info' : 'error',
+        message: payload.message,
+      });
+    }
   });
 
   const persistTranscript = async () => {
