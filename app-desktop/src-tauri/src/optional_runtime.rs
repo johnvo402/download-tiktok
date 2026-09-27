@@ -404,14 +404,12 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
             && marker.profile == profile
             && marker.features.iter().any(|item| item == feature)
     });
-    let mut repair_current = false;
     if already_installed {
         let current_python = python_path(&root.join("current"));
         if verify(app, &current_python, &source, &old.as_ref().unwrap().features, profile).is_ok() {
             return Ok(status());
         }
         emit(app, "Phát hiện runtime AI không tương thích; đang sửa chữa");
-        repair_current = true;
     }
 
     let mut features = old.as_ref().map(|marker| marker.features.clone()).unwrap_or_default();
@@ -470,13 +468,37 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
     }
     let _ = fs::remove_file(&marker_previous);
     if replace { let _ = safe_remove(&root.join("previous"), &root); }
-    // Packages already installed in the shared environment are reused. Once
-    // installation succeeds, the download cache only duplicates disk usage.
+    // Staging may temporarily duplicate the active runtime, but the previous
+    // runtime and download cache are removed after the atomic swap succeeds.
     let _ = safe_remove(&root.join("cache"), &root);
     emit(app, "Đã cài tính năng được chọn");
     Ok(status())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::is_onnxruntime_gpu_metadata_conflict;
+
+    #[test]
+    fn accepts_expected_onnxruntime_gpu_metadata_gap() {
+        assert!(is_onnxruntime_gpu_metadata_conflict(
+            "The package `vieneu` requires `onnxruntime>=1.20.0`, but it's not installed"
+        ));
+        assert!(is_onnxruntime_gpu_metadata_conflict(
+            "The package `rapidocr` requires `onnxruntime>=1.7.0`, but it's not installed"
+        ));
+    }
+
+    #[test]
+    fn rejects_unrelated_dependency_conflicts() {
+        assert!(!is_onnxruntime_gpu_metadata_conflict(
+            "The package `foo` requires `bar>=2`, but it's not installed"
+        ));
+        assert!(!is_onnxruntime_gpu_metadata_conflict(
+            "The package `vieneu` requires `onnxruntime>=2.0`, but you have `onnxruntime==1.30.0`"
+        ));
+    }
+}
 #[cfg(windows)]
 fn hide_console(command: &mut Command) {
     use std::os::windows::process::CommandExt;
