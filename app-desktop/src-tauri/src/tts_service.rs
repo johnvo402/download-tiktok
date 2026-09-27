@@ -1018,9 +1018,22 @@ fn run_generation(
 
     let (tx, rx) = mpsc::channel::<String>();
     thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().flatten() {
-            if tx.send(line).is_err() {
-                break;
+        let mut reader = BufReader::new(stdout);
+        loop {
+            let mut bytes = Vec::new();
+            match reader.read_until(b'\n', &mut bytes) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    // Native runtimes may draw progress with carriage returns.
+                    // Split those records so a human-readable progress line cannot
+                    // be concatenated with the next JSON protocol event.
+                    for line in bytes.split(|byte| *byte == b'\r') {
+                        let line = line.strip_suffix(b"\n").unwrap_or(line);
+                        if tx.send(String::from_utf8_lossy(line).into_owned()).is_err() {
+                            return;
+                        }
+                    }
+                }
             }
         }
     });

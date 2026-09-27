@@ -92,6 +92,7 @@ pub fn import_video(
     }
     log::info!("Video import started; project={project_id}, extension={extension}, bytes={}", source_meta.len());
 
+    log::info!("Video import: hashing source; project={project_id}");
     let checksum = sha256_file(&source)?;
     if let (Some(existing_hash), Some(existing_relative)) = (
         project.source.checksum_sha256.as_deref(),
@@ -119,6 +120,7 @@ pub fn import_video(
     let staging = NamedTempFile::new_in(&source_dir)
         .map_err(|error| format!("Không thể chuẩn bị tệp video tạm thời: {error}"))?;
     let staging_path = staging.path().to_path_buf();
+    log::info!("Video import: copying source; project={project_id}");
     let staged_checksum = match copy_and_hash(&source, &staging_path) {
         Ok(checksum) => checksum,
         Err(error) => {
@@ -137,6 +139,7 @@ pub fn import_video(
         .len();
     log::info!("Video copied to project staging; project={project_id}, bytes={staged_size}");
 
+    log::info!("Video import: probing staged video; project={project_id}");
     let probe = match probe_video(&staging_path, staged_size) {
         Ok(probe) if probe.has_video => probe,
         Ok(_) => {

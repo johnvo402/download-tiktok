@@ -8,6 +8,7 @@ use tauri::{AppHandle, Emitter};
 
 static INSTALL_LOCK: Mutex<()> = Mutex::new(());
 const FEATURES: [&str; 3] = ["whisperx", "bandit", "acceleration"];
+const RUNTIME_VERSION: u32 = 3;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,13 +54,17 @@ fn python_path(directory: &Path) -> PathBuf {
     directory.join("Scripts").join("python.exe")
 }
 
-fn installed_marker() -> Option<RuntimeMarker> {
+fn read_marker() -> Option<RuntimeMarker> {
     let root = root().ok()?;
     let mut marker: RuntimeMarker = serde_json::from_slice(&fs::read(root.join("current.json")).ok()?).ok()?;
-    if !matches!(marker.profile.as_str(), "cpu" | "cuda") || !matches!(marker.runtime_version, 1 | 2) {
+    if !matches!(marker.profile.as_str(), "cpu" | "cuda")
+        || !(1..=RUNTIME_VERSION).contains(&marker.runtime_version)
+    {
         return None;
     }
-    // Version 1 installed all optional packages together. Keep those users working.
+    // Version 1 installed all optional packages together. Preserve that feature
+    // set when migrating to the current runtime so users do not silently lose
+    // capabilities during the repair.
     if marker.runtime_version == 1 {
         marker.features = FEATURES.iter()
             .filter(|feature| **feature != "acceleration" || marker.profile == "cuda")
@@ -81,6 +86,11 @@ fn installed_marker() -> Option<RuntimeMarker> {
     }
     crate::runtime_paths::optional_worker_source()?;
     Some(marker)
+}
+
+fn installed_marker() -> Option<RuntimeMarker> {
+    let marker = read_marker()?;
+    (marker.runtime_version == RUNTIME_VERSION).then_some(marker)
 }
 
 pub fn feature_installed(feature: &str) -> bool {
@@ -207,22 +217,28 @@ fn install_feature(app: &AppHandle, uv: &Path, root: &Path, source: &Path, pytho
 
 fn verify(app: &AppHandle, python: &Path, source: &Path, features: &[String], profile: &str) -> Result<(), String> {
     emit(app, "Kiểm tra các tính năng đã cài");
-    let mut script = String::from("import torch; assert torch.__version__.startswith('2.8.')\n");
+    let mut script = String::from(
+        "from packaging.version import Version\nimport torch\nassert Version(torch.__version__.split('+')[0]).release[:2] == (2, 8)\n",
+    );
     if profile == "cuda" && cfg!(windows) {
         script.push_str("import os, pathlib; gpu_dlls = os.add_dll_directory(str(pathlib.Path(torch.__file__).parent / 'lib'))\n");
     }
     if features.iter().any(|feature| feature == "whisperx") {
         script.push_str(
             "import faster_whisper, whisperx, transformers, huggingface_hub\n\
-            assert transformers.__version__.split('.')[0] == '4'\n\
-            assert huggingface_hub.__version__.startswith('0.')\n"
+            assert Version('4.57') <= Version(transformers.__version__) < Version('5')\n\
+            assert Version(huggingface_hub.__version__) == Version('0.36.2')\n",
         );
     }
     if features.iter().any(|feature| feature == "bandit") {
         script.push_str("import bandit_infer, soundfile\n");
     }
     if features.iter().any(|feature| feature == "acceleration") {
-        script.push_str("import faster_whisper, rapidocr, vieneu, onnxruntime\nassert 'CUDAExecutionProvider' in onnxruntime.get_available_providers()\n");
+        script.push_str(
+            "import faster_whisper, rapidocr, vieneu, onnxruntime, huggingface_hub\n\
+            assert Version(huggingface_hub.__version__) == Version('0.36.2')\n\
+            assert 'CUDAExecutionProvider' in onnxruntime.get_available_providers()\n",
+        );
     }
     if profile == "cuda" {
         script.push_str("assert torch.cuda.is_available()\n");
@@ -271,18 +287,33 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
             return Err("Thư mục cài đặt không an toàn.".into());
         }
     }
-    let old = installed_marker();
+    let old = read_marker();
     if profile == "cpu" && old.as_ref().is_some_and(|marker| marker.features.iter().any(|item| item == "acceleration")) {
         return Err("Máy đang dùng thành phần tăng tốc NVIDIA. Hãy chọn NVIDIA để dùng chung bộ xử lý đã cài.".into());
     }
-    if old.as_ref().is_some_and(|marker| marker.profile == profile && marker.features.iter().any(|item| item == feature)) {
-        return Ok(status());
+
+    let already_installed = old.as_ref().is_some_and(|marker| {
+        marker.runtime_version == RUNTIME_VERSION
+            && marker.profile == profile
+            && marker.features.iter().any(|item| item == feature)
+    });
+    let mut repair_current = false;
+    if already_installed {
+        let current_python = python_path(&root.join("current"));
+        if verify(app, &current_python, &source, &old.as_ref().unwrap().features, profile).is_ok() {
+            return Ok(status());
+        }
+        emit(app, "Phát hiện runtime AI không tương thích; đang sửa chữa");
+        repair_current = true;
     }
+
     let mut features = old.as_ref().map(|marker| marker.features.clone()).unwrap_or_default();
     if !features.iter().any(|item| item == feature) { features.push(feature.to_string()); }
-    // A CPU→NVIDIA change replaces the shared environment because torch must
-    // change variant. A same-profile feature is added to the existing venv.
-    let replace = old.as_ref().is_none_or(|marker| marker.profile != profile);
+    // Schema/runtime dependency changes are repaired atomically in staging.
+    // Same-profile additions can still reuse the current environment.
+    let replace = old.as_ref().is_none_or(|marker| {
+        marker.profile != profile || marker.runtime_version != RUNTIME_VERSION
+    }) || repair_current;
     let destination = if replace { root.join("staging") } else { root.join("current") };
     if replace {
         safe_remove(&destination, &root)?;
@@ -292,13 +323,20 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
     let install_result = (|| {
         let requested: Vec<&str> = if replace { features.iter().map(String::as_str).collect() } else { vec![feature] };
         for item in requested { install_feature(app, &uv, &root, &source, &python, item, profile)?; }
+        run_uv(
+            app,
+            &uv,
+            &root,
+            &["pip", "check", "--python", python.to_str().ok_or("Đường dẫn bộ xử lý không hợp lệ.")?],
+            "Kiểm tra xung đột dependency",
+        )?;
         verify(app, &python, &source, &features, profile)
     })();
     if let Err(error) = install_result {
         if replace { let _ = safe_remove(&destination, &root); }
         return Err(error);
     }
-    let marker = RuntimeMarker { runtime_version: 2, profile: profile.into(), features };
+    let marker = RuntimeMarker { runtime_version: RUNTIME_VERSION, profile: profile.into(), features };
     let marker_temp = root.join("current.json.tmp");
     let marker_file = root.join("current.json");
     let marker_previous = root.join("previous.json");

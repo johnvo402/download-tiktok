@@ -58,6 +58,8 @@ if (Test-Path $LockFile) {
     throw "Missing python/requirements-release.txt. Release builds require a committed dependency lock."
 }
 if ($LASTEXITCODE -ne 0) { throw "Could not install pinned release worker dependencies." }
+& $PythonExe -m pip check
+if ($LASTEXITCODE -ne 0) { throw "Pinned release worker dependencies are inconsistent." }
 
 Push-Location $Root
 try {
