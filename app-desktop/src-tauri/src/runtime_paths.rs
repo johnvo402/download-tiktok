@@ -3,9 +3,38 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 static RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
+static APP_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
-pub fn initialize(resource_dir: PathBuf) {
+pub fn initialize(resource_dir: PathBuf, app_data_dir: PathBuf) {
     let _ = RESOURCE_DIR.set(resource_dir);
+    let _ = APP_DATA_DIR.set(app_data_dir);
+}
+
+pub fn app_data_dir() -> Option<&'static Path> {
+    APP_DATA_DIR.get().map(PathBuf::as_path)
+}
+
+pub fn optional_worker_source() -> Option<PathBuf> {
+    if cfg!(debug_assertions) {
+        let staged = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("optional-runtime")
+            .join("source");
+        if staged.join("worker").join("__main__.py").is_file() {
+            return Some(staged);
+        }
+        return development_worker_dir();
+    }
+    let root = resource_dir()?.join("optional-runtime").join("source");
+    root.join("worker").is_dir().then_some(root)
+}
+
+pub fn optional_installer() -> Option<PathBuf> {
+    if cfg!(debug_assertions) {
+        return Some(PathBuf::from("uv"));
+    }
+    let path = resource_dir()?.join("optional-runtime").join("uv.exe");
+    path.is_file().then_some(path)
 }
 
 pub fn resolve_ffmpeg() -> Result<PathBuf, String> {
@@ -85,10 +114,38 @@ pub fn worker_dir() -> Result<PathBuf, String> {
     } else {
         packaged_worker_dir()
     };
-    worker.ok_or_else(|| "Thiếu AI Worker trong bộ cài. Hãy sửa chữa hoặc cài lại ứng dụng.".to_string())
+    worker.ok_or_else(|| "Thiếu thành phần xử lý AI. Hãy cập nhật hoặc cài lại JC AI.".to_string())
+}
+
+pub fn ai_worker_dir() -> Result<PathBuf, String> {
+    ai_worker_dir_for("acceleration")
+}
+
+pub fn ai_worker_dir_for(feature: &str) -> Result<PathBuf, String> {
+    if crate::optional_runtime::feature_installed(feature) {
+        let (_, source, _) = crate::optional_runtime::active_runtime()
+            .ok_or("Thành phần AI bổ sung chưa sẵn sàng.")?;
+        return Ok(source);
+    }
+    worker_dir()
 }
 
 pub fn worker_command(worker_root: &Path) -> Command {
+    if let Some((python, source, profile)) = crate::optional_runtime::active_runtime() {
+        if worker_root == source {
+            let mut command = Command::new(python);
+            command.arg("-m").arg("worker")
+                .current_dir(worker_root)
+                .env("PYTHONPATH", worker_root)
+                .env("PYTHONUNBUFFERED", "1")
+                .env("PYTHONDONTWRITEBYTECODE", "1")
+                .env("PYTHONUTF8", "1")
+                .env("PYTHONIOENCODING", "utf-8:backslashreplace");
+            if profile == "cuda" { command.env("JC_AI_GPU_RUNTIME", "1"); }
+            hide_console(&mut command);
+            return command;
+        }
+    }
     // Development settings install Python extras into the selected Python
     // environment. Run that same interpreter for the source worker so newly
     // installed OCR/WhisperX packages are visible immediately.

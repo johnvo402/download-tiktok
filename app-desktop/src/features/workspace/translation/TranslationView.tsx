@@ -293,6 +293,19 @@ export default function TranslationView() {
     }
   };
 
+  const clearDubbingAudio = () => {
+    dubLookupToken += 1;
+    if (!dubbingAudio) return;
+    dubbingAudio.pause();
+    dubbingAudio.onended = null;
+    dubbingAudio.onerror = null;
+    dubbingAudio.onloadedmetadata = null;
+    if (dubbingAudio.hasAttribute('src')) {
+      dubbingAudio.removeAttribute('src');
+      dubbingAudio.load();
+    }
+  };
+
   createEffect(() => {
     const project = currentProject();
     const projectId = project?.id;
@@ -303,7 +316,7 @@ export default function TranslationView() {
     const segments = currentTranscript()?.segments ?? [];
     if (!videoElement || !projectId) return;
     if (voicePreviewActive) {
-      dubbingAudio?.pause();
+      if (activeDubId || dubbingAudio?.hasAttribute('src')) clearDubbingAudio();
       if (!videoElement.paused) videoElement.pause();
       activeDubId = undefined;
       finishedDubId = undefined;
@@ -321,23 +334,24 @@ export default function TranslationView() {
     const segment = findPlayableDubbingSegmentAtTime(segments, time, enabled, finishedDubId);
     const segmentId = segment?.id;
     if (!segment || !dubbingAudio || !audioContext) {
-      if (dubbingAudio) { dubbingAudio.pause(); if (dubbingAudio.src) dubbingAudio.removeAttribute('src'); }
+      if (activeDubId || dubbingAudio?.hasAttribute('src')) clearDubbingAudio();
       activeDubId = undefined;
       setActiveDubbingSegment(undefined);
       return;
     }
     if (activeDubId !== segmentId) {
+      clearDubbingAudio();
       activeDubId = segmentId;
-      dubbingAudio.pause();
-      dubbingAudio.removeAttribute('src');
-      const token = ++dubLookupToken;
+      const token = dubLookupToken;
       setActiveDubbingSegment(segmentId);
       void ttsService.getAudioPath(projectId, segmentId!).then((path) => {
-        if (token !== dubLookupToken || !dubbingAudio) return;
-        dubbingAudio.src = convertFileSrc(path);
-        dubbingAudio.load();
-        dubbingAudio.onended = () => { finishedDubId = segmentId; };
-        dubbingAudio.onerror = () => { finishedDubId = segmentId; setNotice({ kind: 'error', message: 'Không thể giải mã audio lồng tiếng của segment này.' }); };
+        if (token !== dubLookupToken || !dubbingAudio || activeDubId !== segmentId) return;
+        dubbingAudio.onended = () => { if (token === dubLookupToken) finishedDubId = segmentId; };
+        dubbingAudio.onerror = () => {
+          if (token !== dubLookupToken || activeDubId !== segmentId) return;
+          finishedDubId = segmentId;
+          setNotice({ kind: 'error', message: 'Không thể đọc hoặc giải mã file audio lồng tiếng của segment này.' });
+        };
         dubbingAudio.onloadedmetadata = () => {
           if (token !== dubLookupToken || !dubbingAudio) return;
           const offset = Math.max(0, playbackTime() - segment!.start);
@@ -348,7 +362,14 @@ export default function TranslationView() {
           dubbingAudio.currentTime = offset;
           if (videoPlaying()) void dubbingAudio.play().catch(() => setNotice({ kind: 'error', message: 'Không thể phát audio lồng tiếng trên preview.' }));
         };
-      }).catch((error: unknown) => setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể mở audio lồng tiếng.' }));
+        dubbingAudio.src = convertFileSrc(path);
+        dubbingAudio.load();
+      }).catch((error: unknown) => {
+        if (token === dubLookupToken && activeDubId === segmentId) {
+          finishedDubId = segmentId;
+          setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể mở audio lồng tiếng.' });
+        }
+      });
     } else if (dubbingAudio.src) {
       const offset = Math.max(0, time - segment.start);
       if (Math.abs(dubbingAudio.currentTime - offset) > 0.32) dubbingAudio.currentTime = offset;
@@ -366,8 +387,7 @@ export default function TranslationView() {
     stopPreviewSubtitleSync();
     removeDropListener?.();
     setVideoPlaying(false);
-    dubLookupToken += 1;
-    dubbingAudio?.pause();
+    clearDubbingAudio();
     void audioContext?.close();
   });
 
@@ -631,9 +651,9 @@ export default function TranslationView() {
               onTimeUpdate={onTimeUpdate}
               onPlay={() => { setPlaying(true); setVideoPlaying(true); startPreviewSubtitleSync(); }}
               onPause={() => { setPlaying(false); setVideoPlaying(false); stopPreviewSubtitleSync(); syncPreviewSubtitle(videoElement.currentTime); dubbingAudio?.pause(); }}
-              onSeeking={() => { syncPreviewSubtitle(videoElement.currentTime); dubLookupToken += 1; dubbingAudio?.pause(); activeDubId = undefined; finishedDubId = undefined; setActiveDubbingSegment(undefined); }}
+              onSeeking={() => { syncPreviewSubtitle(videoElement.currentTime); clearDubbingAudio(); activeDubId = undefined; finishedDubId = undefined; setActiveDubbingSegment(undefined); }}
               onSeeked={onTimeUpdate}
-              onEnded={() => { setPlaying(false); setVideoPlaying(false); stopPreviewSubtitleSync(); syncPreviewSubtitle(videoElement.currentTime); dubbingAudio?.pause(); activeDubId = undefined; finishedDubId = undefined; }}
+              onEnded={() => { setPlaying(false); setVideoPlaying(false); stopPreviewSubtitleSync(); syncPreviewSubtitle(videoElement.currentTime); clearDubbingAudio(); activeDubId = undefined; finishedDubId = undefined; }}
               onError={() => void handleMediaError()}
             />
             <OverlayCanvas

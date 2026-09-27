@@ -3,7 +3,7 @@ use crate::project_service::{
 };
 use crate::render_spec;
 use crate::{
-    asr_service, batch_service, dialogue_service, overlays_service, project_service::SubtitleSettings, render_service,
+    asr_service, batch_service, dialogue_service, optional_runtime, overlays_service, project_service::SubtitleSettings, render_service,
     settings_service, transcript_service, translation_service, tts_service, video_service,
     video_tools_service,
 };
@@ -12,6 +12,22 @@ use tauri::Manager;
 use transcript_service::Transcript;
 
 static PROJECT_JOB_START_LOCK: Mutex<()> = Mutex::new(());
+
+#[tauri::command]
+pub fn get_optional_runtime_status() -> optional_runtime::RuntimeStatus {
+    optional_runtime::status()
+}
+
+#[tauri::command]
+pub fn open_ai_components_folder(app: tauri::AppHandle) -> Result<String, String> {
+    crate::storage_service::open_ai_components_folder(&app)
+}
+
+#[tauri::command]
+pub async fn install_optional_runtime(app: tauri::AppHandle, feature: String, profile: String) -> Result<optional_runtime::RuntimeStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || optional_runtime::install(&app, &feature, &profile))
+        .await.map_err(|error| format!("Không thể cài bộ xử lý bổ sung: {error}"))?
+}
 
 fn store(app: &tauri::AppHandle) -> Result<ProjectStore, String> {
     let mut root = app
@@ -668,6 +684,12 @@ pub async fn install_dialogue_model(app: tauri::AppHandle) -> Result<(), String>
 }
 
 #[tauri::command]
+pub async fn install_dialogue_model_from_file(app: tauri::AppHandle, source_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || dialogue_service::install_model_from_file(&app, std::path::Path::new(&source_path)))
+        .await.map_err(|error| format!("Không thể nhập model tách thoại: {error}"))?
+}
+
+#[tauri::command]
 pub async fn remove_dialogue_model(app: tauri::AppHandle, jobs: tauri::State<'_, render_service::RenderJobs>) -> Result<(), String> {
     let jobs = jobs.inner().clone();
     tauri::async_runtime::spawn_blocking(move || dialogue_service::remove_model(&app, &jobs))
@@ -801,7 +823,9 @@ pub fn get_tts_audio_path(
     project_id: String,
     segment_id: String,
 ) -> Result<String, String> {
-    tts_service::audio_path(&store(&app)?, &project_id, &segment_id)
+    let path = tts_service::audio_path(&store(&app)?, &project_id, &segment_id)?;
+    allow_verified_media_asset(&app, std::path::Path::new(&path))?;
+    Ok(path)
 }
 
 #[tauri::command]

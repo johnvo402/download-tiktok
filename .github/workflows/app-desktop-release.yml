@@ -43,6 +43,11 @@ jobs:
           python-version: "3.12"
           architecture: x64
 
+      - name: Set up optional runtime installer
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.12"
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:

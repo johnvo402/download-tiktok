@@ -6,6 +6,7 @@ mod dialogue_service;
 mod job_service;
 mod log_service;
 mod overlays_service;
+mod optional_runtime;
 mod project_service;
 mod render_service;
 pub mod render_spec;
@@ -33,8 +34,8 @@ pub fn run() {
         .manage(job_service::JobStore::default())
         .setup(|app| {
             let resource_dir = app.path().resource_dir()?;
-            runtime_paths::initialize(resource_dir);
             let app_data = app.path().app_data_dir()?;
+            runtime_paths::initialize(resource_dir, app_data.clone());
             std::fs::create_dir_all(app_data.join("projects"))?;
             if let Err(error) = settings_service::migrate_legacy_custom_prompt(app.handle()) {
                 log::warn!("Could not migrate legacy project translation prompt: {error}");
@@ -62,6 +63,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::get_optional_runtime_status,
+            commands::open_ai_components_folder,
+            commands::install_optional_runtime,
             commands::get_runtime_health,
             commands::export_diagnostics,
             commands::list_projects,
@@ -107,6 +111,7 @@ pub fn run() {
             commands::get_tts_environment,
             commands::get_dialogue_environment,
             commands::install_dialogue_model,
+            commands::install_dialogue_model_from_file,
             commands::remove_dialogue_model,
             commands::install_tts_model,
             commands::remove_tts_model,

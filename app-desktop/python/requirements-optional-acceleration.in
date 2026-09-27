@@ -1,0 +1,6 @@
+# Installed only when NVIDIA acceleration is requested for the built-in tools.
+torch==2.8.0
+torchaudio==2.8.0
+faster-whisper==1.2.1
+rapidocr==3.9.2
+vieneu==3.8.3

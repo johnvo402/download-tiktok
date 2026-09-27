@@ -166,7 +166,7 @@ export default function StartPage() {
 
       <div class="start-content">
         <Show when={runtimeHealth() && (!runtimeHealth()!.projectStorageAvailable || !runtimeHealth()!.ffmpegAvailable || !runtimeHealth()!.ffprobeAvailable || !runtimeHealth()!.workerAvailable)}>
-          <div class="runtime-warning" role="status"><strong>Một số thành phần ứng dụng chưa sẵn sàng</strong><span>{!runtimeHealth()!.projectStorageAvailable ? 'Không ghi được thư mục dữ liệu. ' : ''}{!runtimeHealth()!.ffmpegAvailable || !runtimeHealth()!.ffprobeAvailable ? 'Thiếu FFmpeg/FFprobe. ' : ''}{!runtimeHealth()!.workerAvailable ? 'Thiếu AI Worker.' : ''} Mở Cài đặt → Nâng cao để xem trạng thái.</span></div>
+          <div class="runtime-warning" role="status"><strong>Một số thành phần ứng dụng chưa sẵn sàng</strong><span>{!runtimeHealth()!.projectStorageAvailable ? 'Không lưu được dữ liệu dự án. ' : ''}{!runtimeHealth()!.ffmpegAvailable || !runtimeHealth()!.ffprobeAvailable ? 'Bộ xử lý video chưa sẵn sàng. ' : ''}{!runtimeHealth()!.workerAvailable ? 'Bộ xử lý AI chưa sẵn sàng. ' : ''} Mở Cài đặt → Nâng cao để xem trạng thái.</span></div>
         </Show>
         <section class="welcome-block">
           <div class="eyebrow"><Sparkles size={14} /> VIDEO, MỌI NGÔN NGỮ</div>

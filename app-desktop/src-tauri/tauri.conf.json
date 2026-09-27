@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "JC AI",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "com.ai.video-localization",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -47,6 +47,7 @@
     "resources": {
       "resources/ffmpeg": "ffmpeg",
       "resources/ai-worker": "ai-worker",
+      "resources/optional-runtime": "optional-runtime",
       "resources/THIRD_PARTY_LICENSES.txt": "THIRD_PARTY_LICENSES.txt",
       "resources/THIRD_PARTY_DEPENDENCY_LICENSES.txt": "THIRD_PARTY_DEPENDENCY_LICENSES.txt",
       "resources/dependency-license-inventory.json": "dependency-license-inventory.json"

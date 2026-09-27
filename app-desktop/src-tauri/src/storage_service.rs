@@ -21,6 +21,8 @@ pub struct StorageUsage {
     pub project_cache_bytes: u64,
     pub temporary_bytes: u64,
     pub logs_bytes: u64,
+    pub ai_components_bytes: u64,
+    pub ai_components_directory: String,
     pub cache_directory: String,
     pub faster_whisper_directory: String,
     pub ocr_directory: String,
@@ -261,6 +263,8 @@ pub fn usage(app: &AppHandle, jobs: &JobStore) -> Result<StorageUsage, String> {
     let global_temporary = directory_size(&app_cache.join("downloads"))
         .saturating_add(directory_size(&app_cache.join("tmp")));
     let logs_bytes = directory_size(&data_root.join("logs"));
+    let ai_components_directory = data_root.join("runtimes").join("advanced");
+    let ai_components_bytes = directory_size(&ai_components_directory);
     Ok(StorageUsage {
         models_bytes,
         faster_whisper_bytes,
@@ -272,6 +276,8 @@ pub fn usage(app: &AppHandle, jobs: &JobStore) -> Result<StorageUsage, String> {
         project_cache_bytes: project_cache_all.saturating_sub(project_temporary),
         temporary_bytes: project_temporary.saturating_add(global_temporary),
         logs_bytes,
+        ai_components_bytes,
+        ai_components_directory: ai_components_directory.to_string_lossy().into_owned(),
         cache_directory: app_cache.to_string_lossy().into_owned(),
         faster_whisper_directory: faster_whisper_directory.to_string_lossy().into_owned(),
         ocr_directory: ocr_directory.to_string_lossy().into_owned(),
@@ -312,6 +318,13 @@ pub fn clear_temporary(app: &AppHandle, jobs: &JobStore) -> Result<u64, String> 
 
 pub fn open_cache_folder(app: &AppHandle) -> Result<String, String> {
     let folder = app.path().app_data_dir().map_err(|error| error.to_string())?.join("cache");
+    open_directory(&folder)?;
+    Ok(folder.to_string_lossy().into_owned())
+}
+
+pub fn open_ai_components_folder(app: &AppHandle) -> Result<String, String> {
+    let folder = app.path().app_data_dir().map_err(|error| error.to_string())?
+        .join("runtimes").join("advanced");
     open_directory(&folder)?;
     Ok(folder.to_string_lossy().into_owned())
 }

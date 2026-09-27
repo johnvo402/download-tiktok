@@ -16,7 +16,7 @@ export interface AppSettings {
   tts: {
     provider: 'vieneu';
     modelId: string;
-    device: 'auto' | 'cpu' | 'cuda';
+    device: 'cpu' | 'cuda';
     defaultVoice: string;
     speed: number;
     fitToDuration: boolean;
@@ -25,10 +25,10 @@ export interface AppSettings {
   asr: {
     engine: 'fasterWhisper' | 'whisperX';
     model: 'tiny' | 'base' | 'small' | 'medium' | 'large-v3';
-    device: 'auto' | 'cpu' | 'cuda';
+    device: 'cpu' | 'cuda';
     language: 'auto' | 'en' | 'vi' | 'ja' | 'ko' | 'zh' | 'fr' | 'de' | 'es';
     ocrModel: 'tiny' | 'small' | 'medium';
-    ocrDevice: 'auto' | 'cpu' | 'cuda';
+    ocrDevice: 'cpu' | 'cuda';
   };
 }
 

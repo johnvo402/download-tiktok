@@ -43,10 +43,16 @@ if ($Package.version -ne $Tauri.version -or $Package.version -ne $CargoVersion -
 
 & (Join-Path $PSScriptRoot "build-ffmpeg.ps1") -Force
 & (Join-Path $PSScriptRoot "build-worker.ps1") -Python $Python -Clean
+& (Join-Path $PSScriptRoot "build-optional-runtime.ps1")
 foreach ($path in @(
     (Join-Path $Root "src-tauri\resources\ffmpeg\ffmpeg.exe"),
     (Join-Path $Root "src-tauri\resources\ffmpeg\ffprobe.exe"),
     (Join-Path $Root "src-tauri\resources\ai-worker\ai-worker.exe"),
+    (Join-Path $Root "src-tauri\resources\optional-runtime\uv.exe"),
+    (Join-Path $Root "src-tauri\resources\optional-runtime\source\worker\__main__.py"),
+    (Join-Path $Root "src-tauri\resources\optional-runtime\source\requirements-optional-whisperx.in"),
+    (Join-Path $Root "src-tauri\resources\optional-runtime\source\requirements-optional-bandit.in"),
+    (Join-Path $Root "src-tauri\resources\optional-runtime\source\requirements-optional-acceleration.in"),
     (Join-Path $Root "src-tauri\resources\THIRD_PARTY_LICENSES.txt")
 )) { if (-not (Test-Path $path)) { throw "Release resource is missing: $path" } }
 

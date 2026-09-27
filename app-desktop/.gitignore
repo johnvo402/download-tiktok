@@ -17,5 +17,7 @@ src-tauri/resources/ffmpeg/*.dll
 src-tauri/resources/ffmpeg/ffmpeg-build.json
 src-tauri/resources/ai-worker/*
 !src-tauri/resources/ai-worker/.gitkeep
+src-tauri/resources/optional-runtime/uv.exe
+src-tauri/resources/optional-runtime/source/
 .DS_Store
 Thumbs.db

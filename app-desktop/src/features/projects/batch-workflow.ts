@@ -69,7 +69,7 @@ export async function validateBatchProjects(projectIds: string[], steps: BatchSt
         if (!asrEnvironment?.workerInstalled) reasons.push('AI Worker chưa sẵn sàng; hãy sửa chữa hoặc cài lại ứng dụng.');
         else if (!asrEnvironment.modelCached) reasons.push(`Model faster-whisper ${appSettings?.settings.asr.model ?? ''} chưa được tải.`);
         else if (appSettings?.settings.asr.engine === 'whisperX' && appSettings.settings.asr.language === 'auto') reasons.push('WhisperX cần ngôn ngữ nguồn cụ thể để chọn aligner.');
-        else if (appSettings?.settings.asr.engine === 'whisperX' && !asrEnvironment.whisperXInstalled) reasons.push('Python Worker chưa có runtime WhisperX.');
+        else if (appSettings?.settings.asr.engine === 'whisperX' && !asrEnvironment.whisperXInstalled) reasons.push('Chưa cài WhisperX.');
         else if (appSettings?.settings.asr.engine === 'whisperX' && !asrEnvironment.alignmentModelCached) reasons.push(`WhisperX chưa cài aligner ${appSettings.settings.asr.language}.`);
       }
       const needsTranslation = transcript

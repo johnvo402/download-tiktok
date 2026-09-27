@@ -193,7 +193,7 @@ def _download_episode(
     try:
         import yt_dlp
     except ImportError as error:
-        raise RuntimeError("Downloader chưa được cài. Cài dependencies TikTok của AI Worker rồi khởi động lại app.") from error
+        raise RuntimeError("Chức năng tải video chưa sẵn sàng. Hãy cập nhật hoặc cài lại JC AI.") from error
 
     # The standalone downloader uses yt-dlp's CLI. Keep the desktop worker on
     # that same code path: some extractor/postprocessor failures raised through

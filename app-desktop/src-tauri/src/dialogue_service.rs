@@ -12,7 +12,10 @@ use tauri::{AppHandle, Emitter, Manager};
 const MODEL_FILE: &str = "checkpoint-multi.ckpt";
 const MODEL_BYTES: u64 = 446_680_129;
 const MODEL_SHA256: &str = "abcfccf65446752a057f4a302c941479a54b7560ebf8d7bca039d2ea98e64cfc";
-const MODEL_URL: &str = "https://zenodo.org/api/records/12701995/files/checkpoint-multi.ckpt/content";
+const MODEL_URLS: [&str; 2] = [
+    "https://zenodo.org/api/records/12701995/files/checkpoint-multi.ckpt/content",
+    "https://zenodo.org/records/12701995/files/checkpoint-multi.ckpt?download=1",
+];
 const MODEL_DOWNLOAD_ATTEMPTS: usize = 4;
 static MODEL_LOCK: Mutex<()> = Mutex::new(());
 static MODEL_CHECK: Mutex<Option<(PathBuf, u64, SystemTime, bool)>> = Mutex::new(None);
@@ -32,7 +35,7 @@ impl DialogueEnvironment {
 }
 
 pub fn get_environment(app: &AppHandle) -> Result<DialogueEnvironment, String> {
-    let worker = crate::runtime_paths::worker_dir()?;
+    let worker = crate::runtime_paths::ai_worker_dir_for("bandit")?;
     let output = inspect_worker(&worker)?;
     let model = model_path(app)?;
     let model_cached = verify_model_if_present(&model)?;
@@ -63,6 +66,7 @@ pub fn install_model(app: &AppHandle) -> Result<(), String> {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(60 * 60))
             .connect_timeout(std::time::Duration::from_secs(30))
+            .user_agent("JC-AI/0.1 (desktop model downloader)")
             .build().map_err(|error| format!("Không thể khởi tạo lượt tải model: {error}"))?;
         download_model_with_resume(app, &client, &partial)?;
         let file = OpenOptions::new().read(true).open(&partial)
@@ -75,12 +79,60 @@ pub fn install_model(app: &AppHandle) -> Result<(), String> {
             let _ = fs::remove_file(&partial);
             return Err("Checksum BandIt v2 không khớp; file tải về đã bị loại bỏ. Hãy thử tải lại.".into());
         }
-        fs::rename(&partial, &destination).map_err(|error| format!("Không thể hoàn tất cài model: {error}"))?;
+        replace_invalid_model(&partial, &destination)?;
         if let Ok(mut cache) = MODEL_CHECK.lock() { *cache = None; }
         let _ = app.emit("dialogue-model-progress", json!({"downloadedBytes": MODEL_BYTES, "totalBytes": MODEL_BYTES, "progress": 1.0, "message": "BandIt v2 đã cài xong"}));
         Ok(())
     })();
     result
+}
+
+pub fn install_model_from_file(app: &AppHandle, source: &Path) -> Result<(), String> {
+    let _guard = MODEL_LOCK.lock().map_err(|_| "Không thể khóa thao tác model tách thoại.".to_string())?;
+    let destination = model_path(app)?;
+    if verify_model_if_present(&destination)? { return Ok(()); }
+    let metadata = fs::symlink_metadata(source)
+        .map_err(|error| format!("Không thể đọc checkpoint đã chọn: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() != MODEL_BYTES {
+        return Err(format!("File BandIt v2 phải là checkpoint-multi.ckpt hợp lệ ({MODEL_BYTES} byte)."));
+    }
+    if file_sha256(source)? != MODEL_SHA256 {
+        return Err("Checkpoint BandIt v2 đã chọn có SHA-256 không khớp bản phát hành.".into());
+    }
+    let parent = destination.parent().ok_or("Thư mục model không hợp lệ.")?;
+    fs::create_dir_all(parent).map_err(|error| format!("Không thể tạo thư mục Models: {error}"))?;
+    ensure_managed_directory(parent)?;
+    let staged = parent.join(format!(".{MODEL_FILE}.import"));
+    if let Ok(metadata) = fs::symlink_metadata(&staged) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("File import BandIt tạm không hợp lệ.".into());
+        }
+        fs::remove_file(&staged).map_err(|error| format!("Không thể dọn file import cũ: {error}"))?;
+    }
+    let result = (|| {
+        fs::copy(source, &staged).map_err(|error| format!("Không thể chép checkpoint vào Models: {error}"))?;
+        if file_sha256(&staged)? != MODEL_SHA256 {
+            return Err("Checkpoint BandIt v2 bị thay đổi khi sao chép.".into());
+        }
+        replace_invalid_model(&staged, &destination)?;
+        if let Ok(mut cache) = MODEL_CHECK.lock() { *cache = None; }
+        Ok(())
+    })();
+    if result.is_err() { let _ = fs::remove_file(&staged); }
+    result
+}
+
+fn replace_invalid_model(staged: &Path, destination: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(destination) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err("Đường dẫn model hiện tại không hợp lệ; không ghi đè.".into());
+        }
+        Ok(_) => fs::remove_file(destination)
+            .map_err(|error| format!("Không thể thay checkpoint cũ không hợp lệ: {error}"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+        Err(error) => return Err(format!("Không thể kiểm tra checkpoint hiện tại: {error}")),
+    }
+    fs::rename(staged, destination).map_err(|error| format!("Không thể hoàn tất cài model: {error}"))
 }
 
 fn download_model_with_resume(
@@ -102,31 +154,41 @@ fn download_model_with_resume(
         if offset == MODEL_BYTES { return Ok(()); }
         if offset > MODEL_BYTES { return Err("Tệp tải BandIt tạm vượt quá kích thước dự kiến.".into()); }
 
-        let mut request = client.get(MODEL_URL);
-        if offset > 0 {
-            request = request.header(reqwest::header::RANGE, format!("bytes={offset}-"));
-        }
-        let mut response = match request.send() {
-            Ok(response) => response,
-            Err(error) => {
-                last_error = format!("Lỗi kết nối tới Zenodo: {error}");
-                if attempt + 1 == MODEL_DOWNLOAD_ATTEMPTS { break; }
-                emit_download_retry(app, offset, attempt + 1);
-                std::thread::sleep(std::time::Duration::from_secs((attempt as u64 + 1) * 2));
-                continue;
+        let mut response = None;
+        for url in MODEL_URLS {
+            let mut request = client.get(url).header(reqwest::header::ACCEPT, "application/octet-stream");
+            if offset > 0 {
+                request = request.header(reqwest::header::RANGE, format!("bytes={offset}-"));
             }
-        };
-        let status = response.status();
-        if !status.is_success() {
-            last_error = format!("Zenodo trả HTTP {status} khi tải BandIt v2.");
-            if !status.is_server_error() && status.as_u16() != 408 && status.as_u16() != 429 {
-                return Err(last_error);
+            match request.send() {
+                Ok(candidate) if candidate.status().is_success() => {
+                    response = Some(candidate);
+                    break;
+                }
+                Ok(candidate) => {
+                    last_error = format!("Zenodo trả HTTP {} khi tải BandIt v2.", candidate.status());
+                    if candidate.status().as_u16() == 403 {
+                        let _ = app.emit("dialogue-model-progress", json!({
+                            "downloadedBytes": offset,
+                            "totalBytes": MODEL_BYTES,
+                            "progress": (offset as f64 / MODEL_BYTES as f64).clamp(0.0, 0.99),
+                            "message": "Zenodo từ chối đường tải này · đang thử đường dự phòng…"
+                        }));
+                    }
+                }
+                Err(error) => last_error = format!("Lỗi kết nối tới Zenodo: {error}"),
+            }
+        }
+        let Some(mut response) = response else {
+            if last_error.contains("HTTP 403") {
+                return Err(format!("{last_error} Hãy thử tải bằng trình duyệt từ trang Zenodo rồi dùng nút ‘Cài từ file’ trong Cài đặt."));
             }
             if attempt + 1 == MODEL_DOWNLOAD_ATTEMPTS { break; }
             emit_download_retry(app, offset, attempt + 1);
             std::thread::sleep(std::time::Duration::from_secs((attempt as u64 + 1) * 2));
             continue;
-        }
+        };
+        let status = response.status();
 
         let append = if offset > 0 && status == reqwest::StatusCode::PARTIAL_CONTENT {
             let range = response.headers().get(reqwest::header::CONTENT_RANGE)
@@ -224,12 +286,12 @@ pub fn separate(
     canceled: impl Fn() -> bool,
     mut progress: impl FnMut(String),
 ) -> Result<(), String> {
-    let worker = crate::runtime_paths::worker_dir()?;
+    let worker = crate::runtime_paths::ai_worker_dir_for("bandit")?;
     let model = model_path(app)?;
     if !verify_model_if_present(&model)? { return Err("Chưa cài model BandIt v2. Mở Cài đặt → Xử lý âm thanh để tải model.".into()); }
     let runtime = inspect_worker(&worker)?;
     if !runtime.get("runtimeInstalled").and_then(Value::as_bool).unwrap_or(false) {
-        return Err("Thiếu runtime tách thoại. Trong development, chạy scripts/setup-dialogue-dev.ps1 rồi khởi động lại app.".into());
+        return Err("Chưa cài bộ xử lý tách thoại. Mở Cài đặt → Nhận dạng lời thoại và cài BandIt.".into());
     }
     let request = json!({"operation":"dialogue_separate","inputPath":source_wav,"outputPath":output_wav,"modelPath":model,"device":"auto"});
     let mut child = crate::runtime_paths::worker_command(&worker)

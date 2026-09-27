@@ -541,16 +541,16 @@ fn run_tiktok_worker(
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if let Some(status) = child.try_wait().map_err(|error| format!("Không kiểm tra được downloader worker: {error}"))? {
-                    if !status.success() { return Err("Downloader worker đã dừng trước khi hoàn tất. Kiểm tra Chrome, mạng, cookies và dependencies.".into()); }
+                    if !status.success() { return Err("Tải video đã dừng trước khi hoàn tất. Kiểm tra kết nối mạng, đăng nhập TikTok rồi thử lại.".into()); }
                     if terminal_received { return Ok(()); }
-                    return Err("Downloader worker đã dừng mà không xác nhận hoàn tất.".into());
+                    return Err("Tải video đã dừng trước khi hoàn tất.".into());
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
     let _ = child.wait();
-    Err("Downloader worker đã đóng mà không trả kết quả.".into())
+    Err("Không nhận được kết quả tải video.".into())
 }
 
 #[cfg(windows)]

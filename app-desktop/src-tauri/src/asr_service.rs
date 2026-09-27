@@ -228,7 +228,7 @@ fn ocr_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
 
 pub fn get_ocr_environment(app: AppHandle, model: String) -> Result<OcrEnvironment, String> {
     validate_ocr_options(&model, "auto")?;
-    let worker = worker_root(&app)?;
+    let worker = ocr_worker_root(&app)?;
     let response = inspect_worker(&worker, &serde_json::json!({
         "operation": "ocr_inspect",
         "cacheDir": ocr_cache_dir(&app)?,
@@ -257,13 +257,13 @@ pub fn install_ocr_runtime(app: AppHandle) -> Result<(), String> {
     if !cfg!(debug_assertions) {
         return Err("Bản cài này thiếu runtime OCR tích hợp. Hãy cập nhật hoặc sửa chữa JC AI để khôi phục thành phần OCR.".into());
     }
-    let worker = worker_root(&app)?;
+    let worker = ocr_worker_root(&app)?;
     let before = inspect_worker(&worker, &serde_json::json!({
         "operation": "ocr_inspect",
         "cacheDir": ocr_cache_dir(&app)?,
     }))?;
     if !before.get("workerInstalled").and_then(|value| value.as_bool()).unwrap_or(false) {
-        return Err("AI Worker chưa sẵn sàng. Hãy sửa chữa hoặc cài lại ứng dụng trước khi cài OCR.".into());
+        return Err("Bộ xử lý AI chưa sẵn sàng. Hãy cập nhật hoặc cài lại JC AI.".into());
     }
     let mut command = crate::runtime_paths::development_python_command()?;
     command
@@ -304,17 +304,17 @@ pub fn install_ocr_model(app: AppHandle, model: String) -> Result<(), String> {
     let _operation = MODEL_CACHE_OPERATION_LOCK.lock()
         .map_err(|_| "Không thể khóa thao tác model Speech Recognition.".to_string())?;
     validate_ocr_options(&model, "cpu")?;
-    let worker = worker_root(&app)?;
+    let worker = ocr_worker_root(&app)?;
     let cache_dir = ocr_cache_dir(&app)?;
     let environment = inspect_worker(&worker, &serde_json::json!({ "operation": "ocr_inspect", "cacheDir": cache_dir, "model": model }))?;
     if !environment.get("workerInstalled").and_then(|value| value.as_bool()).unwrap_or(false) {
-        return Err("AI Worker chưa sẵn sàng. Hãy sửa chữa hoặc cài lại ứng dụng trước khi cài OCR.".into());
+        return Err("Bộ đọc chữ chưa sẵn sàng. Hãy cập nhật hoặc cài lại JC AI.".into());
     }
     if !environment.get("ocrInstalled").and_then(|value| value.as_bool()).unwrap_or(false) {
-        return Err("Runtime RapidOCR chưa có trong Python Worker. Bản development cài `pip install -e .[ocr]`; bản release cần worker được build kèm OCR.".into());
+        return Err("Bộ đọc chữ chưa sẵn sàng. Hãy cập nhật hoặc cài lại JC AI.".into());
     }
     if !environment.get("runtimeInstalled").and_then(|value| value.as_bool()).unwrap_or(false) {
-        return Err("ONNX Runtime chưa có trong Python Worker. Mở Settings → Speech Recognition và cài runtime OCR trước.".into());
+        return Err("Bộ đọc chữ chưa đầy đủ. Hãy cập nhật hoặc cài lại JC AI.".into());
     }
     if environment.get("modelCached").and_then(|value| value.as_bool()).unwrap_or(false) {
         return Ok(());
@@ -427,7 +427,7 @@ pub fn install_whisperx_alignment(app: AppHandle, language: String) -> Result<()
         .and_then(|value| value.as_bool())
         .unwrap_or(false)
     {
-        return Err("WhisperX chưa có trong Python Worker. Hãy cài runtime WhisperX theo hướng dẫn trong Settings/README rồi kiểm tra lại.".to_string());
+        return Err("WhisperX chưa được cài. Mở Cài đặt → Nhận dạng lời thoại và cài WhisperX.".to_string());
     }
     if response
         .get("alignmentModelCached")
@@ -460,7 +460,7 @@ pub fn install_model(app: AppHandle, model: String) -> Result<(), String> {
         .unwrap_or(false)
     {
         return Err(
-            "AI Worker thiếu thành phần Speech Recognition. Hãy sửa chữa hoặc cài lại ứng dụng."
+            "Bộ nhận dạng lời thoại chưa sẵn sàng. Hãy cập nhật hoặc cài lại JC AI."
                 .to_string(),
         );
     }
@@ -572,7 +572,7 @@ pub fn generate_transcript(
         return Err("Chưa chọn vùng subtitle để OCR. Hãy kéo chọn vùng trong khung video ở panel Transcript.".to_string());
     }
     resolve_video(&store, &project_id)?;
-    let worker = worker_root(&app)?;
+    let worker = if options.mode == "ocr" { ocr_worker_root(&app)? } else { worker_root(&app)? };
     if !worker.is_dir() {
         return Err("Không tìm thấy thư mục Python worker trong checkout hiện tại.".to_string());
     }
@@ -585,17 +585,17 @@ pub fn generate_transcript(
             "model": options.ocr_model,
         }))?;
         if !environment.get("workerInstalled").and_then(|value| value.as_bool()).unwrap_or(false) {
-            return Err("AI Worker chưa sẵn sàng. Hãy sửa chữa hoặc cài lại ứng dụng.".into());
+            return Err("Bộ xử lý AI chưa sẵn sàng. Hãy cập nhật hoặc cài lại JC AI.".into());
         }
         if !environment.get("ocrInstalled").and_then(|value| value.as_bool()).unwrap_or(false)
             || !environment.get("runtimeInstalled").and_then(|value| value.as_bool()).unwrap_or(false) {
-            return Err("RapidOCR chưa được cài trong Python Worker. Hãy cài OCR trong Cài đặt → Speech Recognition.".into());
+            return Err("Bộ đọc chữ chưa được cài. Mở Cài đặt → Nhận dạng lời thoại.".into());
         }
         if !environment.get("modelCached").and_then(|value| value.as_bool()).unwrap_or(false) {
-            return Err(format!("Model OCR {} chưa được cài. Mở Cài đặt → Speech Recognition và cài model đã chọn trước.", options.ocr_model));
+            return Err(format!("Mô hình đọc chữ {} chưa được cài. Mở Cài đặt → Nhận dạng lời thoại để tải.", options.ocr_model));
         }
         if options.ocr_device == "cuda" && !environment.get("cudaAvailable").and_then(|value| value.as_bool()).unwrap_or(false) {
-            return Err("CUDA OCR chưa khả dụng trong bản worker này. Chọn Auto hoặc CPU, hoặc cài worker có ONNX Runtime GPU tương thích.".into());
+            return Err("Tăng tốc NVIDIA chưa sẵn sàng. Chọn Tự động hoặc CPU, hoặc cài bản NVIDIA trong Cài đặt.".into());
         }
     } else {
         let legacy_cache_dir = legacy_asr_cache_dir(&app)?;
@@ -603,19 +603,19 @@ pub fn generate_transcript(
         let environment = inspect_worker(&worker, &serde_json::json!({ "operation": "inspect", "model": options.model, "cacheDir": cache_dir, "legacyCacheDir": legacy_cache_dir, "alignmentLanguage": alignment_language }))?;
         cuda_available = environment.get("cudaAvailable").and_then(|value| value.as_bool()).unwrap_or(false);
         if !environment.get("workerInstalled").and_then(|value| value.as_bool()).unwrap_or(false) {
-            return Err("AI Worker thiếu thành phần Speech Recognition. Hãy sửa chữa hoặc cài lại ứng dụng.".to_string());
+            return Err("Bộ nhận dạng lời thoại chưa sẵn sàng. Hãy cập nhật hoặc cài lại JC AI.".to_string());
         }
         if options.engine == "whisperX" && !environment.get("whisperXInstalled").and_then(|value| value.as_bool()).unwrap_or(false) {
-            return Err("WhisperX chưa có trong Python Worker. Cài runtime WhisperX trong Settings trước khi tạo transcript.".to_string());
+            return Err("WhisperX chưa được cài. Mở Cài đặt → Nhận dạng lời thoại và cài WhisperX.".to_string());
         }
         if options.engine == "whisperX" && !environment.get("alignmentModelCached").and_then(|value| value.as_bool()).unwrap_or(false) {
-            return Err(format!("WhisperX chưa cài aligner cho ngôn ngữ {}. Mở Cài đặt → Speech Recognition để cài trước.", options.language));
+            return Err(format!("WhisperX chưa có mô hình căn thời gian cho ngôn ngữ {}. Mở Cài đặt → Nhận dạng lời thoại để tải.", options.language));
         }
         if options.device == "cuda" && !cuda_available {
-            return Err("CUDA chưa khả dụng cho faster-whisper. Chọn Auto hoặc CPU trong cấu hình Speech Recognition.".to_string());
+            return Err("Tăng tốc NVIDIA chưa sẵn sàng cho faster-whisper. Chọn Tự động hoặc CPU trong Cài đặt.".to_string());
         }
         if !environment.get("modelCached").and_then(|value| value.as_bool()).unwrap_or(false) {
-            return Err(format!("Model faster-whisper '{}' chưa được cài. Mở Cài đặt → Speech Recognition để tải model trước khi tạo transcript.", options.model));
+            return Err(format!("Mô hình faster-whisper '{}' chưa được cài. Mở Cài đặt → Nhận dạng lời thoại để tải.", options.model));
         }
     }
 
@@ -791,28 +791,12 @@ fn run_transcription(
         keep_audio: false,
     };
 
-    let extracted_channels = if project
-        .source
-        .audio_streams
-        .first()
-        .and_then(|stream| stream.channels)
-        .unwrap_or(1)
-        > 1
-    {
-        2
-    } else {
-        1
-    };
     emit_status(
         app,
         job_id,
         project_id,
         "progress",
-        if extracted_channels == 2 {
-            "Đang trích xuất audio stereo 16 kHz để giữ riêng hai kênh…"
-        } else {
-            "Đang trích xuất audio mono 16 kHz…"
-        },
+        "Đang trích xuất audio mono 16 kHz…",
         Some("extract-audio"),
         None,
     );
@@ -828,7 +812,7 @@ fn run_transcription(
             "-vn",
         ])
         .arg("-ac")
-        .arg(extracted_channels.to_string())
+        .arg("1")
         .args(["-ar", "16000", "-c:a", "pcm_s16le"])
         .arg(&audio_path)
         .stdout(Stdio::null())
@@ -1052,7 +1036,7 @@ fn run_worker_request(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| format!("Không thể khởi chạy Python worker: {error}"))?;
+        .map_err(|error| format!("Không thể bắt đầu nhận dạng lời thoại: {error}"))?;
     if let Some(mut stdin) = child.stdin.take() {
         let mut line = serde_json::to_vec(request)
             .map_err(|error| format!("Không thể mã hóa lệnh worker: {error}"))?;
@@ -1120,7 +1104,7 @@ fn run_worker_request(
                         "{}{}",
                         event
                             .message
-                            .unwrap_or_else(|| "Python worker gặp lỗi.".to_string()),
+                            .unwrap_or_else(|| "Không thể xử lý lời thoại.".to_string()),
                         event
                             .code
                             .map(|code| format!(" ({code})"))
@@ -1152,7 +1136,7 @@ fn run_worker_request(
                             worker_error = Some(
                                 event
                                     .message
-                                    .unwrap_or_else(|| "Python worker gặp lỗi.".to_string()),
+                                    .unwrap_or_else(|| "Không thể xử lý lời thoại.".to_string()),
                             );
                         } else if event.kind == "completed" {
                             completed = true;
@@ -1168,15 +1152,11 @@ fn run_worker_request(
         return Err(error);
     }
     if !exit_status.is_some_and(|status| status.success()) {
-        let detail = stderr.trim();
-        return Err(if detail.is_empty() {
-            "Python worker đã dừng bất ngờ. Kiểm tra Python và faster-whisper.".to_string()
-        } else {
-            format!("Python worker thất bại: {detail}")
-        });
+        log::error!("Speech recognition process stopped: {}", stderr.trim());
+        return Err("Nhận dạng lời thoại đã dừng bất ngờ. Mở Cài đặt → Nhận dạng lời thoại để kiểm tra thành phần đã cài.".to_string());
     }
     if !completed {
-        return Err("Python worker đã kết thúc nhưng không trả transcript hoàn tất.".to_string());
+        return Err("Nhận dạng lời thoại đã dừng trước khi hoàn tất bản chép lời.".to_string());
     }
     Ok(())
 }
@@ -1187,9 +1167,7 @@ fn inspect_worker(worker: &Path, request: &serde_json::Value) -> Result<serde_js
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| {
-            format!("Không thể khởi chạy Python worker. Kiểm tra Python 3.10+: {error}")
-        })?;
+        .map_err(|error| format!("Không thể kiểm tra bộ nhận dạng lời thoại: {error}"))?;
     let mut input = serde_json::to_vec(request).map_err(|error| error.to_string())?;
     input.push(b'\n');
     child
@@ -1207,16 +1185,16 @@ fn inspect_worker(worker: &Path, request: &serde_json::Value) -> Result<serde_js
         .filter(|line| !line.is_empty())
         .last()
         .ok_or_else(|| {
-            let details = String::from_utf8_lossy(&output.stderr);
-            format!("Python worker không phản hồi hợp lệ: {}", details.trim())
+            log::error!("Speech recognition inspection returned no data: {}", String::from_utf8_lossy(&output.stderr));
+            "Bộ nhận dạng lời thoại không phản hồi. Hãy cập nhật hoặc cài lại JC AI.".to_string()
         })?;
     let envelope: serde_json::Value = serde_json::from_slice(response)
-        .map_err(|error| format!("Phản hồi Python worker không hợp lệ: {error}"))?;
+        .map_err(|error| format!("Không đọc được trạng thái bộ nhận dạng lời thoại: {error}"))?;
     if envelope.get("type").and_then(|value| value.as_str()) != Some("capabilities") {
         return Err(envelope
             .get("message")
             .and_then(|value| value.as_str())
-            .unwrap_or("Python worker không thể kiểm tra model.")
+            .unwrap_or("Không thể kiểm tra mô hình nhận dạng.")
             .to_string());
     }
     Ok(envelope)
@@ -1335,7 +1313,15 @@ fn python_command(worker: &Path) -> Command {
 }
 
 fn worker_root(_app: &AppHandle) -> Result<PathBuf, String> {
-    crate::runtime_paths::worker_dir()
+    if crate::optional_runtime::feature_installed("whisperx") {
+        crate::runtime_paths::ai_worker_dir_for("whisperx")
+    } else {
+        crate::runtime_paths::ai_worker_dir()
+    }
+}
+
+fn ocr_worker_root(_app: &AppHandle) -> Result<PathBuf, String> {
+    crate::runtime_paths::ai_worker_dir()
 }
 
 fn wait_killable(

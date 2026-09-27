@@ -5,12 +5,10 @@ import importlib.util
 import logging
 import os
 import shutil
-from difflib import SequenceMatcher
 from pathlib import Path
+import time
 from typing import Any, Callable
-import unicodedata
 import uuid
-import wave
 
 from worker.model_manifest import create_manifest, verify_manifest
 from worker.protocol import Emitter, progress
@@ -246,7 +244,7 @@ def install_whisperx_alignment(language: str, cache_dir: str, emit: Emitter) -> 
         import whisperx
     except ImportError as error:
         raise RuntimeError(
-            "WhisperX chưa được cài trong Python Worker. Trong development, chạy scripts/setup-whisperx-dev.ps1; bản release cần worker có WhisperX."
+            "WhisperX chưa được cài. Mở Cài đặt → Nhận dạng lời thoại và cài WhisperX."
         ) from error
 
     language_dir.mkdir(parents=True, exist_ok=True)
@@ -294,7 +292,7 @@ def install_model(model_name: str, cache_dir: str, emit: Emitter) -> None:
     try:
         from huggingface_hub import snapshot_download
     except ImportError as error:
-        raise RuntimeError("AI Worker không có thành phần faster-whisper cần thiết. Hãy sửa chữa hoặc cài lại ứng dụng.") from error
+        raise RuntimeError("Bộ nhận dạng lời thoại chưa sẵn sàng. Hãy cập nhật hoặc cài lại JC AI.") from error
 
     root = Path(cache_dir)
     root.mkdir(parents=True, exist_ok=True)
@@ -336,74 +334,21 @@ def install_model(model_name: str, cache_dir: str, emit: Emitter) -> None:
     emit({"type": "completed", "job": "asr_install", "model": model_name, "alreadyInstalled": False})
 
 
-def _audio_channel_plan(audio_path: Path) -> tuple[int, int, Any | None, list[int]]:
-    """Inspect the extracted PCM WAV and retain distinct stereo channels for ASR."""
-    with wave.open(str(audio_path), "rb") as source:
-        channel_count = source.getnchannels()
-        sample_rate = source.getframerate()
-        frame_count = source.getnframes()
-        sample_width = source.getsampwidth()
-        if sample_width != 2:
-            raise RuntimeError("Audio nhận dạng phải là PCM 16-bit.")
-        if channel_count == 1:
-            return sample_rate, frame_count, None, [0]
-        if channel_count != 2:
-            raise RuntimeError(f"Audio nhận dạng có số kênh không hỗ trợ: {channel_count}.")
-
-        raw_frames = source.readframes(frame_count)
-
-    try:
-        import numpy as np
-    except ImportError as error:
-        raise RuntimeError("AI Worker thiếu NumPy cần thiết để nhận dạng audio stereo.") from error
-
-    samples = np.frombuffer(raw_frames, dtype="<i2")
-    if samples.size != frame_count * channel_count:
-        raise RuntimeError("Audio WAV bị thiếu hoặc hỏng dữ liệu frame.")
-    samples = samples.reshape((frame_count, channel_count))
-    if frame_count == 0:
-        return sample_rate, frame_count, samples, [0]
-
-    # A short 10 ms sample is enough to tell duplicated mono from genuinely
-    # different/panned channels without scanning an hour-long file at full rate.
-    stride = max(1, sample_rate // 100)
-    probe = samples[::stride].astype(np.float64)
-    left = probe[:, 0] - float(np.mean(probe[:, 0]))
-    right = probe[:, 1] - float(np.mean(probe[:, 1]))
-    left_rms = float(np.sqrt(np.mean(left * left)))
-    right_rms = float(np.sqrt(np.mean(right * right)))
-    strongest_rms = max(left_rms, right_rms)
-    if strongest_rms < 80.0:
-        return sample_rate, frame_count, samples, [0]
-    if min(left_rms, right_rms) < 80.0:
-        channel = 0 if left_rms > right_rms else 1
-        return sample_rate, frame_count, samples, [channel]
-
-    correlation_denominator = float(np.sqrt(np.sum(left * left) * np.sum(right * right)))
-    correlation = (
-        float(np.sum(left * right) / correlation_denominator)
-        if correlation_denominator > 0
-        else 1.0
-    )
-    level_delta = abs(left_rms - right_rms) / strongest_rms
-    difference_rms = float(np.sqrt(np.mean((left - right) ** 2))) / strongest_rms
-
-    # Avoid doubling work for ordinary dual-mono/stereo mixes. Independently
-    # decode channels when their content or voice balance is meaningfully different.
-    distinct_channels = correlation < 0.985 or level_delta > 0.18 or difference_rms > 0.16
-    return sample_rate, frame_count, samples, [0, 1] if distinct_channels else [0]
-
-
-def _transcribe_channel(
+def _transcribe_audio(
     model: Any,
     audio: Any,
     language: str | None,
     on_progress: Callable[[float], None] | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
+    last_progress_at = 0.0
     segments, info = model.transcribe(
         audio,
+        # Keep the quality-oriented decoder settings. Lower beams/VAD can be
+        # faster, but may miss short turns or quiet speech.
         beam_size=5,
         language=language,
+        condition_on_previous_text=True,
+        vad_filter=False,
     )
     results: list[dict[str, Any]] = []
     for segment in segments:
@@ -425,12 +370,21 @@ def _transcribe_channel(
                 duration = float(getattr(info, "duration", 0.0) or 0.0)
             except (TypeError, ValueError):
                 duration = 0.0
-            if duration > 0:
+            now = time.monotonic()
+            if duration > 0 and now - last_progress_at >= 0.15:
                 on_progress(min(float(segment.end) / duration, 0.99))
+                last_progress_at = now
     return results, getattr(info, "language", None)
 
 
-def _align_channel_segments(
+def _cpu_thread_budget() -> int:
+    """Scale CTranslate2 CPU inference to physical cores without using every logical thread."""
+    logical_cores = os.cpu_count() or 8
+    estimated_physical_cores = max(1, logical_cores // 2)
+    return max(4, min(8, estimated_physical_cores))
+
+
+def _align_segments(
     whisperx: Any,
     align_model: Any,
     align_metadata: dict[str, Any],
@@ -440,86 +394,26 @@ def _align_channel_segments(
 ) -> list[dict[str, Any]]:
     if not segments:
         return segments
-    align_input = [
-        {"start": float(segment["start"]), "end": float(segment["end"]), "text": str(segment["text"])}
-        for segment in segments
-    ]
     aligned = whisperx.align(
-        align_input,
+        [{"start": float(item["start"]), "end": float(item["end"]), "text": str(item["text"])} for item in segments],
         align_model,
         align_metadata,
         audio,
         device,
         return_char_alignments=False,
-    )
-    aligned_segments = aligned.get("segments", [])
-    if len(aligned_segments) != len(segments):
+    ).get("segments", [])
+    if len(aligned) != len(segments):
         raise RuntimeError("WhisperX trả về số segment sau alignment không khớp transcript.")
-
     output: list[dict[str, Any]] = []
-    for original, aligned_segment in zip(segments, aligned_segments):
+    for original, aligned_segment in zip(segments, aligned):
         result = dict(original)
         words = aligned_segment.get("words") or []
-        word_starts = [float(word["start"]) for word in words if word.get("start") is not None]
-        word_ends = [float(word["end"]) for word in words if word.get("end") is not None]
-        if word_starts and word_ends:
-            start = min(word_starts)
-            end = max(word_ends)
-            if 0 <= start < end:
-                result["start"] = start
-                result["end"] = end
+        starts = [float(word["start"]) for word in words if word.get("start") is not None]
+        ends = [float(word["end"]) for word in words if word.get("end") is not None]
+        if starts and ends and 0 <= min(starts) < max(ends):
+            result["start"], result["end"] = min(starts), max(ends)
         output.append(result)
     return output
-
-
-def _normalized_segment_text(value: str) -> str:
-    normalized = unicodedata.normalize("NFKC", value).casefold()
-    return "".join(character for character in normalized if character.isalnum())
-
-
-def _same_channel_segment(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    left_text = _normalized_segment_text(str(left["text"]))
-    right_text = _normalized_segment_text(str(right["text"]))
-    if not left_text or not right_text:
-        return False
-    similarity = SequenceMatcher(None, left_text, right_text, autojunk=False).ratio()
-    if similarity < 0.94:
-        return False
-
-    overlap = max(0.0, min(float(left["end"]), float(right["end"])) - max(float(left["start"]), float(right["start"])))
-    shorter_duration = max(0.1, min(
-        float(left["end"]) - float(left["start"]),
-        float(right["end"]) - float(right["start"]),
-    ))
-    return overlap / shorter_duration >= 0.55 or (
-        abs(float(left["start"]) - float(right["start"])) <= 0.35
-        and abs(float(left["end"]) - float(right["end"])) <= 1.0
-    )
-
-
-def _merge_channel_segments(channel_results: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    candidates = sorted(
-        (segment for results in channel_results for segment in results),
-        key=lambda segment: (float(segment["start"]), float(segment["end"])),
-    )
-    merged: list[dict[str, Any]] = []
-    for candidate in candidates:
-        duplicate_index: int | None = None
-        for index in range(len(merged) - 1, -1, -1):
-            previous = merged[index]
-            if float(previous["start"]) < float(candidate["start"]) - 30.0:
-                break
-            if _same_channel_segment(previous, candidate):
-                duplicate_index = index
-                break
-        if duplicate_index is None:
-            merged.append(candidate)
-        elif float(candidate["_confidence"]) > float(merged[duplicate_index]["_confidence"]):
-            merged[duplicate_index] = candidate
-
-    for segment in merged:
-        segment.pop("_confidence", None)
-    return sorted(merged, key=lambda segment: (float(segment["start"]), float(segment["end"])))
 
 
 def transcribe(request: dict[str, Any], emit: Emitter) -> None:
@@ -555,7 +449,7 @@ def transcribe(request: dict[str, Any], emit: Emitter) -> None:
     try:
         from faster_whisper import WhisperModel
     except ImportError as error:
-        raise RuntimeError("AI Worker không có thành phần faster-whisper cần thiết. Hãy sửa chữa hoặc cài lại ứng dụng.") from error
+        raise RuntimeError("Bộ nhận dạng lời thoại chưa sẵn sàng. Hãy cập nhật hoặc cài lại JC AI.") from error
 
     model_dir = _model_directory(cache_dir, model_name)
     if not _model_is_complete(model_dir):
@@ -564,54 +458,33 @@ def transcribe(request: dict[str, Any], emit: Emitter) -> None:
     LOGGER.info("Loading model %s on %s", model_name, device)
     try:
         compute_type = "default" if device == "auto" else "int8" if device == "cpu" else "float16"
+        cpu_threads = _cpu_thread_budget() if device in {"cpu", "auto"} else 4
         # Load only from the validated local directory. Passing the model name
         # here would allow faster-whisper to contact Hugging Face on every run.
-        model = WhisperModel(str(model_dir), device=device, compute_type=compute_type, local_files_only=True)
+        model = WhisperModel(
+            str(model_dir),
+            device=device,
+            compute_type=compute_type,
+            cpu_threads=cpu_threads,
+            local_files_only=True,
+        )
+        LOGGER.info("Speech Recognition compute type %s, CPU thread budget %s", compute_type, cpu_threads)
     except Exception as error:
         if device == "cuda":
             raise RuntimeError(f"CUDA model initialization failed. Select CPU or Auto in Speech Recognition settings. {error}") from error
         raise
 
-    sample_rate, frame_count, samples, channel_indices = _audio_channel_plan(audio_path)
-    if sample_rate <= 0:
-        raise RuntimeError("Audio WAV có sample rate không hợp lệ.")
-    duration = frame_count / sample_rate
-    channel_results: list[list[dict[str, Any]]] = []
-    detected_languages: list[str | None] = []
-    channel_total = len(channel_indices)
-    stereo_separated = samples is not None and channel_total > 1
-    for channel_position, channel_index in enumerate(channel_indices):
-        if samples is None:
-            audio_input: Any = str(audio_path)
-        else:
-            audio_input = samples[:, channel_index].astype("float32") / 32768.0
+    progress(emit, "recognizing", "Đang nhận dạng lời thoại…", 0.0)
 
-        channel_name = ("trái" if channel_index == 0 else "phải") if stereo_separated else None
-        message = (
-            f"Đang nhận dạng riêng kênh {channel_name} ({channel_position + 1}/{channel_total}) để giữ lời thoại chồng lấn…"
-            if stereo_separated
-            else "Đang nhận dạng lời thoại…"
-        )
-        progress(emit, "recognizing", message, channel_position / channel_total)
+    def report_progress(fraction: float) -> None:
+        progress(emit, "recognizing", "Đang nhận dạng lời thoại…", min(fraction, 0.99))
 
-        def report_channel_progress(fraction: float) -> None:
-            overall = (channel_position + fraction) / channel_total
-            progress(emit, "recognizing", message, min(overall, 0.99))
-
-        results, detected_language = _transcribe_channel(
-            model,
-            audio_input,
-            language,
-            on_progress=report_channel_progress,
-        )
-        channel_results.append(results)
-        detected_languages.append(detected_language)
-        del audio_input
-
-    results = _merge_channel_segments(channel_results) if channel_total > 1 else channel_results[0]
-    language_counts = [len(segments) for segments in channel_results]
-    language_index = max(range(channel_total), key=lambda index: language_counts[index])
-    detected_language = detected_languages[language_index]
+    results, detected_language = _transcribe_audio(
+        model,
+        str(audio_path),
+        language,
+        on_progress=report_progress,
+    )
 
     if engine == "whisperX":
         if detected_language and detected_language != language:
@@ -619,19 +492,19 @@ def transcribe(request: dict[str, Any], emit: Emitter) -> None:
                 f"Ngôn ngữ được nhận diện là {detected_language}, khác ngôn ngữ aligner đã cài ({language}). "
                 "Hãy chọn đúng ngôn ngữ nguồn trong Settings hoặc chuyển về faster-whisper."
             )
-        progress(emit, "aligning", f"WhisperX đang căn chỉnh timestamp từng segment ({language})…", 0.0)
+        progress(emit, "aligning", f"WhisperX đang căn chỉnh timestamp transcript ({language})…", 0.0)
         try:
             import gc
             import nltk
             import torch
             import whisperx
         except ImportError as error:
-            raise RuntimeError("WhisperX/ PyTorch chưa được cài trong Python Worker. Hãy cài runtime WhisperX trong Settings hướng dẫn.") from error
+            raise RuntimeError("WhisperX chưa sẵn sàng. Mở Cài đặt → Nhận dạng lời thoại và cài WhisperX.") from error
 
         nltk.data.path.insert(0, str(whisperx_cache_dir / "nltk_data"))
         if device == "cuda":
             if not torch.cuda.is_available():
-                raise RuntimeError("PyTorch không thấy CUDA dù faster-whisper có CUDA. Chọn CPU hoặc cài PyTorch phù hợp trong môi trường GPU.")
+                raise RuntimeError("WhisperX chưa dùng được tăng tốc NVIDIA. Chọn CPU hoặc cài bản NVIDIA trong Cài đặt.")
             align_device = "cuda"
         elif device == "auto":
             align_device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -650,25 +523,14 @@ def transcribe(request: dict[str, Any], emit: Emitter) -> None:
             model_dir=str(_alignment_language_directory(whisperx_cache_dir, language)),
             model_cache_only=True,
         )
-        if samples is None:
-            alignment_audio: Any = whisperx.load_audio(str(audio_path))
-            for index, channel_segments in enumerate(channel_results):
-                progress(emit, "aligning", "WhisperX đang căn chỉnh timestamp transcript…", index / channel_total)
-                channel_results[index] = _align_channel_segments(
-                    whisperx, align_model, align_metadata, channel_segments, alignment_audio, align_device
-                )
-        else:
-            for index, channel_index in enumerate(channel_indices):
-                progress(emit, "aligning", f"WhisperX đang căn chỉnh kênh {index + 1}/{channel_total}…", index / channel_total)
-                alignment_audio = samples[:, channel_index].astype("float32") / 32768.0
-                channel_results[index] = _align_channel_segments(
-                    whisperx, align_model, align_metadata, channel_results[index], alignment_audio, align_device
-                )
+        alignment_audio: Any = whisperx.load_audio(str(audio_path))
+        results = _align_segments(
+            whisperx, align_model, align_metadata, results, alignment_audio, align_device
+        )
         del align_model
         gc.collect()
         if align_device == "cuda":
             torch.cuda.empty_cache()
-        results = _merge_channel_segments(channel_results) if channel_total > 1 else channel_results[0]
 
     if not results:
         raise RuntimeError("Speech recognition returned no transcript segments")

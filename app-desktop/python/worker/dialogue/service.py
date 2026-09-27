@@ -23,7 +23,7 @@ def inspect_runtime() -> dict[str, object]:
 
 def separate_dialogue(request: dict[str, object], emit: Emitter) -> None:
     if not inspect_runtime()["runtimeInstalled"]:
-        raise RuntimeError("Thiếu runtime BandIt/PyTorch. Trong development, chạy scripts/setup-dialogue-dev.ps1.")
+        raise RuntimeError("Bộ xử lý tách thoại chưa được cài. Mở Cài đặt → Nhận dạng lời thoại và cài BandIt.")
 
     import numpy as np
     import soundfile as sf

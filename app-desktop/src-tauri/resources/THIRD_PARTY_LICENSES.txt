@@ -1,4 +1,4 @@
-AI VIDEO LOCALIZATION - THIRD-PARTY COMPONENT NOTICES
+JC AI - THIRD-PARTY COMPONENT NOTICES
 ====================================================
 
 FFmpeg
@@ -27,6 +27,18 @@ the worker's `_internal/*.dist-info` directories where available. Review
 `ai-worker/THIRD_PARTY_NOTICES.txt` and the exact bundled inventory before
 redistribution. The worker includes the TikTok downloader runtime (Playwright,
 yt-dlp, and curl-cffi) as well as speech recognition and TTS dependencies.
+
+Optional AI installer
+---------------------
+The Windows release bundles uv 0.11.12 to install optional Python packages
+only after the user confirms in Settings. uv is distributed under MIT or
+Apache-2.0 terms. Source and license texts are available at:
+
+  https://github.com/astral-sh/uv
+
+Optional package versions and sources are listed in
+`optional-runtime/source/requirements-optional-*.in`. These packages are
+downloaded separately and retain their respective upstream licenses.
 
 Application dependencies
 ------------------------

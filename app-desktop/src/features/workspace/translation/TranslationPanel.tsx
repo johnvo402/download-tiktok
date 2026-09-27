@@ -26,6 +26,32 @@ type TranscriptGenerationOptions = AppSettings['asr'] & {
   ocrRegion: { x: number; y: number; width: number; height: number } | null;
 };
 
+const TRANSLATION_LANGUAGES = [
+  { code: 'auto', label: 'Tự nhận diện' },
+  { code: 'ar', label: 'العربية' },
+  { code: 'de', label: 'Deutsch' },
+  { code: 'en', label: 'English' },
+  { code: 'es', label: 'Español' },
+  { code: 'fa', label: 'فارسی' },
+  { code: 'fr', label: 'Français' },
+  { code: 'hi', label: 'हिन्दी' },
+  { code: 'id', label: 'Bahasa Indonesia' },
+  { code: 'it', label: 'Italiano' },
+  { code: 'ja', label: '日本語' },
+  { code: 'ko', label: '한국어' },
+  { code: 'ms', label: 'Bahasa Melayu' },
+  { code: 'nl', label: 'Nederlands' },
+  { code: 'pl', label: 'Polski' },
+  { code: 'pt', label: 'Português' },
+  { code: 'ru', label: 'Русский' },
+  { code: 'th', label: 'ไทย' },
+  { code: 'tr', label: 'Türkçe' },
+  { code: 'uk', label: 'Українська' },
+  { code: 'vi', label: 'Tiếng Việt' },
+  { code: 'zh', label: '中文' },
+];
+const TARGET_TRANSLATION_LANGUAGES = TRANSLATION_LANGUAGES.filter((language) => language.code !== 'auto');
+
 function formatDuration(seconds?: number | null) {
   if (!seconds || !Number.isFinite(seconds)) return '—';
   const total = Math.floor(seconds);
@@ -66,7 +92,7 @@ export default function TranslationPanel() {
   const [asrProgress, setAsrProgress] = createSignal<number>();
   const [showAsrConfirm, setShowAsrConfirm] = createSignal(false);
   const [showExtractConfirm, setShowExtractConfirm] = createSignal(false);
-  const [asrOptions, setAsrOptions] = createSignal<TranscriptGenerationOptions>({ engine: 'fasterWhisper', model: 'small', device: 'auto', language: 'auto', ocrModel: 'tiny', ocrDevice: 'auto', mode: 'speechRecognition', ocrFps: 2, ocrRegion: null });
+  const [asrOptions, setAsrOptions] = createSignal<TranscriptGenerationOptions>({ engine: 'fasterWhisper', model: 'small', device: 'cpu', language: 'auto', ocrModel: 'tiny', ocrDevice: 'cpu', mode: 'speechRecognition', ocrFps: 2, ocrRegion: null });
   const [dirty, setDirty] = createSignal(projectSaveState() !== 'saved');
   const [saveState, setSaveState] = createSignal<SaveState>(projectSaveState());
   const [saveError, setSaveError] = createSignal('');
@@ -732,7 +758,7 @@ export default function TranslationPanel() {
           return;
         }
         if (!environment.ocrInstalled || !environment.runtimeInstalled) {
-          setNotice({ kind: 'error', message: 'Runtime RapidOCR chưa sẵn sàng. Mở Cài đặt ứng dụng → Speech Recognition để cấu hình OCR.' });
+          setNotice({ kind: 'error', message: 'Bộ đọc chữ chưa sẵn sàng. Mở Cài đặt ứng dụng → Nhận dạng lời thoại để cài.' });
           return;
         }
         if (!environment.modelCached) {
@@ -740,7 +766,7 @@ export default function TranslationPanel() {
           return;
         }
         if (options.ocrDevice === 'cuda' && !environment.cudaAvailable) {
-          setNotice({ kind: 'error', message: 'CUDA OCR chưa khả dụng trong worker hiện tại. Chọn Auto hoặc CPU, hoặc cài worker có ONNX Runtime GPU tương thích.' });
+          setNotice({ kind: 'error', message: 'Tăng tốc NVIDIA chưa sẵn sàng. Chọn CUDA trong Cài đặt → Nhận dạng lời thoại để cài, hoặc dùng CPU.' });
           return;
         }
         setShowAsrConfirm(true);
@@ -761,7 +787,7 @@ export default function TranslationPanel() {
         return;
       }
       if (options.engine === 'whisperX' && !environment.whisperXInstalled) {
-        setNotice({ kind: 'error', message: 'WhisperX chưa có trong Python Worker. Cài runtime WhisperX rồi bấm Kiểm tra lại trong Cài đặt → Speech Recognition.' });
+        setNotice({ kind: 'error', message: 'WhisperX chưa được cài. Mở Cài đặt → Nhận dạng lời thoại, cài WhisperX rồi bấm Kiểm tra lại.' });
         return;
       }
       if (options.engine === 'whisperX' && !environment.alignmentModelCached) {
@@ -769,7 +795,7 @@ export default function TranslationPanel() {
         return;
       }
       if (options.device === 'cuda' && !environment.cudaAvailable) {
-        setNotice({ kind: 'error', message: 'CUDA chưa khả dụng. Chọn Auto hoặc CPU trong Cài đặt → Speech Recognition.' });
+        setNotice({ kind: 'error', message: 'CUDA chưa sẵn sàng. Chọn CUDA trong Cài đặt → Nhận dạng lời thoại để cài, hoặc dùng CPU.' });
         return;
       }
       setAsrEnvironment(environment);
@@ -841,9 +867,15 @@ export default function TranslationPanel() {
         <div class="transcript-panel-content" role="tabpanel">
           <div class="transcript-toolbar">
             <div class="language-control-group">
-              <input class="transcript-track-select language-select" aria-label="Ngôn ngữ nguồn" title="Mã ngôn ngữ nguồn, ví dụ auto hoặc en" value={sourceLanguage()} disabled={translationRunning()} onInput={(event) => setSourceLanguage(event.currentTarget.value)} />
+              <select class="transcript-track-select language-select" aria-label="Ngôn ngữ nguồn" title="Chọn ngôn ngữ nguồn" value={sourceLanguage()} disabled={translationRunning()} onChange={(event) => setSourceLanguage(event.currentTarget.value)}>
+                <Show when={!TRANSLATION_LANGUAGES.some((language) => language.code === sourceLanguage())}><option value={sourceLanguage()}>{sourceLanguage()}</option></Show>
+                <For each={TRANSLATION_LANGUAGES}>{(language) => <option value={language.code}>{language.label}</option>}</For>
+              </select>
               <span class="language-arrow">→</span>
-              <input class="transcript-track-select language-select" aria-label="Ngôn ngữ đích" title="Mã ngôn ngữ đích, ví dụ vi hoặc fr" value={targetLanguage()} disabled={translationRunning()} onInput={(event) => setTargetLanguage(event.currentTarget.value)} />
+              <select class="transcript-track-select language-select" aria-label="Ngôn ngữ đích" title="Chọn ngôn ngữ đích" value={targetLanguage()} disabled={translationRunning()} onChange={(event) => setTargetLanguage(event.currentTarget.value)}>
+                <Show when={!TARGET_TRANSLATION_LANGUAGES.some((language) => language.code === targetLanguage())}><option value={targetLanguage()}>{targetLanguage()}</option></Show>
+                <For each={TARGET_TRANSLATION_LANGUAGES}>{(language) => <option value={language.code}>{language.label}</option>}</For>
+              </select>
               <button class="mini-tool-button" type="button" disabled={savingLanguages() || translationRunning()} onClick={() => void saveLanguages()}>{savingLanguages() ? 'Đang lưu…' : 'Lưu ngôn ngữ'}</button>
             </div>
             <div class="transcript-actions">
@@ -1100,7 +1132,7 @@ export default function TranslationPanel() {
             <label class="property-control-row"><span>Tắt âm thanh gốc</span><input type="checkbox" checked={currentProject()?.dubbing.muteOriginal ?? false} onChange={(event) => updateDubbingSettings({ muteOriginal: event.currentTarget.checked })} /></label>
             <label class="property-control-row"><span>Giảm âm thanh gốc khi có lời đọc</span><input type="checkbox" checked={currentProject()?.dubbing.duckingEnabled ?? false} onChange={(event) => updateDubbingSettings({ duckingEnabled: event.currentTarget.checked })} /></label>
             <Show when={currentProject()?.dubbing.duckingEnabled}><label class="property-control-row"><span>Mức giảm gốc <small>{Math.round((currentProject()?.dubbing.duckingAmount ?? 0.75) * 100)}%</small></span><input type="range" min="0" max="1" step="0.01" value={currentProject()?.dubbing.duckingAmount ?? 0.75} onInput={(event) => updateDubbingSettings({ duckingAmount: Number(event.currentTarget.value) })} /></label></Show>
-            <label class="property-control-row" title={dialogueReductionReady() ? 'Giảm phần thoại trong âm thanh gốc bằng BandIt v2.' : 'Cài runtime tách thoại và model BandIt v2 trong Cài đặt → Speech Recognition.'} style={{ opacity: dialogueReductionReady() ? 1 : 0.48 }}><span>Giảm thoại gốc <small>{dialogueEnvironment()?.modelCached ? 'BandIt v2' : 'Chưa cài model'}</small></span><input type="checkbox" disabled={!dialogueReductionReady()} checked={dialogueReductionReady() && (currentProject()?.dubbing.dialogueReductionEnabled ?? false)} onChange={(event) => updateDubbingSettings({ dialogueReductionEnabled: event.currentTarget.checked })} /></label>
+            <label class="property-control-row" title={dialogueReductionReady() ? 'Giảm phần thoại trong âm thanh gốc bằng BandIt v2.' : 'Cài bộ xử lý và mô hình BandIt v2 trong Cài đặt → Nhận dạng lời thoại.'} style={{ opacity: dialogueReductionReady() ? 1 : 0.48 }}><span>Giảm thoại gốc <small>{dialogueEnvironment()?.modelCached ? 'BandIt v2' : 'Chưa cài mô hình'}</small></span><input type="checkbox" disabled={!dialogueReductionReady()} checked={dialogueReductionReady() && (currentProject()?.dubbing.dialogueReductionEnabled ?? false)} onChange={(event) => updateDubbingSettings({ dialogueReductionEnabled: event.currentTarget.checked })} /></label>
             <Show when={dialogueReductionReady() && currentProject()?.dubbing.dialogueReductionEnabled}><label class="property-control-row"><span>Mức giảm thoại <small>{Math.round((currentProject()?.dubbing.dialogueReductionAmount ?? 0.65) * 100)}%</small></span><input type="range" min="0" max="1" step="0.01" value={currentProject()?.dubbing.dialogueReductionAmount ?? 0.65} onInput={(event) => updateDubbingSettings({ dialogueReductionAmount: Number(event.currentTarget.value) })} /></label></Show>
             <button class="button button-quiet media-generate-button" type="button" disabled={ttsRunning() || !transcript()?.segments.some((segment) => segment.translated.trim())} onClick={() => void launchTts('missing')}><Volume2 size={14} /> {ttsRunning() ? 'Đang tạo audio…' : 'Tạo phần audio còn thiếu'}</button>
           </div>

@@ -94,7 +94,7 @@ def _resolved_device(device: str | None) -> tuple[str, bool]:
         raise ValueError("Thiết bị OCR phải là auto, cpu hoặc cuda.")
     available = _cuda_available()
     if selected == "cuda" and not available:
-        raise RuntimeError("CUDA OCR chưa khả dụng trong Python Worker. Cần ONNX Runtime GPU và driver CUDA tương thích, hoặc chọn Auto/CPU.")
+        raise RuntimeError("Tăng tốc NVIDIA chưa sẵn sàng cho đọc chữ. Chọn Tự động hoặc CPU, hoặc cài bản NVIDIA trong Cài đặt.")
     return ("cuda" if selected == "cuda" or (selected == "auto" and available) else "cpu", available)
 
 
@@ -127,10 +127,10 @@ def _create_engine(cache_dir: str, model: str = DEFAULT_MODEL, device: str = "au
     try:
         from rapidocr import ModelType, OCRVersion, RapidOCR
     except ImportError as error:
-        raise RuntimeError("Thiếu RapidOCR. Bản development cài bằng `pip install -e .[ocr]`; bản release cần worker được build kèm OCR.") from error
+        raise RuntimeError("Bộ đọc chữ chưa sẵn sàng. Hãy cập nhật hoặc cài lại JC AI.") from error
     selected_model, config = _profile(model)
     if not _runtime_installed():
-        raise RuntimeError("Thiếu ONNX Runtime. Cài OCR runtime trong Settings trước khi tạo transcript.")
+        raise RuntimeError("Bộ đọc chữ chưa đầy đủ. Hãy cập nhật hoặc cài lại JC AI.")
     active_device, _ = _resolved_device(device)
     root = _model_root(cache_dir, selected_model)
     root.mkdir(parents=True, exist_ok=True)

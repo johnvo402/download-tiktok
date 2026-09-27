@@ -1216,7 +1216,7 @@ fn run_generation(
                 {
                     if !status.success() && counts.completed + counts.failed < items.len() {
                         cleanup_staging(&items);
-                        emit(&app, job_id, project_id, if counts.completed > 0 { "partial" } else { "failed" }, "VieNeu-TTS worker đã dừng bất thường. Audio đã tạo thành công vẫn được giữ.", counts.completed as f64 / items.len() as f64, counts.completed, items.len(), None);
+                        emit(&app, job_id, project_id, if counts.completed > 0 { "partial" } else { "failed" }, "Tạo giọng đọc đã dừng bất thường. Âm thanh đã tạo vẫn được giữ.", counts.completed as f64 / items.len() as f64, counts.completed, items.len(), None);
                     } else {
                         cleanup_staging(&items);
                         let status = if counts.failed == 0 {
@@ -1261,13 +1261,13 @@ fn run_generation(
                     format!("Hoàn tất: {} thành công, {} lỗi.", counts.completed, counts.failed)
                 } else if exit_status.success() {
                     format!(
-                        "TTS worker đã kết thúc sớm: {}/{} segment có kết quả. Audio đã tạo được giữ lại.",
+                        "Tạo giọng đọc dừng sớm: {}/{} câu có kết quả. Âm thanh đã tạo được giữ lại.",
                         counts.completed + counts.failed,
                         items.len()
                     )
                 } else {
                     format!(
-                        "TTS worker dừng bất thường ({}): {}/{} audio đã tạo được giữ lại.",
+                        "Tạo giọng đọc dừng bất thường ({}): {}/{} tệp âm thanh đã tạo được giữ lại.",
                         exit_status,
                         counts.completed,
                         items.len()
@@ -1624,7 +1624,7 @@ fn project_store(app: &AppHandle) -> Result<ProjectStore, String> {
 }
 
 fn worker_root(_app: &AppHandle) -> Result<PathBuf, String> {
-    crate::runtime_paths::worker_dir()
+    crate::runtime_paths::ai_worker_dir()
 }
 
 fn launch_worker(worker: &Path) -> Result<Child, String> {
@@ -1635,7 +1635,7 @@ fn launch_worker(worker: &Path) -> Result<Child, String> {
         .spawn()
         .map_err(|error| {
             format!(
-                "Không thể khởi chạy Python worker. Hãy cài Python 3.10+ và dependencies: {error}"
+                "Không thể khởi chạy bộ xử lý âm thanh. Kiểm tra thành phần ứng dụng trong Cài đặt rồi thử lại: {error}"
             )
         })
 }
@@ -1683,14 +1683,14 @@ fn worker_request(
                     Err(error) => {
                         let _ = child.kill();
                         let _ = child.wait();
-                        return Err(format!("JSON từ TTS worker không hợp lệ: {error}"));
+                        return Err(format!("Không đọc được kết quả tạo giọng đọc: {error}"));
                     }
                 };
                 match value["type"].as_str().unwrap_or("") {
                     "failed" => {
                         let message = value["message"]
                             .as_str()
-                            .unwrap_or("VieNeu worker gặp lỗi.");
+                            .unwrap_or("Không thể tạo giọng đọc.");
                         let _ = child.kill();
                         let _ = child.wait();
                         return Err(message.to_string());
@@ -1707,16 +1707,16 @@ fn worker_request(
                 {
                     if status.success() {
                         return terminal
-                            .ok_or_else(|| "Python worker không trả dữ liệu.".to_string());
+                            .ok_or_else(|| "Không nhận được kết quả tạo giọng đọc.".to_string());
                     }
-                    return Err("Python worker đã kết thúc bất thường. Kiểm tra Python dependencies và log backend.".to_string());
+                    return Err("Tạo giọng đọc đã dừng bất thường. Mở Cài đặt → Giọng đọc để kiểm tra các thành phần đã cài.".to_string());
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
     let _ = child.wait();
-    terminal.ok_or_else(|| "Python worker đã đóng mà không trả kết quả.".to_string())
+    terminal.ok_or_else(|| "Không nhận được kết quả tạo giọng đọc.".to_string())
 }
 
 #[cfg(test)]

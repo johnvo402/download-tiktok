@@ -2,8 +2,25 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import traceback
+from pathlib import Path
+
+_gpu_dll_directory = None
+if os.environ.get("JC_AI_GPU_RUNTIME") == "1" and os.name == "nt":
+    # The optional NVIDIA packages share the CUDA libraries shipped with
+    # PyTorch. Make them visible before CTranslate2 and ONNX Runtime load.
+    try:
+        import torch
+
+        _gpu_dll_directory = os.add_dll_directory(str(Path(torch.__file__).parent / "lib"))
+        import onnxruntime
+
+        if hasattr(onnxruntime, "preload_dlls"):
+            onnxruntime.preload_dlls()
+    except Exception as error:
+        print(f"Optional NVIDIA runtime could not be preloaded: {error}", file=sys.stderr)
 
 for stream in (sys.stdin, sys.stdout, sys.stderr):
     try:

@@ -141,13 +141,13 @@ fn default_asr_model() -> String {
     "small".to_string()
 }
 fn default_asr_device() -> String {
-    "auto".to_string()
+    "cpu".to_string()
 }
 fn default_asr_language() -> String {
     "auto".to_string()
 }
 fn default_ocr_model() -> String { "tiny".to_string() }
-fn default_ocr_device() -> String { "auto".to_string() }
+fn default_ocr_device() -> String { "cpu".to_string() }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -183,7 +183,7 @@ fn default_tts_provider() -> String {
     "vieneu".to_string()
 }
 fn default_tts_device() -> String {
-    "auto".to_string()
+    "cpu".to_string()
 }
 fn default_tts_voice() -> String {
     DEFAULT_TTS_VOICE.to_string()
@@ -367,7 +367,7 @@ pub fn read_settings(path: &std::path::Path) -> Result<AppSettings, String> {
     match fs::read(path) {
         Ok(bytes) => match parse_settings(&bytes) {
             Ok(mut settings) => {
-                if migrate_legacy_tts_voice(&mut settings) {
+                if migrate_legacy_tts_voice(&mut settings) | migrate_automatic_devices(&mut settings) {
                     write_settings(path, &settings)?;
                 }
                 Ok(settings)
@@ -400,6 +400,17 @@ fn migrate_legacy_tts_voice(settings: &mut AppSettings) -> bool {
     } else {
         false
     }
+}
+
+fn migrate_automatic_devices(settings: &mut AppSettings) -> bool {
+    let mut changed = false;
+    for device in [&mut settings.asr.device, &mut settings.asr.ocr_device, &mut settings.tts.device] {
+        if device == "auto" {
+            *device = "cpu".to_string();
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn parse_settings(bytes: &[u8]) -> Result<AppSettings, String> {
