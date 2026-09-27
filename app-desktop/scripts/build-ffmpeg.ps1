@@ -1,4 +1,4 @@
-param([switch]$Force)
+param([switch]$Force, [switch]$DownloadOnly)
 $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $ReleaseTag = "autobuild-2026-09-22-13-18"
@@ -18,7 +18,7 @@ function Remove-WorkspacePath([string]$Path) {
     }
     if (Test-Path -LiteralPath $absolute) { Remove-Item -LiteralPath $absolute -Recurse -Force }
 }
-if ((Test-Path (Join-Path $Target "ffmpeg.exe")) -and (Test-Path (Join-Path $Target "ffprobe.exe")) -and -not $Force) {
+if ((Test-Path (Join-Path $Target "ffmpeg.exe")) -and (Test-Path (Join-Path $Target "ffprobe.exe")) -and -not $Force -and -not $DownloadOnly) {
     Write-Host "Using existing bundled FFmpeg binaries. Pass -Force to replace them."
     return
 }
@@ -31,6 +31,10 @@ if (-not $checksumLine) { throw "Pinned release checksum for $AssetName was not 
 $expectedHash = ($checksumLine -split '\s+')[0].Trim('*')
 $actualHash = (Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualHash -ne $expectedHash.ToLowerInvariant()) { throw "FFmpeg archive checksum mismatch. Expected $expectedHash, got $actualHash." }
+if ($DownloadOnly) {
+    Write-Host "Cached verified FFmpeg archive ($actualHash)."
+    return
+}
 Remove-WorkspacePath $Extract
 Expand-Archive -LiteralPath $Archive -DestinationPath $Extract -Force
 $ffmpeg = Get-ChildItem -LiteralPath $Extract -Filter ffmpeg.exe -Recurse | Select-Object -First 1
