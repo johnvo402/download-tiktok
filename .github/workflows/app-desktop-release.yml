@@ -72,6 +72,10 @@ jobs:
         working-directory: app-desktop
         run: npm test
 
+      - name: Prepare worker resource path for Rust tests
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path app-desktop/src-tauri/resources/ai-worker | Out-Null
+
       - name: Run Rust tests
         shell: pwsh
         run: cargo test --manifest-path app-desktop/src-tauri/Cargo.toml --lib
