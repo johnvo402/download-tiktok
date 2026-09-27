@@ -501,7 +501,7 @@ fn parse_rational(value: &str) -> Option<f64> {
 fn sha256_file(path: &Path) -> Result<String, String> {
     let mut file = File::open(path).map_err(|error| format!("Không thể đọc video: {error}"))?;
     let mut hash = Sha256::new();
-    let mut buffer = [0_u8; 1024 * 1024];
+    let mut buffer = vec![0_u8; 256 * 1024];
     loop {
         let count = file
             .read(&mut buffer)
@@ -523,7 +523,7 @@ fn copy_and_hash(source: &Path, destination: &Path) -> Result<String, String> {
         .open(destination)
         .map_err(|error| format!("Không thể tạo bản sao video: {error}"))?;
     let mut hash = Sha256::new();
-    let mut buffer = [0_u8; 1024 * 1024];
+    let mut buffer = vec![0_u8; 256 * 1024];
     loop {
         let count = input
             .read(&mut buffer)
