@@ -1058,28 +1058,43 @@ fn run_generation(
         }
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(line) => {
-                let event: Value = match serde_json::from_str(&line) {
+                let trimmed = line
+                    .trim()
+                    .trim_start_matches('\u{feff}')
+                    .trim();
+
+                if trimmed.is_empty() {
+                    continue;
+                }
+
+                let event: Value = match serde_json::from_str(trimmed) {
                     Ok(value) => value,
-                    Err(error) => {
+
+                    Err(error) if trimmed.starts_with('{') || trimmed.starts_with('[') => {
                         let _ = child.kill();
                         let _ = child.wait();
+
                         cleanup_staging(&items);
+
                         emit(
                             &app,
                             job_id,
                             project_id,
-                            if counts.completed > 0 {
-                                "partial"
-                            } else {
-                                "failed"
-                            },
-                            &format!("TTS worker trả dữ liệu JSON không hợp lệ: {error}"),
+                            if counts.completed > 0 { "partial" } else { "failed" },
+                            &format!("TTS worker trả JSON protocol bị lỗi: {error}"),
                             counts.completed as f64 / items.len() as f64,
                             counts.completed,
                             items.len(),
                             None,
                         );
+
                         return Ok(());
+                    }
+
+                    Err(_) => {
+                        // Đây chỉ là log/banner của thư viện native.
+                        log::warn!("Ignoring non-protocol TTS worker stdout: {}", trimmed);
+                        continue;
                     }
                 };
                 match event["type"].as_str().unwrap_or("") {
