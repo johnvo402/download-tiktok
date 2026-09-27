@@ -17,11 +17,15 @@ dependencies = [
 [project.optional-dependencies]
 # Install only when local VieNeu-TTS is needed: `pip install -e .[tts]`.
 # The SDK's default v3 Turbo CPU path is ONNX and does not require PyTorch.
-tts = ["vieneu>=3.8.1,<4"]
+tts = [
+    "vieneu==3.8.3",
+    "gradio==5.49.1",
+]
 # WhisperX adds PyTorch/TorchAudio/Transformers. Keep it opt-in so the default
 # worker/install stays small; the Settings page detects whether the runtime is present.
 whisperx = [
     "whisperx==3.8.6",
+    "gradio==5.49.1",
     "transformers==4.57.6",
     "huggingface-hub==0.36.2",
 ]
