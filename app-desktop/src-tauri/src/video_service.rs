@@ -90,6 +90,7 @@ pub fn import_video(
     if !["mp4", "mov", "mkv", "webm"].contains(&extension.as_str()) {
         return Err("Định dạng chưa được hỗ trợ. Hãy chọn MP4, MOV, MKV hoặc WEBM.".to_string());
     }
+    log::info!("Video import started; project={project_id}, extension={extension}, bytes={}", source_meta.len());
 
     let checksum = sha256_file(&source)?;
     if let (Some(existing_hash), Some(existing_relative)) = (
@@ -134,6 +135,7 @@ pub fn import_video(
     let staged_size = fs::metadata(&staging_path)
         .map_err(|error| format!("Không thể xác minh bản sao video: {error}"))?
         .len();
+    log::info!("Video copied to project staging; project={project_id}, bytes={staged_size}");
 
     let probe = match probe_video(&staging_path, staged_size) {
         Ok(probe) if probe.has_video => probe,
@@ -146,6 +148,11 @@ pub fn import_video(
             return Err(error);
         }
     };
+    log::info!("Video probe completed; project={project_id}, codec={}, profile={}, pixel_format={}, audio={}",
+        probe.video_codec.as_deref().unwrap_or("unknown"),
+        probe.video_profile.as_deref().unwrap_or("unknown"),
+        probe.video_pixel_format.as_deref().unwrap_or("unknown"),
+        probe.audio_codec.as_deref().unwrap_or("none"));
 
     let destination_name = format!("{}.{}", Uuid::new_v4(), extension);
     let relative_path = format!("media/source/{destination_name}");
@@ -168,6 +175,8 @@ pub fn import_video(
         height: probe.height,
         fps: probe.fps,
         video_codec: probe.video_codec,
+        video_profile: probe.video_profile,
+        video_pixel_format: probe.video_pixel_format,
         audio_codec: probe.audio_codec,
         file_size: Some(probe.file_size),
         checksum_sha256: Some(checksum),
@@ -183,6 +192,7 @@ pub fn import_video(
             return Err(error);
         }
     };
+    log::info!("Video import completed; project={project_id}");
 
     if had_video {
         if let Some(previous) = previous_relative {

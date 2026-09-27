@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -934,7 +934,6 @@ fn run_ffmpeg_merge(
         }
     });
 
-    let mut last_progress = 0.0_f64;
     let mut out_time_seconds = 0.0_f64;
     loop {
         if cancelled.load(Ordering::SeqCst) {
@@ -949,11 +948,11 @@ fn run_ffmpeg_merge(
                         "out_time_us" | "out_time_ms" => if let Ok(microseconds) = value.parse::<f64>() { out_time_seconds = microseconds / 1_000_000.0; },
                         "out_time" => if let Some(seconds) = parse_ffmpeg_timestamp(value) { out_time_seconds = seconds; },
                         "progress" => {
-                            if value == "end" { last_progress = 1.0; }
-                            else { last_progress = (out_time_seconds / total_duration).clamp(0.0, 0.99); }
+                            let progress = if value == "end" { 1.0 }
+                                else { (out_time_seconds / total_duration).clamp(0.0, 0.99) };
                             emit_video_tool_event(app, VideoToolEvent {
-                                project_id: project_id.into(), job_id: job_id.into(), status: "running".into(), progress: last_progress,
-                                message: format!("Đang ghép video · {}/{} · {:.0}%", format_time(out_time_seconds), format_time(total_duration), last_progress * 100.0),
+                                project_id: project_id.into(), job_id: job_id.into(), status: "running".into(), progress,
+                                message: format!("Đang ghép video · {}/{} · {:.0}%", format_time(out_time_seconds), format_time(total_duration), progress * 100.0),
                                 stage: Some("render".into()), details: None, output: None,
                             });
                         }

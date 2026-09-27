@@ -12,6 +12,8 @@ export interface Project {
     height?: number | null;
     fps?: number | null;
     videoCodec?: string | null;
+    videoProfile?: string | null;
+    videoPixelFormat?: string | null;
     audioCodec?: string | null;
     fileSize?: number | null;
     checksumSha256?: string | null;

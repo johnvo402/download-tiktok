@@ -726,6 +726,8 @@ mod tests {
                 height: Some(height),
                 fps: None,
                 video_codec: None,
+                video_profile: None,
+                video_pixel_format: None,
                 audio_codec: None,
                 file_size: None,
                 checksum_sha256: None,

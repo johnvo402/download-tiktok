@@ -565,44 +565,6 @@ pub fn cancel_translation(
     Ok(true)
 }
 
-pub fn cancel_project_jobs_and_wait(
-    jobs: &TranslationJobs,
-    project_id: &str,
-) -> Result<(), String> {
-    jobs.deleting
-        .lock()
-        .map_err(|_| "Không thể truy cập trạng thái project jobs.".to_string())?
-        .insert(project_id.to_string());
-    let entries = jobs
-        .inner
-        .lock()
-        .map_err(|_| "Không thể truy cập trạng thái translation jobs.".to_string())?;
-    for entry in entries
-        .values()
-        .filter(|entry| entry.project_id == project_id)
-    {
-        entry.canceled.store(true, Ordering::SeqCst);
-    }
-    drop(entries);
-    let deadline = Instant::now() + Duration::from_secs(8);
-    loop {
-        let active = jobs
-            .inner
-            .lock()
-            .map_err(|_| "Không thể truy cập trạng thái translation jobs.".to_string())?
-            .values()
-            .any(|entry| entry.project_id == project_id);
-        if !active {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            clear_project_deleting(jobs, project_id);
-            return Err("Đang hủy tác vụ dịch. Hãy thử xóa dự án lại sau giây lát.".to_string());
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-}
-
 pub fn set_project_deleting(jobs: &TranslationJobs, project_id: &str) -> Result<(), String> {
     jobs.deleting
         .lock()

@@ -98,6 +98,10 @@ pub struct ProjectSource {
     #[serde(default)]
     pub video_codec: Option<String>,
     #[serde(default)]
+    pub video_profile: Option<String>,
+    #[serde(default)]
+    pub video_pixel_format: Option<String>,
+    #[serde(default)]
     pub audio_codec: Option<String>,
     #[serde(default)]
     pub file_size: Option<u64>,
@@ -473,6 +477,8 @@ impl ProjectStore {
                 height: None,
                 fps: None,
                 video_codec: None,
+                video_profile: None,
+                video_pixel_format: None,
                 audio_codec: None,
                 file_size: None,
                 checksum_sha256: None,

@@ -67,6 +67,9 @@ export default function TranslationView() {
       project?.id ?? null,
       project?.source.videoPath ?? null,
       project?.source.videoCodec ?? null,
+      project?.source.videoProfile ?? null,
+      project?.source.videoPixelFormat ?? null,
+      project?.source.audioCodec ?? null,
       project?.source.duration ?? null,
     ]);
   });
@@ -195,7 +198,12 @@ export default function TranslationView() {
     let active = true;
     const isCurrent = () => active && currentProject()?.id === projectId && currentProject()?.source.videoPath === videoPath;
     setLoadingVideo(true);
-    if (needsCompatibilityPreview(project?.source.videoCodec)) {
+    if (needsCompatibilityPreview(
+      project?.source.videoCodec,
+      project?.source.videoProfile,
+      project?.source.videoPixelFormat,
+      project?.source.audioCodec,
+    )) {
       void createCompatibilityPreview(projectId, videoPath, isCurrent)
         .finally(() => active && setLoadingVideo(false));
     } else {
