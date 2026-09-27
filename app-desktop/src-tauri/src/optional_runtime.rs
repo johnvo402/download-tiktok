@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter};
 
 static INSTALL_LOCK: Mutex<()> = Mutex::new(());
 const FEATURES: [&str; 3] = ["whisperx", "bandit", "acceleration"];
-const RUNTIME_VERSION: u32 = 3;
+const RUNTIME_VERSION: u32 = 4;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -226,7 +226,7 @@ fn verify(app: &AppHandle, python: &Path, source: &Path, features: &[String], pr
     if features.iter().any(|feature| feature == "whisperx") {
         script.push_str(
             "import faster_whisper, whisperx, transformers, huggingface_hub\n\
-            assert Version('4.57') <= Version(transformers.__version__) < Version('5')\n\
+            assert Version(transformers.__version__) == Version('4.57.6')\n\
             assert Version(huggingface_hub.__version__) == Version('0.36.2')\n",
         );
     }
@@ -235,7 +235,8 @@ fn verify(app: &AppHandle, python: &Path, source: &Path, features: &[String], pr
     }
     if features.iter().any(|feature| feature == "acceleration") {
         script.push_str(
-            "import faster_whisper, rapidocr, vieneu, onnxruntime, huggingface_hub\n\
+            "import faster_whisper, rapidocr, vieneu, onnxruntime, transformers, huggingface_hub\n\
+            assert Version(transformers.__version__) == Version('4.57.6')\n\
             assert Version(huggingface_hub.__version__) == Version('0.36.2')\n\
             assert 'CUDAExecutionProvider' in onnxruntime.get_available_providers()\n",
         );

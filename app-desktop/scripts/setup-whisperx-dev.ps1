@@ -15,4 +15,12 @@ Write-Host "Gói này khá lớn; trọng số aligner sẽ chỉ tải riêng s
 if ($LASTEXITCODE -ne 0) {
     throw "Không cài được WhisperX. Kiểm tra phiên bản Python và hướng dẫn cài PyTorch/TorchAudio của WhisperX."
 }
+& $PythonExe -m pip check
+if ($LASTEXITCODE -ne 0) {
+    throw "WhisperX development environment có dependency conflict."
+}
+& $PythonExe -c "import transformers, huggingface_hub; assert transformers.__version__ == '4.57.6'; assert huggingface_hub.__version__ == '0.36.2'"
+if ($LASTEXITCODE -ne 0) {
+    throw "WhisperX development environment không đúng phiên bản Transformers/Hugging Face Hub đã kiểm thử."
+}
 Write-Host "Đã cài runtime WhisperX. Mở Settings → Speech Recognition → Kiểm tra lại."

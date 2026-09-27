@@ -4,4 +4,5 @@ faster-whisper==1.2.1
 rapidocr==3.9.2
 vieneu==3.8.3
 
+transformers==4.57.6
 huggingface-hub==0.36.2
