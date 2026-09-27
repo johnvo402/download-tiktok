@@ -9,6 +9,19 @@ $PythonExe = Join-Path $Venv "Scripts\python.exe"
 $WorkerDist = Join-Path $Root "python\dist\ai-worker"
 $WorkerTarget = Join-Path $Root "src-tauri\resources\ai-worker"
 $BuildRoot = Join-Path $Root "python\build"
+$CacheScript = Join-Path $PSScriptRoot "worker-cache.py"
+
+if (-not $Clean) {
+    & $Python $CacheScript verify
+    if ($LASTEXITCODE -eq 0) {
+        & $Python $CacheScript smoke
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Reusing verified Python worker (source, dependencies and interpreter unchanged)."
+            return
+        }
+        Write-Warning "Cached worker failed its startup check; rebuilding it."
+    }
+}
 
 function Remove-WorkspacePath([string]$Path) {
     $absolute = [IO.Path]::GetFullPath($Path)
@@ -16,7 +29,7 @@ function Remove-WorkspacePath([string]$Path) {
     if (-not $absolute.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Refusing recursive removal outside the repository workspace: $absolute"
     }
-    $allowed = @($WorkerDist, $BuildRoot, $WorkerTarget) | ForEach-Object { [IO.Path]::GetFullPath($_) }
+    $allowed = @($WorkerDist, $BuildRoot, $WorkerTarget, $Venv) | ForEach-Object { [IO.Path]::GetFullPath($_) }
     if ($absolute -notin $allowed) { throw "Refusing recursive removal of an unexpected path: $absolute" }
     if (Test-Path -LiteralPath $absolute) { Remove-Item -LiteralPath $absolute -Recurse -Force }
 }
@@ -24,6 +37,15 @@ function Remove-WorkspacePath([string]$Path) {
 if ($Clean) {
     Remove-WorkspacePath $WorkerDist
     Remove-WorkspacePath $BuildRoot
+}
+if (Test-Path $PythonExe) {
+    $IdentityCode = 'import sys, platform; print(sys.version, sys.platform, platform.machine())'
+    $ExpectedInterpreter = & $Python -c $IdentityCode
+    if ($LASTEXITCODE -ne 0) { throw "Could not inspect the release Python interpreter." }
+    $ActualInterpreter = & $PythonExe -c $IdentityCode
+    if ($LASTEXITCODE -ne 0 -or $ActualInterpreter -ne $ExpectedInterpreter) {
+        Remove-WorkspacePath $Venv
+    }
 }
 if (-not (Test-Path $PythonExe)) {
     & $Python -m venv $Venv
@@ -33,9 +55,7 @@ $LockFile = Join-Path $Root "python\requirements-release.txt"
 if (Test-Path $LockFile) {
     & $PythonExe -m pip install -r $LockFile
 } else {
-    & $PythonExe -m pip install -r (Join-Path $Root "python\requirements-release.in")
-    if ($LASTEXITCODE -ne 0) { throw "Could not install pinned release worker dependencies." }
-    & $PythonExe -m pip freeze | Set-Content -LiteralPath $LockFile -Encoding ascii
+    throw "Missing python/requirements-release.txt. Release builds require a committed dependency lock."
 }
 if ($LASTEXITCODE -ne 0) { throw "Could not install pinned release worker dependencies." }
 
@@ -64,4 +84,8 @@ $PyProjectText = Get-Content (Join-Path $Root "python\pyproject.toml") -Raw
 $WorkerVersion = [regex]::Match($PyProjectText, '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
 if (-not $WorkerVersion) { throw "Could not read the AI worker version." }
 Set-Content -LiteralPath (Join-Path $WorkerTarget "worker-version.txt") -Value "ai-worker $WorkerVersion" -Encoding ascii
+& $Python $CacheScript smoke
+if ($LASTEXITCODE -ne 0) { throw "The packaged worker failed its JSONL capability checks." }
+& $Python $CacheScript seal
+if ($LASTEXITCODE -ne 0) { throw "Could not seal the worker cache manifest." }
 Write-Host "Packaged Python worker at $WorkerTarget"

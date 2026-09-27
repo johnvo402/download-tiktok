@@ -49,19 +49,8 @@ updateJson("package-lock.json", (document) => {
 });
 updateJson("src-tauri/tauri.conf.json", (document) => { document.version = version; });
 updateSectionVersion("src-tauri/Cargo.toml", "package");
-updateSectionVersion("python/pyproject.toml", "project");
-
-const workerVersionPath = "python/worker/_version.py";
-const workerVersionText = read(workerVersionPath);
-const workerVersionPattern = /^__version__\s*=\s*"[^"]+"/m;
-if (!workerVersionPattern.test(workerVersionText)) {
-  throw new Error(`${workerVersionPath} is missing __version__.`);
-}
-const updatedWorkerVersion = workerVersionText.replace(
-  workerVersionPattern,
-  `__version__ = "${version}"`,
-);
-write(workerVersionPath, updatedWorkerVersion);
+// The frozen worker has its own version and content fingerprint. App-only
+// releases must not invalidate an otherwise identical packaged worker.
 
 let cargoLock = read("src-tauri/Cargo.lock");
 const cargoPackagePattern = /(\[\[package\]\]\r?\nname\s*=\s*"ai-video-localization"\r?\nversion\s*=\s*)"[^"]+"/;
@@ -71,4 +60,4 @@ if (!cargoPackagePattern.test(cargoLock)) {
 cargoLock = cargoLock.replace(cargoPackagePattern, `$1"${version}"`);
 write("src-tauri/Cargo.lock", cargoLock);
 
-console.log(`Synchronized application and worker version to ${version}.`);
+console.log(`Synchronized application version to ${version}; worker version unchanged.`);

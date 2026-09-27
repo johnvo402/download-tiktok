@@ -9,9 +9,10 @@ when it is not already available.
 ## Build prerequisites
 
 - Windows 10/11 x64
-- Rust stable/MSVC toolchain and Windows SDK
+- Rust 1.98.1/MSVC (pinned in `rust-toolchain.toml`) and Windows SDK
 - Node.js 22.12+ and npm
-- Python 3.12 x64
+- Python 3.12 x64 (CI pins 3.12.10)
+- uv 0.11.12 (used to stage the optional runtime installer)
 - Network access to PyPI and GitHub release assets
 - At least 12 GB free disk space for Python build caches, FFmpeg archive, and
   installer output
@@ -21,18 +22,25 @@ demand from Settings and stored in the operating system app data directory.
 
 ## Build
 
-From PowerShell at the repository root:
+From PowerShell in `app-desktop/`:
 
 ```powershell
 ./scripts/build-release.ps1 -Python python
 ```
 
-The release script performs a clean `npm ci`, then checks that `package.json`, `tauri.conf.json`, `Cargo.toml`, and the
-Python worker use the same version, fetches a pinned FFmpeg release and verifies
-the publisher's SHA-256 checksum, builds the CPU-first one-folder Python worker,
-generates a license inventory from the worker that is actually bundled, runs
-frontend, Rust, and Python tests, then creates an NSIS installer. Artifacts,
-license notices, checksums, and a release manifest are written to `release/`.
+The release script checks that the app manifests have the same version and that
+the two worker version files agree with each other. Worker and app versions may
+differ. It verifies the pinned FFmpeg archive, builds or reuses a validated frozen
+worker, performs `npm ci` once, runs the tests, generates license notices, builds
+the application with `tauri build --no-bundle -- --locked`, and packages it with
+`tauri bundle`. Each stage has a separate log group and elapsed time.
+
+The default installer compression is `zlib`, favoring packaging speed. To compare
+with a smaller, slower-compressing installer, use `-Compression lzma`. Compression
+changes installer size only; it does not change the app, AI models or video output.
+The installer, notices, checksums, `release-manifest.json` (including installer
+bytes, compression, worker version/fingerprint), and `build-timings.json` are
+written to `release/`. Compare the same inputs when benchmarking compressors.
 
 For a public release, sign the setup executable with the organization's code
 signing certificate and require signing:
@@ -53,9 +61,11 @@ builds and publishes the Windows installer when a `vX.Y.Z` or
 `desktop-vX.Y.Z` tag is pushed. The tag is the release version source: CI sets
 `AI_VIDEO_LOCALIZATION_VERSION` and synchronizes it into `package.json`,
 `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`,
-`src-tauri/Cargo.lock`, `python/pyproject.toml`, and
-`python/worker/_version.py` in its temporary checkout before building. No
+`src-tauri/Cargo.lock` in its temporary checkout before building. No
 version-manifest commit is required for the release job.
+Worker version is independent: update both `python/pyproject.toml` and
+`python/worker/_version.py` when deliberately changing its version. Worker source
+changes invalidate the packaged-worker cache even without a version bump.
 For example:
 
 ```powershell
@@ -73,9 +83,16 @@ $env:AI_VIDEO_LOCALIZATION_VERSION = "0.2.0"
 
 Without that variable, local builds keep the versions checked into the source.
 
-The workflow runs the release script and its frontend, Rust, and Python tests,
-then attaches the installer, SHA-256 checksum, release manifest, and third-party
-notices to a GitHub Release. It uses GitHub's automatically provided
+On `dev` pushes and pull requests, CI runs frontend, Rust and Python tests plus
+the frontend production build. A tag checks the latest default-branch push run
+for **the exact tagged commit SHA**, including annotated tags. It reuses only the
+successful `Test Windows x64` job. Failed tests block release. Missing/cancelled
+tests, or tests still pending after a bounded wait, cause a fresh test job. An API
+error blocks the gate rather than treating unknown status as success. Packaging
+and publication require passing tests, either reused or run in this workflow.
+
+The workflow then attaches the installer, SHA-256 checksum, release manifest,
+timings and third-party notices to a GitHub Release. It uses the provided
 `GITHUB_TOKEN`; no secret is needed for an unsigned build. Code signing is not
 configured in CI, so the published installer is unsigned until a protected
 signing setup is added. The workflow file lives at the Git repository root,
@@ -85,6 +102,45 @@ To rebuild the pinned FFmpeg resources, use `./scripts/build-ffmpeg.ps1 -Force`.
 To rebuild the worker, use `./scripts/build-worker.ps1 -Clean`.
 Generated runtime binaries are intentionally ignored by Git. Do not commit an
 installer or model weights.
+
+## Cache behavior and release time
+
+- Test and release Rust dependencies have separate cache keys. The compiler is
+  pinned. Keep `RUST_TOOLCHAIN` in the workflow and `rust-toolchain.toml` aligned.
+- On `dev`, the preparation job first checks cache existence without downloading
+  large artifacts. It builds Rust release dependencies with the same Tauri flags
+  only on a cache miss. It no longer builds release code on every source change.
+  Swatinem's cache excludes workspace binaries and normalizes package versions;
+  each tag still compiles the current app, not an old cached executable.
+- The frozen-worker key includes Python implementation/version/architecture,
+  worker source/assets, packaging scripts, pinned requirements and build scripts.
+  App version and frontend changes do not invalidate it. Restored workers are
+  checked against a per-file SHA-256 inventory, then started for version and
+  JSONL ASR/TTS/OCR capability checks using an isolated empty model directory.
+  A missing/corrupt/incompatible cache is rebuilt. No model is downloaded by CI.
+- Default-branch caches are readable from tags; caches saved only under one tag
+  are not a reliable way to speed up another tag. Push `dev` and let preparation
+  finish before tagging for the best chance of a warm release. `workflow_dispatch`
+  on `dev` can also prepare caches, without publishing a release.
+  When branch and tag are pushed together, the gate also gives that branch's
+  cache preparation a bounded wait; a slow/failed cache job never bypasses tests.
+- FFmpeg's pinned archive is cached and its publisher checksum is checked before
+  use. Cache eviction never makes the release dependent on a previous build.
+- Test jobs do not enable pip caching: no pip install occurs there, so a cold
+  runner must not fail in a cache post-step because the pip directory is absent.
+
+The first build after a dependency/compiler change remains slower. Use the Actions
+summary and `build-timings.json` to distinguish worker build, Rust compilation and
+NSIS compression. There is no fixed promised release duration; download speed,
+runner load and cache eviction affect it. The installer stays self-contained;
+end users do not install Python/FFmpeg themselves.
+
+Release tooling checks can be run without a full installer build:
+
+```powershell
+npm run test:ci
+python -m unittest discover -s scripts/tests -p "test_*.py" -v
+```
 
 ## Installer behavior
 

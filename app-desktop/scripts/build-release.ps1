@@ -2,11 +2,32 @@ param(
     [string]$Python = "python",
     [switch]$SkipTests,
     [switch]$RequireSigning,
-    [string]$CertificateThumbprint
+    [string]$CertificateThumbprint,
+    [ValidateSet("zlib", "lzma", "bzip2", "none")]
+    [string]$Compression = "zlib"
 )
 $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Release = Join-Path $Root "release"
+$Timings = [System.Collections.Generic.List[object]]::new()
+function Invoke-ReleaseStage([string]$Name, [scriptblock]$Action) {
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    if ($env:GITHUB_ACTIONS -eq "true") { Write-Host "::group::$Name" } else { Write-Host "Starting: $Name" }
+    $status = "failed"
+    try {
+        & $Action
+        $status = "success"
+    } finally {
+        $timer.Stop()
+        $seconds = [Math]::Round($timer.Elapsed.TotalSeconds, 2)
+        $Timings.Add([ordered]@{ stage = $Name; seconds = $seconds; status = $status })
+        Write-Host "${Name}: $status in ${seconds}s"
+        if ($env:GITHUB_ACTIONS -eq "true") { Write-Host "::endgroup::" }
+        if ($env:GITHUB_STEP_SUMMARY) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- ${Name}: **$status**, ${seconds}s"
+        }
+    }
+}
 $ReleaseVersion = $env:AI_VIDEO_LOCALIZATION_VERSION
 if ($ReleaseVersion) {
     $VersionScript = Join-Path $PSScriptRoot "set-project-version.mjs"
@@ -37,13 +58,13 @@ $WorkerVersionText = Get-Content (Join-Path $Root "python\worker\_version.py") -
 $CargoVersion = [regex]::Match($CargoText, '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
 $WorkerVersion = [regex]::Match($PyProjectText, '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
 $WorkerCodeVersion = [regex]::Match($WorkerVersionText, '(?m)^__version__\s*=\s*"([^"]+)"').Groups[1].Value
-if ($Package.version -ne $Tauri.version -or $Package.version -ne $CargoVersion -or $Package.version -ne $WorkerVersion -or $Package.version -ne $WorkerCodeVersion) {
+if ($Package.version -ne $Tauri.version -or $Package.version -ne $CargoVersion -or -not $WorkerVersion -or $WorkerVersion -ne $WorkerCodeVersion) {
     throw "Release version mismatch: package.json=$($Package.version), tauri=$($Tauri.version), Cargo.toml=$CargoVersion, pyproject.toml=$WorkerVersion, worker/_version.py=$WorkerCodeVersion."
 }
 
-& (Join-Path $PSScriptRoot "build-ffmpeg.ps1") -Force
-& (Join-Path $PSScriptRoot "build-worker.ps1") -Python $Python -Clean
-& (Join-Path $PSScriptRoot "build-optional-runtime.ps1")
+Invoke-ReleaseStage "Verify and stage FFmpeg" { & (Join-Path $PSScriptRoot "build-ffmpeg.ps1") -Force }
+Invoke-ReleaseStage "Build or reuse Python worker" { & (Join-Path $PSScriptRoot "build-worker.ps1") -Python $Python }
+Invoke-ReleaseStage "Stage optional runtime installer" { & (Join-Path $PSScriptRoot "build-optional-runtime.ps1") }
 foreach ($path in @(
     (Join-Path $Root "src-tauri\resources\ffmpeg\ffmpeg.exe"),
     (Join-Path $Root "src-tauri\resources\ffmpeg\ffprobe.exe"),
@@ -58,13 +79,18 @@ foreach ($path in @(
 
 Push-Location $Root
 try {
-    npm ci
-    if ($LASTEXITCODE -ne 0) { throw "npm ci failed." }
+    Invoke-ReleaseStage "Install frontend dependencies" {
+        npm ci
+        if ($LASTEXITCODE -ne 0) { throw "npm ci failed." }
+    }
     if (-not $SkipTests) {
+      Invoke-ReleaseStage "Run automated tests" {
         npm test
         if ($LASTEXITCODE -ne 0) { throw "Frontend tests failed." }
+        npm run test:ci
+        if ($LASTEXITCODE -ne 0) { throw "Release tooling tests failed." }
         $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
-        cargo test --manifest-path src-tauri/Cargo.toml --lib
+        cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
         if ($LASTEXITCODE -ne 0) { throw "Rust tests failed." }
         $PreviousPythonPath = $env:PYTHONPATH
         $WorkerSourcePath = Join-Path $Root "python"
@@ -76,6 +102,8 @@ try {
         try {
             & $Python -m unittest discover -s python/tests -v
             if ($LASTEXITCODE -ne 0) { throw "Python worker tests failed." }
+            & $Python -m unittest discover -s scripts/tests -p "test_*.py" -v
+            if ($LASTEXITCODE -ne 0) { throw "Worker cache tests failed." }
         } finally {
             if ($null -eq $PreviousPythonPath) {
                 Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
@@ -83,17 +111,33 @@ try {
                 $env:PYTHONPATH = $PreviousPythonPath
             }
         }
+      }
     }
-    & $Python (Join-Path $Root "scripts\generate_dependency_notices.py") $Root
-    if ($LASTEXITCODE -ne 0) { throw "Could not generate Rust/npm third-party license notices." }
+    Invoke-ReleaseStage "Generate dependency notices" {
+        & $Python (Join-Path $Root "scripts\generate_dependency_notices.py") $Root
+        if ($LASTEXITCODE -ne 0) { throw "Could not generate Rust/npm third-party license notices." }
+    }
     # Invoke the local Tauri CLI directly. Recent npm versions parse unknown
     # flags after `npm run` as npm options even when separated by `--`.
-    & (Join-Path $Root "node_modules\.bin\tauri.cmd") build --bundles nsis
-    if ($LASTEXITCODE -ne 0) { throw "Tauri NSIS build failed." }
+    Invoke-ReleaseStage "Build frontend and Rust release" {
+        & (Join-Path $Root "node_modules\.bin\tauri.cmd") build --no-bundle -- --locked
+        if ($LASTEXITCODE -ne 0) { throw "Tauri application build failed." }
+    }
+    $BundleStarted = [DateTime]::UtcNow
+    Invoke-ReleaseStage "Package NSIS installer ($Compression)" {
+        # A file avoids PowerShell/native argument quoting differences for JSON.
+        $Config = Join-Path $Root ".release-cache\installer-config.json"
+        New-Item -ItemType Directory -Path (Split-Path $Config) -Force | Out-Null
+        @{ bundle = @{ windows = @{ nsis = @{ compression = $Compression } } } } |
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $Config -Encoding utf8
+        & (Join-Path $Root "node_modules\.bin\tauri.cmd") bundle --bundles nsis --config $Config
+        if ($LASTEXITCODE -ne 0) { throw "Tauri NSIS packaging failed." }
+    }
 } finally { Pop-Location }
 
-$Setup = Get-ChildItem (Join-Path $TargetRoot "release\bundle\nsis") -Filter "*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if (-not $Setup) { throw "Tauri did not produce an NSIS setup executable." }
+$SetupPath = Join-Path $TargetRoot "release\bundle\nsis\$($Tauri.productName)_$($Package.version)_x64-setup.exe"
+$Setup = Get-Item -LiteralPath $SetupPath -ErrorAction SilentlyContinue
+if (-not $Setup -or $Setup.LastWriteTimeUtc -lt $BundleStarted) { throw "Tauri did not produce a fresh installer for version $($Package.version)." }
 if ($CertificateThumbprint) {
     $signTool = Get-Command signtool.exe -ErrorAction SilentlyContinue
     if (-not $signTool) { throw "Windows SDK signtool.exe was not found." }
@@ -118,6 +162,10 @@ Set-Content -LiteralPath (Join-Path $Release "SHA256SUMS.txt") -Value "$Hash  $(
 $signature = Get-AuthenticodeSignature -LiteralPath $Artifact
 @{
     version = $Package.version
+    workerVersion = $WorkerVersion
+    workerFingerprint = (Get-Content (Join-Path $Root "src-tauri\resources\ai-worker\worker-build.json") -Raw | ConvertFrom-Json).fingerprint
+    installerCompression = $Compression
+    installerBytes = $Setup.Length
     target = "windows-x64"
     installer = (Split-Path $Artifact -Leaf)
     sha256 = $Hash
@@ -126,6 +174,10 @@ $signature = Get-AuthenticodeSignature -LiteralPath $Artifact
     ffmpeg = Get-Content (Join-Path $Root "src-tauri\resources\ffmpeg\ffmpeg-build.json") -Raw | ConvertFrom-Json
     pythonPackages = Get-Content (Join-Path $Root "src-tauri\resources\ai-worker\python-packages.json") -Raw | ConvertFrom-Json
 } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $Release "release-manifest.json") -Encoding utf8
+$Timings | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $Release "build-timings.json") -Encoding utf8
+if ($env:GITHUB_STEP_SUMMARY) {
+    Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- Installer: **$([Math]::Round($Setup.Length / 1MB, 1)) MiB**, compression: **$Compression**"
+}
 Write-Host "Release artifact: $Artifact"
 Write-Host "SHA-256: $Hash"
 Write-Host "Signature: $($signature.Status)"
