@@ -37,6 +37,12 @@ export interface TikTokDramaInfo {
   outputDirectory: string;
 }
 
+export interface TikTokCookieInfo {
+  fileName: string;
+  totalCookies: number;
+  tiktokCookies: number;
+}
+
 export interface VideoToolProgress {
   projectId: string;
   jobId: string;
@@ -58,6 +64,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 }
 
 export const videoToolsService = {
+  inspectTikTokCookies: (cookieFile: string) =>
+    call<TikTokCookieInfo>('inspect_tiktok_cookie_file', { cookieFile }),
   outputDirectory: (projectId: string, purpose: 'tiktok' | 'merge') =>
     call<string>('get_video_tool_output_directory', { projectId, purpose }),
   scanVideos: (sourceDirectory: string) => call<MergeScanResult>('scan_merge_videos', { sourceDirectory }),

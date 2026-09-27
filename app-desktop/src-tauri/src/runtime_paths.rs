@@ -16,6 +16,11 @@ pub fn app_data_dir() -> Option<&'static Path> {
 
 pub fn optional_worker_source() -> Option<PathBuf> {
     if cfg!(debug_assertions) {
+        // Use the live source tree in development so worker protocol and bug
+        // fixes are immediately shared with CPU and optional CUDA runtimes.
+        if let Some(source) = development_worker_dir() {
+            return Some(source);
+        }
         let staged = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("resources")
             .join("optional-runtime")

@@ -1278,15 +1278,40 @@ fn run_ocr_install_worker(
         bytes
     });
     let mut final_message = None;
-    for line in BufReader::new(stdout).lines() {
-        let line = line.map_err(|error| format!("Không thể đọc tiến trình tải model OCR: {error}"))?;
-        if line.trim().is_empty() { continue; }
-        let envelope: serde_json::Value = serde_json::from_str(&line)
-            .map_err(|error| format!("Python worker trả tiến trình OCR không hợp lệ: {error}"))?;
-        match envelope.get("type").and_then(|value| value.as_str()) {
-            Some("progress") => { let _ = app.emit("ocr-model-progress", &envelope); }
-            Some("completed") | Some("failed") => final_message = Some(envelope),
-            _ => {}
+    let mut non_protocol_output = Vec::new();
+    let mut reader = BufReader::new(stdout);
+    loop {
+        let mut bytes = Vec::new();
+        match reader.read_until(b'\n', &mut bytes) {
+            Ok(0) => break,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stderr_reader.join();
+                return Err(format!("Không thể đọc tiến trình tải model OCR: {error}"));
+            }
+            Ok(_) => {
+                // Ignore carriage-return progress output from third-party OCR/CUDA
+                // packages and parse only complete JSONL protocol messages.
+                for raw_line in bytes.split(|byte| *byte == b'\r') {
+                    let raw_line = raw_line.strip_suffix(b"\n").unwrap_or(raw_line);
+                    let line = String::from_utf8_lossy(raw_line);
+                    let line = line.trim().trim_start_matches('\u{feff}').trim();
+                    if line.is_empty() { continue; }
+                    let envelope: serde_json::Value = match serde_json::from_str(line) {
+                        Ok(value) => value,
+                        Err(_) => {
+                            remember_protocol_noise(&mut non_protocol_output, line);
+                            continue;
+                        }
+                    };
+                    match envelope.get("type").and_then(|value| value.as_str()) {
+                        Some("progress") => { let _ = app.emit("ocr-model-progress", &envelope); }
+                        Some("completed") | Some("failed") => final_message = Some(envelope),
+                        _ => remember_protocol_noise(&mut non_protocol_output, line),
+                    }
+                }
+            }
         }
     }
     let status = child.wait().map_err(|error| format!("Không thể chờ Python worker tải model OCR: {error}"))?;
@@ -1299,13 +1324,30 @@ fn run_ocr_install_worker(
         return Err(message.to_string());
     }
     let details = String::from_utf8_lossy(&stderr);
-    if details.trim().is_empty() {
-        Err("Python worker không hoàn tất tải model OCR.".into())
+    if details.trim().is_empty() && non_protocol_output.is_empty() {
+        Err("Python worker không hoàn tất tải model OCR. Hãy kiểm tra kết nối và thành phần OCR rồi thử lại.".into())
     } else {
-        let trimmed = details.trim();
-        let tail = trimmed.chars().rev().take(1800).collect::<String>().chars().rev().collect::<String>();
-        Err(format!("Python worker không hoàn tất tải model OCR: {tail}"))
+        let mut diagnostic = Vec::new();
+        if !details.trim().is_empty() {
+            let trimmed = details.trim();
+            diagnostic.push(trimmed.chars().rev().take(1800).collect::<String>().chars().rev().collect::<String>());
+        }
+        if !non_protocol_output.is_empty() {
+            diagnostic.push(format!("đầu ra không phải JSON: {}", non_protocol_output.join(" | ")));
+        }
+        Err(format!("Python worker không hoàn tất tải model OCR: {}", diagnostic.join("; ")))
     }
+}
+
+fn remember_protocol_noise(lines: &mut Vec<String>, value: &str) {
+    let concise: String = value
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(240)
+        .collect();
+    if concise.trim().is_empty() { return; }
+    if lines.len() == 6 { lines.remove(0); }
+    lines.push(concise);
 }
 
 fn python_command(worker: &Path) -> Command {

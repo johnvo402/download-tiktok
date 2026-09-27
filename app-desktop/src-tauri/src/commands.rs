@@ -413,6 +413,15 @@ pub fn get_export_directory(app: tauri::AppHandle, project_id: String) -> Result
 }
 
 #[tauri::command]
+pub async fn inspect_tiktok_cookie_file(
+    cookie_file: String,
+) -> Result<video_tools_service::TikTokCookieInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || video_tools_service::inspect_tiktok_cookie_file(&cookie_file))
+        .await
+        .map_err(|error| format!("Không thể kiểm tra file cookies TikTok: {error}"))?
+}
+
+#[tauri::command]
 pub fn get_video_tool_output_directory(
     app: tauri::AppHandle,
     project_id: String,

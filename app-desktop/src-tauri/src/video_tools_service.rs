@@ -63,6 +63,14 @@ pub struct MergeScanResult {
     pub skipped: Vec<SkippedMergeVideo>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TikTokCookieInfo {
+    pub file_name: String,
+    pub total_cookies: usize,
+    pub tiktok_cookies: usize,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 struct StreamSignature {
     codec_type: String,
@@ -185,6 +193,59 @@ pub fn default_drama_directory(store: &ProjectStore, project_id: &str) -> Result
         .map_err(|error| format!("Không thể tạo thư mục TikTok trong dự án: {error}"))?;
     ensure_child_directory(&project_root, &directory)
         .map(|path| path.to_string_lossy().into_owned())
+}
+
+pub fn inspect_tiktok_cookie_file(cookie_file: &str) -> Result<TikTokCookieInfo, String> {
+    const MAX_COOKIE_FILE_BYTES: u64 = 64 * 1024 * 1024;
+    let raw_path = PathBuf::from(cookie_file.trim());
+    if !raw_path.is_absolute() {
+        return Err("Hãy chọn file cookies bằng hộp thoại hệ thống.".into());
+    }
+    let metadata = fs::symlink_metadata(&raw_path)
+        .map_err(|error| format!("Không thể đọc file cookies: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("File cookies phải là file thường, không phải shortcut hoặc liên kết.".into());
+    }
+    if metadata.len() > MAX_COOKIE_FILE_BYTES {
+        return Err("File cookies quá lớn để kiểm tra (giới hạn 64 MB).".into());
+    }
+    let contents = fs::read_to_string(&raw_path)
+        .map_err(|error| format!("Không đọc được file cookies dạng UTF-8: {error}"))?;
+    let mut lines = contents.lines();
+    let header = lines
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or_default()
+        .trim()
+        .trim_start_matches('\u{feff}')
+        .trim();
+    if header != "# Netscape HTTP Cookie File" && header != "# HTTP Cookie File" {
+        return Err("File không đúng định dạng cookies Netscape/Mozilla. Hãy xuất lại file cookies.txt từ trình duyệt.".into());
+    }
+
+    let mut total_cookies = 0;
+    let mut tiktok_cookies = 0;
+    for raw_line in lines {
+        let mut line = raw_line.trim();
+        if line.is_empty() { continue; }
+        let http_only = line.starts_with("#HttpOnly_");
+        if http_only {
+            line = &line["#HttpOnly_".len()..];
+        } else if line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() != 7 || fields[5].is_empty() { continue; }
+        total_cookies += 1;
+        if fields[0].to_ascii_lowercase().contains("tiktok.com") {
+            tiktok_cookies += 1;
+        }
+    }
+
+    Ok(TikTokCookieInfo {
+        file_name: raw_path.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+        total_cookies,
+        tiktok_cookies,
+    })
 }
 
 pub fn default_merge_directory(store: &ProjectStore, project_id: &str) -> Result<String, String> {
@@ -360,10 +421,10 @@ pub fn start_tiktok_download(
     validate_tiktok_url(&url)?;
     let cookie_file = cookie_file.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
     if let Some(path) = cookie_file.as_deref() {
-        let raw = PathBuf::from(path);
-        if !raw.is_absolute() { return Err("File cookies phải được chọn bằng hộp thoại hệ thống.".into()); }
-        let metadata = fs::symlink_metadata(&raw).map_err(|error| format!("Không thể đọc file cookies: {error}"))?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() { return Err("File cookies phải là file thường.".into()); }
+        let cookie_info = inspect_tiktok_cookie_file(path)?;
+        if cookie_info.tiktok_cookies == 0 {
+            return Err("File cookies hợp lệ nhưng không có cookie thuộc tiktok.com. Hãy xuất file sau khi đăng nhập TikTok.".into());
+        }
     }
     let worker = crate::runtime_paths::worker_dir()?;
     let ffmpeg_path = crate::runtime_paths::resolve_ffmpeg()

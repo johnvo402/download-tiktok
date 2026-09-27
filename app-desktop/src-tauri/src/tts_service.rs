@@ -1631,7 +1631,7 @@ fn launch_worker(worker: &Path) -> Result<Child, String> {
     crate::runtime_paths::worker_command(worker)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| {
             format!(
@@ -1651,11 +1651,29 @@ fn worker_request(
         .stdout
         .take()
         .ok_or_else(|| "Không mở được đầu ra Python worker.".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Không mở được log Python worker.".to_string())?;
+    let stderr_reader = thread::spawn(move || read_worker_stderr_tail(stderr));
     let (tx, rx) = mpsc::channel::<String>();
     thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().flatten() {
-            if tx.send(line).is_err() {
-                break;
+        let mut reader = BufReader::new(stdout);
+        loop {
+            let mut bytes = Vec::new();
+            match reader.read_until(b'\n', &mut bytes) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    // Some download libraries draw progress with carriage returns
+                    // instead of newlines. Split those too, so they cannot be
+                    // concatenated with the worker's next JSON event.
+                    for line in bytes.split(|byte| *byte == b'\r') {
+                        let line = line.strip_suffix(b"\n").unwrap_or(line);
+                        if tx.send(String::from_utf8_lossy(line).into_owned()).is_err() {
+                            return;
+                        }
+                    }
+                }
             }
         }
     });
@@ -1667,6 +1685,7 @@ fn worker_request(
         .map_err(|error| format!("Không thể gửi yêu cầu cho Python worker: {error}"))?;
     drop(stdin);
     let mut terminal = None;
+    let mut non_protocol_output = Vec::new();
     loop {
         if canceled
             .as_ref()
@@ -1678,14 +1697,29 @@ fn worker_request(
         }
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(line) => {
-                let value: Value = match serde_json::from_str(&line) {
+                let trimmed = line.trim().trim_start_matches('\u{feff}').trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let value: Value = match serde_json::from_str(trimmed) {
                     Ok(value) => value,
-                    Err(error) => {
+                    Err(error) if trimmed.starts_with('{') || trimmed.starts_with('[') => {
                         let _ = child.kill();
                         let _ = child.wait();
                         return Err(format!("Không đọc được kết quả tạo giọng đọc: {error}"));
                     }
+                    // Some libraries used during model downloads write human-readable
+                    // progress to stdout. The worker protocol is JSONL, so ignore that
+                    // noise and keep waiting for its actual progress/completion events.
+                    Err(_) => {
+                        remember_worker_output(&mut non_protocol_output, trimmed);
+                        continue;
+                    }
                 };
+                if !value.is_object() || value.get("type").and_then(Value::as_str).is_none() {
+                    remember_worker_output(&mut non_protocol_output, trimmed);
+                    continue;
+                }
                 match value["type"].as_str().unwrap_or("") {
                     "failed" => {
                         let message = value["message"]
@@ -1705,18 +1739,72 @@ fn worker_request(
                     .try_wait()
                     .map_err(|error| format!("Không kiểm tra được Python worker: {error}"))?
                 {
+                    let stderr = stderr_reader.join().unwrap_or_default();
                     if status.success() {
                         return terminal
-                            .ok_or_else(|| "Không nhận được kết quả tạo giọng đọc.".to_string());
+                            .ok_or_else(|| worker_missing_result(&non_protocol_output, &stderr, status.code()));
                     }
-                    return Err("Tạo giọng đọc đã dừng bất thường. Mở Cài đặt → Giọng đọc để kiểm tra các thành phần đã cài.".to_string());
+                    return Err(worker_missing_result(&non_protocol_output, &stderr, status.code()));
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
-    let _ = child.wait();
-    terminal.ok_or_else(|| "Không nhận được kết quả tạo giọng đọc.".to_string())
+    let status = child.wait().ok();
+    let stderr = stderr_reader.join().unwrap_or_default();
+    terminal.ok_or_else(|| worker_missing_result(&non_protocol_output, &stderr, status.and_then(|s| s.code())))
+}
+
+fn remember_worker_output(lines: &mut Vec<String>, value: &str) {
+    let concise: String = value
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(240)
+        .collect();
+    if concise.trim().is_empty() {
+        return;
+    }
+    if lines.len() == 6 {
+        lines.remove(0);
+    }
+    lines.push(concise);
+}
+
+fn read_worker_stderr_tail(mut reader: impl Read) -> String {
+    const MAX_BYTES: usize = 4096;
+    let mut tail = Vec::new();
+    let mut buffer = [0_u8; 2048];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(count) => {
+                tail.extend_from_slice(&buffer[..count]);
+                if tail.len() > MAX_BYTES {
+                    let excess = tail.len() - MAX_BYTES;
+                    tail.drain(..excess);
+                }
+            }
+        }
+    }
+    String::from_utf8_lossy(&tail).trim().to_string()
+}
+
+fn worker_missing_result(stdout: &[String], stderr: &str, exit_code: Option<i32>) -> String {
+    let mut details = Vec::new();
+    if let Some(code) = exit_code {
+        details.push(format!("mã thoát {code}"));
+    }
+    if !stderr.trim().is_empty() {
+        details.push(format!("log: {}", stderr.trim()));
+    }
+    if !stdout.is_empty() {
+        details.push(format!("đầu ra: {}", stdout.join(" | ")));
+    }
+    if details.is_empty() {
+        "Python worker đã dừng mà không trả kết quả VieNeu-TTS. Hãy thử lại; nếu lỗi còn xảy ra, mở Cài đặt → Giọng đọc để kiểm tra thành phần đã cài.".to_string()
+    } else {
+        format!("Python worker không hoàn tất tác vụ VieNeu-TTS ({})", details.join("; "))
+    }
 }
 
 #[cfg(test)]
