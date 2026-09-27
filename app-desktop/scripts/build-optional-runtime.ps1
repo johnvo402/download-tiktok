@@ -17,26 +17,10 @@ Get-ChildItem -LiteralPath (Join-Path $Root "python") -Filter "requirements-opti
 foreach ($requirementsName in @("requirements-optional-whisperx.in", "requirements-optional-acceleration.in")) {
     $requirementsPath = Join-Path $Source $requirementsName
     $requirementsText = Get-Content -LiteralPath $requirementsPath -Raw
-    if ($requirementsText -notmatch '(?m)^transformers==4\.57\.6\s*
-Get-ChildItem -LiteralPath $WorkerRoot -Filter "*.py" -File -Recurse | ForEach-Object {
-    $relative = $_.FullName.Substring($WorkerRoot.Length + 1)
-    $destination = Join-Path (Join-Path $Source "worker") $relative
-    New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-    Copy-Item -LiteralPath $_.FullName -Destination $destination -Force
-}
-Write-Host "Optional AI installer and source staged for the release."
-) {
+    if ($requirementsText -notmatch '(?m)^transformers==4\.57\.6\s*$') {
         throw "$requirementsName must pin transformers==4.57.6."
     }
-    if ($requirementsText -notmatch '(?m)^huggingface-hub==0\.36\.2\s*
-Get-ChildItem -LiteralPath $WorkerRoot -Filter "*.py" -File -Recurse | ForEach-Object {
-    $relative = $_.FullName.Substring($WorkerRoot.Length + 1)
-    $destination = Join-Path (Join-Path $Source "worker") $relative
-    New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-    Copy-Item -LiteralPath $_.FullName -Destination $destination -Force
-}
-Write-Host "Optional AI installer and source staged for the release."
-) {
+    if ($requirementsText -notmatch '(?m)^huggingface-hub==0\.36\.2\s*$') {
         throw "$requirementsName must pin huggingface-hub==0.36.2."
     }
 }
