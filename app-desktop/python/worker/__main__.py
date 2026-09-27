@@ -44,12 +44,6 @@ for stream in (sys.stdin, _protocol_stdout, sys.stderr):
     except (AttributeError, OSError):
         pass
 
-# Reserve stdout for the JSONL protocol. Third-party libraries may print
-# download notices or progress there; send those diagnostics to stderr so a
-# human-readable line can never corrupt a Rust command's JSON response.
-_protocol_stdout = sys.stdout
-sys.stdout = sys.stderr
-
 from worker.asr.service import inspect_environment, install_model, install_whisperx_alignment, transcribe
 from worker.tts.service import inspect_tts, install_tts_model, synthesize
 

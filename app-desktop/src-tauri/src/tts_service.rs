@@ -1013,7 +1013,7 @@ fn run_generation(
     .take()
     .ok_or_else(|| "Không mở được log TTS worker.".to_string())?;
 
-    let stderr_reader = thread::spawn(move || read_worker_stderr_tail(stderr));
+    let mut stderr_reader = Some(thread::spawn(move || read_worker_stderr_tail(stderr)));
 
     let (tx, rx) = mpsc::channel::<String>();
     thread::spawn(move || {
@@ -1049,7 +1049,10 @@ fn run_generation(
         if canceled.load(Ordering::SeqCst) {
             let _ = child.kill();
             let _ = child.wait();
-            let stderr = stderr_reader.join().unwrap_or_default();
+            let stderr = stderr_reader
+                .take()
+                .and_then(|handle| handle.join().ok())
+                .unwrap_or_default();
 
             if !stderr.is_empty() {
                 log::info!("TTS worker stderr after cancellation: {}", stderr);
@@ -1086,7 +1089,10 @@ fn run_generation(
                     Err(error) if trimmed.starts_with('{') || trimmed.starts_with('[') => {
                         let _ = child.kill();
                         let _ = child.wait();
-                        let stderr = stderr_reader.join().unwrap_or_default();
+                        let stderr = stderr_reader
+                .take()
+                .and_then(|handle| handle.join().ok())
+                .unwrap_or_default();
 
                         if !stderr.is_empty() {
                             log::error!("TTS worker stderr: {}", stderr);
@@ -1224,6 +1230,15 @@ fn run_generation(
                     }
                     "failed" => {
                         let text = event["message"].as_str().unwrap_or("TTS worker gặp lỗi.");
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        let stderr = stderr_reader
+                            .take()
+                            .and_then(|handle| handle.join().ok())
+                            .unwrap_or_default();
+                        if !stderr.is_empty() {
+                            log::error!("TTS worker failed; stderr: {}", stderr);
+                        }
                         cleanup_staging(&items);
                         emit(
                             &app,
@@ -1246,27 +1261,84 @@ fn run_generation(
                     .try_wait()
                     .map_err(|error| format!("Không kiểm tra được TTS worker: {error}"))?
                 {
-                    if !status.success() && counts.completed + counts.failed < items.len() {
-                        cleanup_staging(&items);
-                        emit(&app, job_id, project_id, if counts.completed > 0 { "partial" } else { "failed" }, "Tạo giọng đọc đã dừng bất thường. Âm thanh đã tạo vẫn được giữ.", counts.completed as f64 / items.len() as f64, counts.completed, items.len(), None);
+                    let stderr = stderr_reader
+                        .take()
+                        .and_then(|handle| handle.join().ok())
+                        .unwrap_or_default();
+                    if !stderr.is_empty() {
+                        if status.success() {
+                            log::info!("TTS worker stderr: {}", stderr);
+                        } else {
+                            log::error!(
+                                "TTS worker exited with {:?}; stderr: {}",
+                                status.code(),
+                                stderr
+                            );
+                        }
+                    }
+
+                    cleanup_staging(&items);
+                    let reported = counts.completed + counts.failed;
+                    let all_segments_reported = reported >= items.len();
+
+                    if !all_segments_reported {
+                        let terminal_status = if counts.completed > 0 {
+                            "partial"
+                        } else {
+                            "failed"
+                        };
+                        let message = if status.success() {
+                            format!(
+                                "TTS worker dừng sớm: {}/{} câu có kết quả. Âm thanh đã tạo được giữ lại.",
+                                reported,
+                                items.len()
+                            )
+                        } else {
+                            format!(
+                                "Tạo giọng đọc dừng bất thường (mã thoát {:?}): {}/{} câu có kết quả. Âm thanh đã tạo được giữ lại.",
+                                status.code(),
+                                reported,
+                                items.len()
+                            )
+                        };
+                        emit(
+                            &app,
+                            job_id,
+                            project_id,
+                            terminal_status,
+                            &message,
+                            counts.completed as f64 / items.len() as f64,
+                            counts.completed,
+                            items.len(),
+                            None,
+                        );
                     } else {
-                        cleanup_staging(&items);
-                        let status = if counts.failed == 0 {
+                        let terminal_status = if !status.success() {
+                            if counts.completed > 0 { "partial" } else { "failed" }
+                        } else if counts.failed == 0 {
                             "completed"
                         } else if counts.completed > 0 {
                             "partial"
                         } else {
                             "failed"
                         };
+                        let message = if status.success() {
+                            format!(
+                                "Hoàn tất: {} thành công, {} lỗi.",
+                                counts.completed, counts.failed
+                            )
+                        } else {
+                            format!(
+                                "Worker kết thúc bất thường sau khi xử lý đủ segment: {} thành công, {} lỗi.",
+                                counts.completed, counts.failed
+                            )
+                        };
                         emit(
                             &app,
                             job_id,
                             project_id,
-                            status,
-                            &format!(
-                                "Hoàn tất: {} thành công, {} lỗi.",
-                                counts.completed, counts.failed
-                            ),
+                            terminal_status,
+                            &message,
                             1.0,
                             counts.completed,
                             items.len(),
@@ -1280,28 +1352,47 @@ fn run_generation(
                 let exit_status = child
                     .wait()
                     .map_err(|error| format!("Không chờ được TTS worker: {error}"))?;
+                let stderr = stderr_reader
+                    .take()
+                    .and_then(|handle| handle.join().ok())
+                    .unwrap_or_default();
+                if !stderr.is_empty() {
+                    if exit_status.success() {
+                        log::info!("TTS worker stderr: {}", stderr);
+                    } else {
+                        log::error!(
+                            "TTS worker disconnected with {:?}; stderr: {}",
+                            exit_status.code(),
+                            stderr
+                        );
+                    }
+                }
+
                 cleanup_staging(&items);
-                let all_segments_reported = counts.completed + counts.failed >= items.len();
-                let terminal_status = if all_segments_reported && counts.failed == 0 {
+                let reported = counts.completed + counts.failed;
+                let all_segments_reported = reported >= items.len();
+                let terminal_status = if !all_segments_reported || !exit_status.success() {
+                    if counts.completed > 0 { "partial" } else { "failed" }
+                } else if counts.failed == 0 {
                     "completed"
                 } else if counts.completed > 0 {
                     "partial"
                 } else {
                     "failed"
                 };
-                let message = if all_segments_reported {
+                let message = if all_segments_reported && exit_status.success() {
                     format!("Hoàn tất: {} thành công, {} lỗi.", counts.completed, counts.failed)
                 } else if exit_status.success() {
                     format!(
                         "Tạo giọng đọc dừng sớm: {}/{} câu có kết quả. Âm thanh đã tạo được giữ lại.",
-                        counts.completed + counts.failed,
+                        reported,
                         items.len()
                     )
                 } else {
                     format!(
-                        "Tạo giọng đọc dừng bất thường ({}): {}/{} tệp âm thanh đã tạo được giữ lại.",
+                        "Tạo giọng đọc dừng bất thường ({}): {}/{} câu có kết quả. Âm thanh đã tạo được giữ lại.",
                         exit_status,
-                        counts.completed,
+                        reported,
                         items.len()
                     )
                 };
