@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter};
 
 static INSTALL_LOCK: Mutex<()> = Mutex::new(());
 const FEATURES: [&str; 3] = ["whisperx", "bandit", "acceleration"];
-const RUNTIME_VERSION: u32 = 5;
+const RUNTIME_VERSION: u32 = 6;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -148,6 +148,108 @@ fn run_uv(app: &AppHandle, uv: &Path, root: &Path, args: &[&str], stage: &str) -
     Err(format!("Không cài được ở bước ‘{stage}’. Kiểm tra kết nối và dung lượng ổ đĩa, rồi thử lại."))
 }
 
+fn verify_onnx_gpu_replacement(python: &Path) -> Result<(), String> {
+    let script = "from importlib.metadata import version\n\
+from packaging.version import Version\n\
+import onnxruntime as ort\n\
+assert Version(version('onnxruntime-gpu')) == Version('1.30.0')\n\
+assert Version(ort.__version__) == Version('1.30.0')\n\
+assert 'CUDAExecutionProvider' in ort.get_available_providers()\n";
+    let mut command = Command::new(python);
+    hide_console(&mut command);
+    let output = command
+        .arg("-c")
+        .arg(script)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("Không thể kiểm tra ONNX Runtime GPU: {error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        log::error!("ONNX Runtime GPU replacement verification failed: {detail}");
+        Err("ONNX Runtime GPU chưa hoạt động đúng.".into())
+    }
+}
+
+fn is_onnxruntime_gpu_metadata_conflict(line: &str) -> bool {
+    let normalized = line.trim().to_ascii_lowercase();
+    normalized.starts_with("the package `")
+        && normalized.contains("requires `onnxruntime")
+        && normalized.contains("but it's not installed")
+}
+
+fn check_dependencies(
+    app: &AppHandle,
+    uv: &Path,
+    root: &Path,
+    python: &Path,
+    features: &[String],
+) -> Result<(), String> {
+    emit(app, "Kiểm tra xung đột dependency");
+    let python_text = python.to_str().ok_or("Đường dẫn bộ xử lý không hợp lệ.")?;
+    let mut command = Command::new(uv);
+    hide_console(&mut command);
+    let output = command
+        .args(["pip", "check", "--python", python_text, "--color", "never"])
+        .env("UV_CACHE_DIR", root.join("cache"))
+        .env("UV_PYTHON_INSTALL_DIR", root.join("python"))
+        .env("UV_NO_PROGRESS", "1")
+        .env("UV_LINK_MODE", "copy")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("Không thể kiểm tra dependency: {error}"))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let details = format!("{stdout}\n{stderr}");
+    let incompatibilities: Vec<&str> = details
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("The package `"))
+        .collect();
+
+    // onnxruntime-gpu and onnxruntime expose the same Python module but have
+    // different distribution names. VieNeu declares the CPU distribution, so
+    // metadata reports it missing after the intentional CUDA replacement.
+    if features.iter().any(|feature| feature == "acceleration")
+        && !incompatibilities.is_empty()
+        && incompatibilities
+            .iter()
+            .all(|line| is_onnxruntime_gpu_metadata_conflict(line))
+        && verify_onnx_gpu_replacement(python).is_ok()
+    {
+        log::warn!(
+            "Ignoring {} expected onnxruntime metadata conflict(s): {}",
+            incompatibilities.len(),
+            incompatibilities.join(" | ")
+        );
+        return Ok(());
+    }
+
+    let concise = details
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join(" | ");
+    log::error!("Optional AI dependency check failed: {concise}");
+    Err(if concise.is_empty() {
+        "Các package AI đang xung đột dependency.".into()
+    } else {
+        format!("Các package AI đang xung đột dependency: {concise}")
+    })
+}
 fn safe_remove(directory: &Path, parent: &Path) -> Result<(), String> {
     if directory.parent() != Some(parent) { return Err("Thư mục cài đặt không hợp lệ.".into()); }
     match fs::symlink_metadata(directory) {
@@ -235,10 +337,13 @@ fn verify(app: &AppHandle, python: &Path, source: &Path, features: &[String], pr
     }
     if features.iter().any(|feature| feature == "acceleration") {
         script.push_str(
-            "import faster_whisper, rapidocr, vieneu, gradio, onnxruntime, transformers, huggingface_hub\n\
+            "from importlib.metadata import version as package_version\n\
+            import faster_whisper, rapidocr, vieneu, gradio, onnxruntime, transformers, huggingface_hub\n\
             assert Version(gradio.__version__) == Version('5.49.1')\n\
             assert Version(transformers.__version__) == Version('4.57.6')\n\
             assert Version(huggingface_hub.__version__) == Version('0.36.2')\n\
+            assert Version(package_version('onnxruntime-gpu')) == Version('1.30.0')\n\
+            assert Version(onnxruntime.__version__) == Version('1.30.0')\n\
             assert 'CUDAExecutionProvider' in onnxruntime.get_available_providers()\n",
         );
     }
@@ -311,27 +416,19 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
 
     let mut features = old.as_ref().map(|marker| marker.features.clone()).unwrap_or_default();
     if !features.iter().any(|item| item == feature) { features.push(feature.to_string()); }
-    // Schema/runtime dependency changes are repaired atomically in staging.
-    // Same-profile additions can still reuse the current environment.
-    let replace = old.as_ref().is_none_or(|marker| {
-        marker.profile != profile || marker.runtime_version != RUNTIME_VERSION
-    }) || repair_current;
-    let destination = if replace { root.join("staging") } else { root.join("current") };
-    if replace {
-        safe_remove(&destination, &root)?;
-        run_uv(app, &uv, &root, &["venv", "--no-project", "--managed-python", "--python", "3.12", "--no-progress", destination.to_str().ok_or("Đường dẫn cài đặt không hợp lệ.")?], "Chuẩn bị bộ xử lý")?;
-    }
+    // Build every feature change in staging. The active runtime is left untouched
+    // until installation, dependency checks and runtime verification all pass.
+    // This prevents a failed VieNeu/OCR/BandIt install from corrupting a working
+    // WhisperX environment.
+    let replace = true;
+    let destination = root.join("staging");
+    safe_remove(&destination, &root)?;
+    run_uv(app, &uv, &root, &["venv", "--no-project", "--managed-python", "--python", "3.12", "--no-progress", destination.to_str().ok_or("Đường dẫn cài đặt không hợp lệ.")?], "Chuẩn bị bộ xử lý")?;
     let python = python_path(&destination);
     let install_result = (|| {
-        let requested: Vec<&str> = if replace { features.iter().map(String::as_str).collect() } else { vec![feature] };
+        let requested: Vec<&str> = features.iter().map(String::as_str).collect();
         for item in requested { install_feature(app, &uv, &root, &source, &python, item, profile)?; }
-        run_uv(
-            app,
-            &uv,
-            &root,
-            &["pip", "check", "--python", python.to_str().ok_or("Đường dẫn bộ xử lý không hợp lệ.")?],
-            "Kiểm tra xung đột dependency",
-        )?;
+        check_dependencies(app, &uv, &root, &python, &features)?;
         verify(app, &python, &source, &features, profile)
     })();
     if let Err(error) = install_result {
