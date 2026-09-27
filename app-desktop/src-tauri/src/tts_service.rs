@@ -90,6 +90,7 @@ struct WorkItem {
 struct JobCounts {
     completed: usize,
     failed: usize,
+    processed: usize,
 }
 
 pub fn has_active_project_job(jobs: &TtsJobs, project_id: &str) -> bool {
@@ -1065,7 +1066,7 @@ fn run_generation(
                 project_id,
                 "cancelled",
                 "Đã hủy tạo giọng đọc. Các segment đã hoàn tất được giữ lại.",
-                counts.completed as f64 / items.len() as f64,
+                counts.processed as f64 / items.len() as f64,
                 counts.completed,
                 items.len(),
                 None,
@@ -1090,9 +1091,9 @@ fn run_generation(
                         let _ = child.kill();
                         let _ = child.wait();
                         let stderr = stderr_reader
-                .take()
-                .and_then(|handle| handle.join().ok())
-                .unwrap_or_default();
+                            .take()
+                            .and_then(|handle| handle.join().ok())
+                            .unwrap_or_default();
 
                         if !stderr.is_empty() {
                             log::error!("TTS worker stderr: {}", stderr);
@@ -1105,7 +1106,7 @@ fn run_generation(
                             project_id,
                             if counts.completed > 0 { "partial" } else { "failed" },
                             &format!("TTS worker trả JSON protocol bị lỗi: {error}"),
-                            counts.completed as f64 / items.len() as f64,
+                            counts.processed as f64 / items.len() as f64,
                             counts.completed,
                             items.len(),
                             None,
@@ -1147,7 +1148,7 @@ fn run_generation(
                                 event["index"].as_u64().unwrap_or(0),
                                 items.len()
                             ),
-                            counts.completed as f64 / items.len() as f64,
+                            counts.processed as f64 / items.len() as f64,
                             counts.completed,
                             items.len(),
                             id.map(str::to_string),
@@ -1162,6 +1163,7 @@ fn run_generation(
                             let _ = fs::remove_file(&item.stage_path);
                             continue;
                         }
+                        counts.processed += 1;
                         match commit_segment(
                             &store,
                             project_id,
@@ -1184,7 +1186,7 @@ fn run_generation(
                                     project_id,
                                     "running",
                                     &msg,
-                                    counts.completed as f64 / items.len() as f64,
+                                    counts.processed as f64 / items.len() as f64,
                                     counts.completed,
                                     items.len(),
                                     Some(id.to_string()),
@@ -1199,7 +1201,7 @@ fn run_generation(
                                     project_id,
                                     "running",
                                     &error,
-                                    counts.completed as f64 / items.len() as f64,
+                                    counts.processed as f64 / items.len() as f64,
                                     counts.completed,
                                     items.len(),
                                     Some(id.to_string()),
@@ -1216,13 +1218,14 @@ fn run_generation(
                             record_segment_failure(&store, project_id, item, text);
                         }
                         counts.failed += 1;
+                        counts.processed += 1;
                         emit(
                             &app,
                             job_id,
                             project_id,
                             "running",
                             text,
-                            (counts.completed + counts.failed) as f64 / items.len() as f64,
+                            counts.processed as f64 / items.len() as f64,
                             counts.completed,
                             items.len(),
                             Some(id.to_string()),
@@ -1246,7 +1249,7 @@ fn run_generation(
                             project_id,
                             "failed",
                             text,
-                            counts.completed as f64 / items.len() as f64,
+                            counts.processed as f64 / items.len() as f64,
                             counts.completed,
                             items.len(),
                             None,
@@ -1278,7 +1281,7 @@ fn run_generation(
                     }
 
                     cleanup_staging(&items);
-                    let reported = counts.completed + counts.failed;
+                    let reported = counts.processed;
                     let all_segments_reported = reported >= items.len();
 
                     if !all_segments_reported {
@@ -1307,7 +1310,7 @@ fn run_generation(
                             project_id,
                             terminal_status,
                             &message,
-                            counts.completed as f64 / items.len() as f64,
+                            counts.processed as f64 / items.len() as f64,
                             counts.completed,
                             items.len(),
                             None,
@@ -1369,7 +1372,7 @@ fn run_generation(
                 }
 
                 cleanup_staging(&items);
-                let reported = counts.completed + counts.failed;
+                let reported = counts.processed;
                 let all_segments_reported = reported >= items.len();
                 let terminal_status = if !all_segments_reported || !exit_status.success() {
                     if counts.completed > 0 { "partial" } else { "failed" }
