@@ -64,13 +64,16 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 }
 
 export const videoToolsService = {
+  hasTikTokBrowserSession: () => call<boolean>('has_tiktok_browser_session'),
+  startTikTokBrowserLogin: (projectId: string) =>
+    call<string>('start_tiktok_browser_login', { projectId }),
   inspectTikTokCookies: (cookieFile: string) =>
     call<TikTokCookieInfo>('inspect_tiktok_cookie_file', { cookieFile }),
   outputDirectory: (projectId: string, purpose: 'tiktok' | 'merge') =>
     call<string>('get_video_tool_output_directory', { projectId, purpose }),
   scanVideos: (sourceDirectory: string) => call<MergeScanResult>('scan_merge_videos', { sourceDirectory }),
-  startTikTokDownload: (projectId: string, url: string, outputDirectory: string, cookieFile: string | null) =>
-    call<string>('start_tiktok_drama_download', { projectId, url, outputDirectory, cookieFile }),
+  startTikTokDownload: (projectId: string, url: string, outputDirectory: string, cookieFile: string | null, useBrowserCookies: boolean) =>
+    call<string>('start_tiktok_drama_download', { projectId, url, outputDirectory, cookieFile, useBrowserCookies }),
   startMerge: (projectId: string, sourceDirectory: string, filePaths: string[], outputDirectory: string) =>
     call<string>('start_video_merge', { projectId, sourceDirectory, filePaths, outputDirectory }),
   onProgress: (handler: (event: VideoToolProgress) => void) =>

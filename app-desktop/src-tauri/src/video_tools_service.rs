@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "webm", "m4v", "avi"];
@@ -61,6 +61,16 @@ pub struct SkippedMergeVideo {
 pub struct MergeScanResult {
     pub videos: Vec<MergeVideoInfo>,
     pub skipped: Vec<SkippedMergeVideo>,
+}
+
+struct RemoveFileOnDrop(Option<PathBuf>);
+
+impl Drop for RemoveFileOnDrop {
+    fn drop(&mut self) {
+        if let Some(path) = &self.0 {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -248,6 +258,70 @@ pub fn inspect_tiktok_cookie_file(cookie_file: &str) -> Result<TikTokCookieInfo,
     })
 }
 
+fn tiktok_browser_profile_directory(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|directory| directory.join("browser-profiles").join("tiktok"))
+        .map_err(|error| format!("Không xác định được nơi lưu phiên TikTok: {error}"))
+}
+
+pub fn has_tiktok_browser_session(app: &AppHandle) -> Result<bool, String> {
+    let marker = tiktok_browser_profile_directory(app)?.join(".jc-ai-tiktok-session.json");
+    match fs::symlink_metadata(marker) {
+        Ok(metadata) => Ok(metadata.is_file() && !metadata.file_type().is_symlink()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("Không kiểm tra được phiên đăng nhập TikTok: {error}")),
+    }
+}
+
+pub fn start_tiktok_browser_login(
+    app: AppHandle,
+    jobs: &VideoToolsJobs,
+    store: ProjectStore,
+    project_id: String,
+) -> Result<String, String> {
+    let _start_guard = jobs.start_lock.lock().map_err(|_| "Không thể khóa trạng thái video jobs.".to_string())?;
+    ensure_project_job_can_start(jobs, &project_id)?;
+    let project = store.get(&project_id)?;
+    let profile_directory = tiktok_browser_profile_directory(&app)?;
+    fs::create_dir_all(&profile_directory)
+        .map_err(|error| format!("Không thể chuẩn bị hồ sơ trình duyệt TikTok: {error}"))?;
+    let worker = crate::runtime_paths::worker_dir()?;
+    let request = json!({
+        "operation": "tiktok_browser_login",
+        "profileDirectory": profile_directory,
+    });
+    let job_id = Uuid::new_v4().to_string();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    insert_job(jobs, &job_id, &project_id, cancelled.clone())?;
+    crate::job_service::register_job(&app, job_id.clone(), project_id.clone(), project.name, "tiktok_cookie_login", &["network", "browser"], None);
+    emit_video_tool_event(&app, VideoToolEvent {
+        project_id: project_id.clone(), job_id: job_id.clone(), status: "queued".into(), progress: 0.0,
+        message: "Đang chuẩn bị cửa sổ đăng nhập TikTok…".into(), stage: Some("queued".into()), details: None, output: None,
+    });
+
+    let jobs_for_thread = jobs.clone();
+    let app_for_thread = app.clone();
+    let job_for_thread = job_id.clone();
+    let project_for_thread = project_id.clone();
+    thread::Builder::new().name(format!("tiktok-login-{}", &job_id[..8])).spawn(move || {
+        if let Err(error) = run_tiktok_worker(&app_for_thread, &worker, &request, &job_for_thread, &project_for_thread, &cancelled) {
+            let cancelled_now = cancelled.load(Ordering::SeqCst);
+            emit_video_tool_event(&app_for_thread, VideoToolEvent {
+                project_id: project_for_thread.clone(), job_id: job_for_thread.clone(),
+                status: if cancelled_now { "cancelled" } else { "failed" }.into(), progress: 0.0,
+                message: if cancelled_now { "Đã hủy kết nối TikTok.".into() } else { error },
+                stage: Some("terminal".into()), details: None, output: None,
+            });
+        }
+        remove_job(&jobs_for_thread, &job_for_thread);
+    }).map_err(|error| {
+        remove_job(jobs, &job_id);
+        format!("Không thể mở đăng nhập TikTok: {error}")
+    })?;
+    Ok(job_id)
+}
+
 pub fn default_merge_directory(store: &ProjectStore, project_id: &str) -> Result<String, String> {
     crate::render_service::export_directory(store, project_id)
         .map(|path| path.to_string_lossy().into_owned())
@@ -412,6 +486,7 @@ pub fn start_tiktok_download(
     url: String,
     output_directory: Option<String>,
     cookie_file: Option<String>,
+    use_browser_cookies: bool,
 ) -> Result<String, String> {
     let _start_guard = jobs.start_lock.lock().map_err(|_| "Không thể khóa trạng thái video jobs.".to_string())?;
     ensure_project_job_can_start(jobs, &project_id)?;
@@ -420,18 +495,38 @@ pub fn start_tiktok_download(
     let url = url.trim().to_string();
     validate_tiktok_url(&url)?;
     let cookie_file = cookie_file.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+    let use_browser_cookies = use_browser_cookies && cookie_file.is_none();
     if let Some(path) = cookie_file.as_deref() {
         let cookie_info = inspect_tiktok_cookie_file(path)?;
         if cookie_info.tiktok_cookies == 0 {
             return Err("File cookies hợp lệ nhưng không có cookie thuộc tiktok.com. Hãy xuất file sau khi đăng nhập TikTok.".into());
         }
     }
+    let browser_profile = if use_browser_cookies {
+        if !has_tiktok_browser_session(&app)? {
+            return Err("Chưa kết nối TikTok bằng trình duyệt. Hãy đăng nhập TikTok trước.".into());
+        }
+        Some(tiktok_browser_profile_directory(&app)?)
+    } else {
+        None
+    };
+    let job_id = Uuid::new_v4().to_string();
+    let temporary_cookie_file = if use_browser_cookies {
+        let directory = app.path().app_data_dir()
+            .map_err(|error| format!("Không xác định được thư mục dữ liệu ứng dụng: {error}"))?
+            .join("cache")
+            .join("tiktok-auth");
+        fs::create_dir_all(&directory)
+            .map_err(|error| format!("Không thể chuẩn bị dữ liệu xác thực TikTok tạm: {error}"))?;
+        Some(directory.join(format!("cookies-{job_id}.txt")))
+    } else {
+        None
+    };
     let worker = crate::runtime_paths::worker_dir()?;
     let ffmpeg_path = crate::runtime_paths::resolve_ffmpeg()
         .ok()
         .map(|path| path.to_string_lossy().into_owned());
-    let request = json!({ "operation": "tiktok_drama_download", "url": url, "outputDirectory": destination, "cookieFile": cookie_file, "ffmpegPath": ffmpeg_path });
-    let job_id = Uuid::new_v4().to_string();
+    let request = json!({ "operation": "tiktok_drama_download", "url": url, "outputDirectory": destination, "cookieFile": cookie_file, "browserProfileDirectory": browser_profile, "useBrowserCookies": use_browser_cookies, "temporaryCookieFile": temporary_cookie_file, "ffmpegPath": ffmpeg_path });
     let cancelled = Arc::new(AtomicBool::new(false));
     insert_job(jobs, &job_id, &project_id, cancelled.clone())?;
     crate::job_service::register_job(&app, job_id.clone(), project_id.clone(), project.name, "tiktok_download", &["network", "browser", "disk"], None);
@@ -556,6 +651,11 @@ fn run_tiktok_worker(
     project_id: &str,
     cancelled: &AtomicBool,
 ) -> Result<(), String> {
+    let _temporary_cookie_cleanup = RemoveFileOnDrop(
+        request.get("temporaryCookieFile")
+            .and_then(Value::as_str)
+            .map(PathBuf::from),
+    );
     let mut child = crate::runtime_paths::worker_command(worker)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
         .spawn().map_err(|error| format!("Không thể khởi chạy downloader worker: {error}. Hãy kiểm tra Python worker và dependencies TikTok."))?;

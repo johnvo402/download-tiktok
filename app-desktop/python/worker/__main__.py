@@ -134,6 +134,10 @@ def main() -> int:
                 from worker.tiktok_drama.service import download_drama
 
                 download_drama(request, emit)
+            elif operation == "tiktok_browser_login":
+                from worker.tiktok_drama.browser_session import capture_browser_session
+
+                capture_browser_session(request, emit)
             else:
                 raise ValueError("Unsupported worker operation")
         except Exception as error:  # worker errors are returned as protocol messages

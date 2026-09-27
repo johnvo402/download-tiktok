@@ -525,6 +525,8 @@ button:disabled { cursor: not-allowed; }
 .video-tool-advanced > p { margin: 9px 0 11px; color: #82848b; font-size: 9px; line-height: 1.65; }
 .video-tool-cookie-status { display: flex; align-items: flex-start; gap: 7px; margin-top: 10px; color: #b9c98a; font-size: 9px; line-height: 1.55; }
 .video-tool-cookie-status svg { flex: 0 0 auto; margin-top: 1px; }
+.video-tool-cookie-file-row { margin-top: 14px; }
+.video-tool-cookie-status .button { margin-left: auto; }
 .video-tool-cookie-warning { color: #d2b679; }
 .video-tool-clear-cookie { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; border: 1px solid #34353a; border-radius: 7px; color: #aeb0b7; background: #1b1c1f; cursor: pointer; }
 .video-tool-form-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 4px; }

@@ -45,6 +45,7 @@ hiddenimports += [
     "worker.dialogue.service",
     "worker.tiktok_drama.service",
     "worker.tiktok_drama.browser",
+    "worker.tiktok_drama.browser_session",
     "worker.tiktok_drama.config",
     "worker.tiktok_drama.cookies",
     "worker.tiktok_drama.metadata",

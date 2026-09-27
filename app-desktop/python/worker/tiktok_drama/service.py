@@ -73,10 +73,12 @@ def download_drama(request: dict[str, Any], emit: Callable[[dict[str, Any]], Non
         raise ValueError("Thư mục lưu TikTok không tồn tại hoặc không thể truy cập.")
 
     cookie_file_value = request.get("cookieFile")
+    use_browser_cookies = bool(request.get("useBrowserCookies")) and not cookie_file_value
+    browser_profile_directory = request.get("browserProfileDirectory") if use_browser_cookies else None
     cookie_file = (
         Path(str(cookie_file_value)).resolve()
         if cookie_file_value
-        else _development_cookie_file()
+        else None if use_browser_cookies else _development_cookie_file()
     )
     cookies: list[dict[str, Any]] = []
     if cookie_file:
@@ -84,14 +86,45 @@ def download_drama(request: dict[str, Any], emit: Callable[[dict[str, Any]], Non
             raise FileNotFoundError("Không tìm thấy file cookies đã chọn.")
         cookies = load_netscape_cookies(cookie_file)
 
-    cookie_note = " Có cookies.txt cục bộ để xác thực." if cookie_file and not cookie_file_value else ""
+    cookie_note = (
+        " Đang dùng phiên TikTok đã kết nối trong trình duyệt ứng dụng."
+        if use_browser_cookies
+        else " Có cookies.txt cục bộ để xác thực." if cookie_file and not cookie_file_value else ""
+    )
     emit({"type": "progress", "job": "tiktok_download", "progress": 0.02, "stage": "browser", "message": f"Đang mở TikTok để đọc thông tin series…{cookie_note}"})
+    browser = None
+    context = None
+    temporary_cookie_file: Path | None = None
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True, channel="chrome")
         try:
-            context = browser.new_context(locale=BROWSER_LOCALE)
-            if cookies:
-                context.add_cookies(cookies)
+            if use_browser_cookies:
+                from .browser_session import AUTH_COOKIE_NAMES, has_saved_session
+
+                profile_directory = Path(str(browser_profile_directory or "")).resolve()
+                if not has_saved_session(profile_directory):
+                    raise RuntimeError("Chưa kết nối phiên TikTok bằng trình duyệt. Hãy đăng nhập TikTok trước.")
+                context = playwright.chromium.launch_persistent_context(
+                    str(profile_directory),
+                    channel="chrome",
+                    headless=True,
+                    locale=BROWSER_LOCALE,
+                )
+                browser_cookies = context.cookies(["https://www.tiktok.com"])
+                if not any(
+                    str(cookie.get("name", "")).lower() in AUTH_COOKIE_NAMES and cookie.get("value")
+                    for cookie in browser_cookies
+                ):
+                    raise RuntimeError("Phiên TikTok đã hết hạn. Hãy kết nối lại bằng trình duyệt rồi thử lại.")
+                temporary_cookie_file = _write_temporary_cookie_file(
+                    browser_cookies, request.get("temporaryCookieFile")
+                )
+                cookie_file = temporary_cookie_file
+            else:
+                browser = playwright.chromium.launch(headless=True, channel="chrome")
+                context = browser.new_context(locale=BROWSER_LOCALE)
+                if cookies:
+                    context.add_cookies(cookies)
+
             page = context.new_page()
             navigator = TikTokNavigator(page)
             navigator.open(url)
@@ -169,7 +202,17 @@ def download_drama(request: dict[str, Any], emit: Callable[[dict[str, Any]], Non
                 key=lambda path: path.name.casefold(),
             )
         finally:
-            browser.close()
+            try:
+                if context is not None:
+                    context.close()
+            finally:
+                if browser is not None:
+                    browser.close()
+                if temporary_cookie_file is not None:
+                    try:
+                        temporary_cookie_file.unlink(missing_ok=True)
+                    except OSError:
+                        log.warning("Could not remove temporary TikTok authentication file")
 
     emit({
         "type": "completed",
@@ -180,6 +223,48 @@ def download_drama(request: dict[str, Any], emit: Callable[[dict[str, Any]], Non
         "files": [path.name for path in files],
         "outputDirectory": str(series_dir),
     })
+
+
+def _write_temporary_cookie_file(cookies: list[dict[str, Any]], requested_path: object) -> Path:
+    """Create a short-lived Netscape file for yt-dlp without exposing cookies to the UI."""
+    lines = ["# Netscape HTTP Cookie File"]
+    for cookie in cookies:
+        domain = str(cookie.get("domain", "")).strip()
+        if not domain or not (domain == "tiktok.com" or domain.endswith(".tiktok.com")):
+            continue
+        name = str(cookie.get("name", ""))
+        value = str(cookie.get("value", ""))
+        cookie_path = str(cookie.get("path", "/")) or "/"
+        if not name or any(char in value + name + domain + cookie_path for char in "\t\r\n"):
+            continue
+        http_only = bool(cookie.get("httpOnly"))
+        if http_only:
+            domain = f"#HttpOnly_{domain}"
+        expires = cookie.get("expires")
+        try:
+            expiry = str(max(0, int(expires))) if expires else "0"
+        except (TypeError, ValueError, OverflowError):
+            expiry = "0"
+        include_subdomains = "TRUE" if domain.startswith(".") or domain.startswith("#HttpOnly_.") else "FALSE"
+        secure = "TRUE" if cookie.get("secure") else "FALSE"
+        lines.append("\t".join((domain, include_subdomains, cookie_path, secure, expiry, name, value)))
+    if len(lines) == 1:
+        raise RuntimeError("Không có cookie TikTok nào để xác thực. Hãy đăng nhập lại.")
+
+    if not isinstance(requested_path, str) or not requested_path:
+        raise RuntimeError("Không chuẩn bị được file xác thực TikTok tạm thời.")
+    path = Path(requested_path).expanduser()
+    if not path.is_absolute() or not path.parent.is_dir() or path.exists() or path.is_symlink():
+        raise RuntimeError("Đường dẫn cookie tạm thời không hợp lệ.")
+    try:
+        with path.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write("\n".join(lines) + "\n")
+        if os.name != "nt":
+            path.chmod(0o600)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    return path
 
 
 def _download_episode(

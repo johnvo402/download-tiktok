@@ -145,7 +145,7 @@ pub fn cancel_unified_job(
         "translate" => translation_service::cancel_translation(translation_jobs, job_id),
         "tts" => tts_service::cancel(&tts_jobs, &job_id),
         "export" => render_service::cancel_export(&render_jobs, &job_id),
-        "video_merge" | "tiktok_download" => video_tools_service::cancel(&video_tools_jobs, &job_id),
+        "video_merge" | "tiktok_download" | "tiktok_cookie_login" => video_tools_service::cancel(&video_tools_jobs, &job_id),
         _ => Err("Loại job này chưa hỗ trợ hủy từ hàng đợi.".into()),
     }
 }
@@ -422,6 +422,27 @@ pub async fn inspect_tiktok_cookie_file(
 }
 
 #[tauri::command]
+pub fn has_tiktok_browser_session(app: tauri::AppHandle) -> Result<bool, String> {
+    video_tools_service::has_tiktok_browser_session(&app)
+}
+
+#[tauri::command]
+pub async fn start_tiktok_browser_login(
+    app: tauri::AppHandle,
+    jobs: tauri::State<'_, video_tools_service::VideoToolsJobs>,
+    project_id: String,
+) -> Result<String, String> {
+    let jobs = jobs.inner().clone();
+    let root = projects_root(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = PROJECT_JOB_START_LOCK.lock().map_err(|_| "Không thể khóa trạng thái project jobs.".to_string())?;
+        video_tools_service::start_tiktok_browser_login(app, &jobs, ProjectStore::new(root), project_id)
+    })
+    .await
+    .map_err(|error| format!("Không thể kết nối TikTok bằng trình duyệt: {error}"))?
+}
+
+#[tauri::command]
 pub fn get_video_tool_output_directory(
     app: tauri::AppHandle,
     project_id: String,
@@ -452,12 +473,13 @@ pub async fn start_tiktok_drama_download(
     url: String,
     output_directory: Option<String>,
     cookie_file: Option<String>,
+    use_browser_cookies: bool,
 ) -> Result<String, String> {
     let jobs = jobs.inner().clone();
     let root = projects_root(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = PROJECT_JOB_START_LOCK.lock().map_err(|_| "Không thể khóa trạng thái project jobs.".to_string())?;
-        video_tools_service::start_tiktok_download(app, &jobs, ProjectStore::new(root), project_id, url, output_directory, cookie_file)
+        video_tools_service::start_tiktok_download(app, &jobs, ProjectStore::new(root), project_id, url, output_directory, cookie_file, use_browser_cookies)
     })
     .await
     .map_err(|error| format!("Không thể bắt đầu tải TikTok Drama: {error}"))?

@@ -44,6 +44,10 @@ export default function ImportPlaceholder() {
   const [cookieInfo, setCookieInfo] = createSignal<TikTokCookieInfo>();
   const [cookieError, setCookieError] = createSignal('');
   const [cookieChecking, setCookieChecking] = createSignal(false);
+  const [browserSessionReady, setBrowserSessionReady] = createSignal(false);
+  const [cookieLoginStarting, setCookieLoginStarting] = createSignal(false);
+  const [cookieLoginJobId, setCookieLoginJobId] = createSignal<string>();
+  const [cookieLoginProgress, setCookieLoginProgress] = createSignal<VideoToolProgress>();
   const [tiktokStarting, setTiktokStarting] = createSignal(false);
   const [tiktokJobId, setTiktokJobId] = createSignal<string>();
   const [tiktokProgress, setTiktokProgress] = createSignal<VideoToolProgress>();
@@ -64,7 +68,7 @@ export default function ImportPlaceholder() {
   let unlisten: (() => void) | undefined;
   let folderGeneration = 0;
   const projectId = () => currentProject()?.id;
-  const taskRunning = () => tiktokStarting() || mergeStarting() || ['queued', 'waiting', 'running'].includes(tiktokProgress()?.status ?? '') || ['queued', 'waiting', 'running'].includes(mergeProgress()?.status ?? '');
+  const taskRunning = () => tiktokStarting() || cookieLoginStarting() || mergeStarting() || ['queued', 'waiting', 'running'].includes(tiktokProgress()?.status ?? '') || ['queued', 'waiting', 'running'].includes(mergeProgress()?.status ?? '');
 
   createEffect(() => {
     const id = projectId();
@@ -73,10 +77,12 @@ export default function ImportPlaceholder() {
     void Promise.all([
       videoToolsService.outputDirectory(id, 'tiktok'),
       videoToolsService.outputDirectory(id, 'merge'),
-    ]).then(([tiktok, merge]) => {
+      videoToolsService.hasTikTokBrowserSession(),
+    ]).then(([tiktok, merge, hasSession]) => {
       if (generation !== folderGeneration) return;
       setTiktokOutput(tiktok);
       setMergeOutput(merge);
+      setBrowserSessionReady(hasSession);
     }).catch((error: unknown) => {
       if (generation === folderGeneration) setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không đọc được thư mục lưu trong dự án.' });
     });
@@ -86,6 +92,18 @@ export default function ImportPlaceholder() {
   onMount(() => {
     void videoToolsService.onProgress((event) => {
       if (event.projectId !== projectId()) return;
+      if (cookieLoginStarting() && (!cookieLoginJobId() || cookieLoginJobId() === event.jobId)) {
+        setCookieLoginJobId(event.jobId);
+        setCookieLoginProgress(event);
+        if (event.status === 'completed') {
+          setBrowserSessionReady(true);
+          setCookieError('');
+        }
+        if (event.status === 'failed' || event.status === 'cancelled') {
+          setCookieError(event.message);
+        }
+        if (['completed', 'failed', 'cancelled'].includes(event.status)) setCookieLoginStarting(false);
+      }
       if (tiktokStarting() && (!tiktokJobId() || tiktokJobId() === event.jobId)) {
         setTiktokJobId(event.jobId);
         setTiktokProgress(event);
@@ -133,6 +151,21 @@ export default function ImportPlaceholder() {
     finally { setCookieChecking(false); }
   };
 
+  const connectTikTokBrowser = async () => {
+    const id = projectId();
+    if (!id || taskRunning()) return;
+    setCookieLoginStarting(true);
+    setCookieLoginJobId(undefined);
+    setCookieLoginProgress({ projectId: id, jobId: '', status: 'queued', progress: 0, message: 'Đang mở cửa sổ đăng nhập…', stage: 'queued', details: null, output: null });
+    setCookieError('');
+    try {
+      setCookieLoginJobId(await videoToolsService.startTikTokBrowserLogin(id));
+    } catch (error) {
+      setCookieError(error instanceof Error ? error.message : 'Không thể mở đăng nhập TikTok.');
+      setCookieLoginStarting(false);
+    }
+  };
+
   const startTikTokDownload = async (event: SubmitEvent) => {
     event.preventDefault();
     const id = projectId();
@@ -143,7 +176,7 @@ export default function ImportPlaceholder() {
     setTiktokError('');
     setDramaInfo(undefined);
     try {
-      const job = await videoToolsService.startTikTokDownload(id, tiktokUrl(), tiktokOutput(), cookieFile() || null);
+      const job = await videoToolsService.startTikTokDownload(id, tiktokUrl(), tiktokOutput(), cookieFile() || null, browserSessionReady() && !cookieFile());
       setTiktokJobId(job);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Không thể bắt đầu tải TikTok Drama.';
@@ -158,6 +191,13 @@ export default function ImportPlaceholder() {
     if (!job) return;
     try { await jobService.cancel(job); }
     catch (error) { setTiktokError(error instanceof Error ? error.message : 'Không thể hủy tải TikTok.'); }
+  };
+
+  const cancelTikTokBrowserLogin = async () => {
+    const job = cookieLoginJobId();
+    if (!job) return;
+    try { await jobService.cancel(job); }
+    catch (error) { setCookieError(error instanceof Error ? error.message : 'Không thể hủy đăng nhập TikTok.'); }
   };
 
   const scanSourceFolder = async (directory: string) => {
@@ -251,8 +291,8 @@ export default function ImportPlaceholder() {
             <form class="video-tool-form" onSubmit={(event) => void startTikTokDownload(event)}>
               <label class="video-tool-field"><span>Liên kết TikTok</span><input type="url" required value={tiktokUrl()} disabled={taskRunning()} placeholder="https://www.tiktok.com/@.../video/..." onInput={(event) => setTiktokUrl(event.currentTarget.value)} /></label>
               <div class="video-tool-field"><span>Thư mục lưu</span><div class="video-tool-directory-row"><div class="video-tool-directory-value" title={tiktokOutput()}><FolderOpen size={15} /><span>{tiktokOutput() ? directoryLabel(tiktokOutput()) : 'Đang lấy thư mục dự án…'}</span></div><button class="button button-quiet" type="button" disabled={taskRunning()} onClick={() => void chooseDirectory('tiktok')}>Chọn thư mục</button></div><small>Mặc định lưu tại thư mục TikTok bên trong project.</small></div>
-              <details class="video-tool-advanced"><summary>Đăng nhập TikTok (tùy chọn)</summary><p>Series công khai có thể tải không cần cookie. Nếu TikTok yêu cầu đăng nhập, chọn file cookies.txt theo định dạng Netscape/Mozilla. Ứng dụng chỉ đếm cookie thuộc tiktok.com; không hiển thị hay lưu giá trị cookie.</p><div class="video-tool-directory-row"><div class="video-tool-directory-value" title={cookieFile()}><ShieldCheck size={15} /><span>{cookieFile() ? directoryLabel(cookieFile()) : 'Chưa chọn file cookies'}</span></div><button class="button button-quiet" type="button" disabled={taskRunning() || cookieChecking()} onClick={() => void chooseCookieFile()}>{cookieFile() ? 'Đổi file' : 'Lấy cookies.txt'}</button><Show when={cookieFile()}><button class="video-tool-clear-cookie" type="button" aria-label="Xóa lựa chọn cookies" disabled={taskRunning() || cookieChecking()} onClick={() => { setCookieFile(''); setCookieInfo(undefined); setCookieError(''); }}><X size={14} /></button></Show></div><Show when={cookieChecking()}><div class="video-tool-cookie-status" role="status"><LoaderCircle size={13} class="spin" /><span>Đang kiểm tra file cookies…</span></div></Show><Show when={cookieInfo()} keyed>{(info) => <div class="video-tool-cookie-status" classList={{ 'video-tool-cookie-warning': info.tiktokCookies === 0 }} role="status"><ShieldCheck size={13} /><span>{info.tiktokCookies > 0 ? `Đã đọc ${info.totalCookies} cookie, có ${info.tiktokCookies} cookie TikTok.` : `Đã đọc ${info.totalCookies} cookie nhưng không tìm thấy cookie thuộc tiktok.com.`}</span></div>}</Show><Show when={cookieError()}><div class="video-tool-inline-error"><CircleAlert size={14} /><span>{cookieError()}</span></div></Show></details>
-              <div class="video-tool-form-footer"><span><ShieldCheck size={14} />Cookie chỉ được đọc trong tác vụ này</span><button class="button button-primary" type="submit" disabled={!tiktokUrl().trim() || !tiktokOutput() || taskRunning() || cookieChecking() || (!!cookieFile() && (!cookieInfo() || cookieInfo()!.tiktokCookies === 0))}><Show when={tiktokStarting()} fallback={<Download size={15} />}><LoaderCircle size={15} class="spin" /></Show>{tiktokStarting() ? 'Đang xử lý…' : 'Đọc info & tải series'}</button></div>
+              <details class="video-tool-advanced" open><summary>Đăng nhập TikTok (tùy chọn)</summary><p>Nhấn nút bên dưới để mở cửa sổ Chrome riêng của JC AI. Đăng nhập TikTok một lần; các lần tải sau sẽ tự dùng lại phiên này. App không đọc cookie từ hồ sơ Chrome cá nhân.</p><div class="video-tool-directory-row"><div class="video-tool-directory-value"><ShieldCheck size={15} /><span>{browserSessionReady() ? 'Đã kết nối phiên TikTok' : 'Chưa kết nối trình duyệt'}</span></div><button class="button button-quiet" type="button" disabled={taskRunning()} onClick={() => void connectTikTokBrowser()}>{cookieLoginStarting() ? <><LoaderCircle size={14} class="spin" /> Đang chờ đăng nhập…</> : browserSessionReady() ? 'Kết nối lại' : 'Tự lấy cookie từ trình duyệt'}</button></div><Show when={cookieLoginStarting()}><div class="video-tool-cookie-status" role="status"><LoaderCircle size={13} class="spin" /><span>{cookieLoginProgress()?.message ?? 'Đăng nhập trong cửa sổ Chrome vừa mở.'}</span><button class="button button-quiet" type="button" disabled={!cookieLoginJobId()} onClick={() => void cancelTikTokBrowserLogin()}>Hủy</button></div></Show><div class="video-tool-directory-row video-tool-cookie-file-row"><div class="video-tool-directory-value" title={cookieFile()}><FolderOpen size={15} /><span>{cookieFile() ? directoryLabel(cookieFile()) : 'Hoặc dùng file cookies.txt đã có'}</span></div><button class="button button-quiet" type="button" disabled={taskRunning() || cookieChecking()} onClick={() => void chooseCookieFile()}>{cookieFile() ? 'Đổi file' : 'Chọn file'}</button><Show when={cookieFile()}><button class="video-tool-clear-cookie" type="button" aria-label="Xóa lựa chọn cookies" disabled={taskRunning() || cookieChecking()} onClick={() => { setCookieFile(''); setCookieInfo(undefined); setCookieError(''); }}><X size={14} /></button></Show></div><Show when={cookieChecking()}><div class="video-tool-cookie-status" role="status"><LoaderCircle size={13} class="spin" /><span>Đang kiểm tra file cookies…</span></div></Show><Show when={cookieInfo()} keyed>{(info) => <div class="video-tool-cookie-status" classList={{ 'video-tool-cookie-warning': info.tiktokCookies === 0 }} role="status"><ShieldCheck size={13} /><span>{info.tiktokCookies > 0 ? `Đã đọc ${info.totalCookies} cookie, có ${info.tiktokCookies} cookie TikTok.` : `Đã đọc ${info.totalCookies} cookie nhưng không tìm thấy cookie thuộc tiktok.com.`}</span></div>}</Show><Show when={cookieError()}><div class="video-tool-inline-error"><CircleAlert size={14} /><span>{cookieError()}</span></div></Show><small>Phiên trình duyệt được lưu riêng cho ứng dụng; cookie không hiển thị trong giao diện.</small></details>
+              <div class="video-tool-form-footer"><span><ShieldCheck size={14} />Dùng phiên trình duyệt hoặc file cookie đã chọn</span><button class="button button-primary" type="submit" disabled={!tiktokUrl().trim() || !tiktokOutput() || taskRunning() || cookieChecking() || (!!cookieFile() && (!cookieInfo() || cookieInfo()!.tiktokCookies === 0))}><Show when={tiktokStarting()} fallback={<Download size={15} />}><LoaderCircle size={15} class="spin" /></Show>{tiktokStarting() ? 'Đang xử lý…' : 'Đọc info & tải series'}</button></div>
             </form>
           </section>
 

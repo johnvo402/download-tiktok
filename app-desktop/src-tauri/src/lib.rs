@@ -131,6 +131,8 @@ pub fn run() {
             commands::get_export_directory,
             commands::open_export_folder,
             commands::inspect_tiktok_cookie_file,
+            commands::has_tiktok_browser_session,
+            commands::start_tiktok_browser_login,
             commands::get_video_tool_output_directory,
             commands::scan_merge_videos,
             commands::start_tiktok_drama_download,
