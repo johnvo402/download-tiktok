@@ -1008,6 +1008,13 @@ fn run_generation(
         .stdout
         .take()
         .ok_or_else(|| "Không mở được đầu ra TTS worker.".to_string())?;
+    let stderr = child
+    .stderr
+    .take()
+    .ok_or_else(|| "Không mở được log TTS worker.".to_string())?;
+
+    let stderr_reader = thread::spawn(move || read_worker_stderr_tail(stderr));
+
     let (tx, rx) = mpsc::channel::<String>();
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines().flatten() {
@@ -1042,6 +1049,12 @@ fn run_generation(
         if canceled.load(Ordering::SeqCst) {
             let _ = child.kill();
             let _ = child.wait();
+            let stderr = stderr_reader.join().unwrap_or_default();
+
+            if !stderr.is_empty() {
+                log::info!("TTS worker stderr after cancellation: {}", stderr);
+            }
+
             cleanup_staging(&items);
             emit(
                 &app,
@@ -1073,7 +1086,11 @@ fn run_generation(
                     Err(error) if trimmed.starts_with('{') || trimmed.starts_with('[') => {
                         let _ = child.kill();
                         let _ = child.wait();
+                        let stderr = stderr_reader.join().unwrap_or_default();
 
+                        if !stderr.is_empty() {
+                            log::error!("TTS worker stderr: {}", stderr);
+                        }
                         cleanup_staging(&items);
 
                         emit(

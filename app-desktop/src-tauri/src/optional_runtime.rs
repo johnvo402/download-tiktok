@@ -212,9 +212,11 @@ fn verify(app: &AppHandle, python: &Path, source: &Path, features: &[String], pr
         script.push_str("import os, pathlib; gpu_dlls = os.add_dll_directory(str(pathlib.Path(torch.__file__).parent / 'lib'))\n");
     }
     if features.iter().any(|feature| feature == "whisperx") {
-        // WhisperX alignment does not use TorchCodec in our pipeline; its
-        // Windows import can fail when FFmpeg shared DLLs are unavailable.
-        script.push_str("import faster_whisper, whisperx\n");
+        script.push_str(
+            "import faster_whisper, whisperx, transformers, huggingface_hub\n\
+            assert transformers.__version__.split('.')[0] == '4'\n\
+            assert huggingface_hub.__version__.startswith('0.')\n"
+        );
     }
     if features.iter().any(|feature| feature == "bandit") {
         script.push_str("import bandit_infer, soundfile\n");

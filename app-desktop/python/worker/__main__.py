@@ -8,11 +8,10 @@ import traceback
 from pathlib import Path
 
 
-# stdout gốc dành riêng cho JSONL protocol.
+# stdout thật chỉ dành cho JSONL protocol.
 _protocol_stdout = sys.stdout
 
-# Ngay từ đầu, tất cả print() của Python và third-party library
-# đều đi stderr.
+# Mọi print/log từ Python và thư viện third-party đi stderr.
 sys.stdout = sys.stderr
 
 
@@ -37,11 +36,9 @@ if os.environ.get("JC_AI_GPU_RUNTIME") == "1" and os.name == "nt":
             file=sys.stderr,
         )
 
-for stream in (sys.stdin, sys.stdout, sys.stderr):
+
+for stream in (sys.stdin, _protocol_stdout, sys.stderr):
     try:
-        # Rust sends request JSON over stdin as UTF-8. Explicitly configure
-        # stdin as well as output streams; Windows' legacy code page turns
-        # names such as "Adam bựa" into mojibake otherwise.
         errors = "strict" if stream is sys.stdin else "backslashreplace"
         stream.reconfigure(encoding="utf-8", errors=errors)
     except (AttributeError, OSError):

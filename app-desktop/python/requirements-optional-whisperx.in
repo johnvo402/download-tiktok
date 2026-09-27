@@ -1,8 +1,10 @@
-# Installed only when WhisperX is selected. torch wheels are installed first
-# from the CPU or NVIDIA index and reused by other selected features.
 torch==2.8.0
 torchvision==0.23.0
 torchaudio==2.8.0
 torchcodec==0.7.0
+
 faster-whisper==1.2.1
 whisperx==3.8.6
+
+transformers>=4.57,<5
+huggingface-hub==0.36.2
