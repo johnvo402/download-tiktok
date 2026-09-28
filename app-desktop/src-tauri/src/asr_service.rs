@@ -901,6 +901,7 @@ fn run_transcription(
             tts: None,
         })
         .collect();
+    let segments = crate::transcript_service::merge_adjacent_duplicate_segments(segments);
     let transcript = Transcript {
         schema_version: 1,
         project_id: project_id.to_string(),
@@ -1012,6 +1013,7 @@ fn run_ocr_transcription(
         })
     }).collect::<Vec<_>>();
     if segments.is_empty() { return Err("OCR trả về timestamp không hợp lệ cho video này.".into()); }
+    let segments = crate::transcript_service::merge_adjacent_duplicate_segments(segments);
     let transcript = Transcript {
         schema_version: 1, project_id: project_id.to_string(),
         source_type: crate::project_service::TranscriptSourceType::Ocr,

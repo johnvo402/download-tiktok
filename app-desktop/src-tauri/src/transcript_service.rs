@@ -12,6 +12,10 @@ use tempfile::NamedTempFile;
 use uuid::Uuid;
 
 const TRANSCRIPT_PATH: &str = "subtitles/transcript.json";
+// Speech recognizers can split one repeated utterance at a timestamp boundary,
+// or produce slightly overlapping chunks. Bridge only tiny gaps so an actual
+// pause between two identical lines remains two separate transcript entries.
+const DUPLICATE_SEGMENT_MAX_GAP_SECONDS: f64 = 0.15;
 static TRANSCRIPT_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -318,7 +322,7 @@ pub fn extract_subtitle(
     if segments.is_empty() {
         return Err("Subtitle track không có cue văn bản hợp lệ.".to_string());
     }
-    segments.sort_by(|left, right| left.start.total_cmp(&right.start));
+    segments = merge_adjacent_duplicate_segments(segments);
     let transcript = Transcript {
         schema_version: 1,
         project_id: project_id.to_string(),
@@ -384,6 +388,52 @@ pub fn parse_srt_vtt(
         }
     }
     Ok(segments)
+}
+
+/// Merge consecutive, overlapping or immediately adjacent duplicate captions
+/// produced by ASR/OCR/subtitle extraction. The first segment keeps its ID and
+/// text; only its end time is extended to cover the merged interval.
+pub fn merge_adjacent_duplicate_segments(
+    mut segments: Vec<TranscriptSegment>,
+) -> Vec<TranscriptSegment> {
+    segments.sort_by(|left, right| {
+        left.start
+            .total_cmp(&right.start)
+            .then_with(|| left.end.total_cmp(&right.end))
+    });
+
+    let mut merged: Vec<TranscriptSegment> = Vec::with_capacity(segments.len());
+    for segment in segments {
+        let normalized_text = normalized_spoken_text(&segment.source);
+        let can_merge = merged.last().is_some_and(|previous| {
+            !normalized_text.is_empty()
+                && previous.source_type == segment.source_type
+                && previous.speaker_id == segment.speaker_id
+                && normalized_spoken_text(&previous.source) == normalized_text
+                && segment.start <= previous.end + DUPLICATE_SEGMENT_MAX_GAP_SECONDS
+        });
+
+        if can_merge {
+            if let Some(previous) = merged.last_mut() {
+                previous.end = previous.end.max(segment.end);
+            }
+        } else {
+            merged.push(segment);
+        }
+    }
+    merged
+}
+
+fn normalized_spoken_text(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+        .trim_end_matches(|character: char| {
+            character.is_ascii_punctuation()
+                || matches!(character, '。' | '！' | '？' | '，' | '、' | '；' | '：' | '…')
+        })
+        .to_string()
 }
 
 pub fn validate_transcript(transcript: &Transcript, duration: Option<f64>) -> Result<(), String> {
