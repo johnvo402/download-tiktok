@@ -221,11 +221,21 @@ pub struct BlurRegion {
     pub enabled: bool,
     pub strength: f64,
     #[serde(default)]
+    pub effect: BlurEffect,
+    #[serde(default)]
     pub role: BlurRegionRole,
     #[serde(default)]
     pub edge_blend: u8,
     #[serde(default)]
     pub pixel_noise: u8,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum BlurEffect {
+    #[default]
+    Blur,
+    AiTextRemoval,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -420,6 +430,7 @@ pub struct ProjectListResponse {
     pub warnings: Vec<String>,
 }
 
+#[derive(Clone)]
 pub struct ProjectStore {
     projects_root: PathBuf,
 }

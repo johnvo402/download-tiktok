@@ -21,6 +21,17 @@ export const [projectLoadWarnings, setProjectLoadWarnings] = createSignal<string
 export const [projectsLoading, setProjectsLoading] = createSignal(true);
 export const [appStartupReady, setAppStartupReady] = createSignal(false);
 
+export interface AiRemovalPreview {
+  projectId: string;
+  regionId: string;
+  path: string;
+  startSeconds: number;
+  endSeconds: number;
+  fps: number;
+}
+
+export const [aiRemovalPreview, setAiRemovalPreview] = createSignal<AiRemovalPreview>();
+
 export type OverlaySelection =
   | { type: 'blur'; id: string }
   | { type: 'logo'; id: string }

@@ -16,6 +16,7 @@ mod runtime_paths;
 mod settings_service;
 mod storage_service;
 mod transcript_service;
+mod text_removal_service;
 mod translation_service;
 mod tts_service;
 mod video_service;
@@ -84,6 +85,9 @@ pub fn run() {
             commands::save_transcript,
             commands::get_asr_environment,
             commands::get_ocr_environment,
+            commands::get_text_removal_environment,
+            commands::install_text_removal_model,
+            commands::start_text_removal_preview,
             commands::install_ocr_runtime,
             commands::install_ocr_model,
             commands::remove_ocr_model,
@@ -127,6 +131,7 @@ pub fn run() {
             commands::update_project_preferences,
             commands::update_transcript_settings,
             commands::validate_export,
+            commands::get_export_capabilities,
             commands::start_export,
             commands::cancel_export,
             commands::get_export_history,

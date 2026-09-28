@@ -3,6 +3,8 @@ import { listen } from '@tauri-apps/api/event';
 
 export interface ExportOptions {
   quality: 'fast' | 'balanced' | 'high';
+  encoder?: 'cpu' | 'nvidia';
+  videoBitrateKbps?: number | null;
   applyBlur: boolean;
   applyLogos: boolean;
   burnSubtitles: boolean;
@@ -41,6 +43,11 @@ export interface ExportValidation {
   expectedAudio: boolean;
 }
 
+export interface ExportCapabilities {
+  nvidiaEncoderAvailable: boolean;
+  nvidiaMessage: string;
+}
+
 export interface ExportHistoryEntry {
   id: string;
   projectId: string;
@@ -67,6 +74,7 @@ export interface ExportJobEvent {
 }
 
 export const renderService = {
+  capabilities: () => invoke<ExportCapabilities>('get_export_capabilities'),
   validate: (projectId: string, options: ExportOptions) => invoke<ExportValidation>('validate_export', { projectId, options }),
   start: (projectId: string, options: ExportOptions) => invoke<string>('start_export', { projectId, options }),
   cancel: (jobId: string) => invoke<boolean>('cancel_export', { jobId }),

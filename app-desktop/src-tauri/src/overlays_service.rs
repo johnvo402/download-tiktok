@@ -566,6 +566,7 @@ mod tests {
             end_ms: None,
             enabled: true,
             strength: 28.0,
+            effect: Default::default(),
             role: crate::project_service::BlurRegionRole::Generic,
             edge_blend: 0,
             pixel_noise: 0,

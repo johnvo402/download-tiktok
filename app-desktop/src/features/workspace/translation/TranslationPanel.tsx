@@ -3,14 +3,15 @@ import {
   AlertTriangle, AudioLines, Check, FileImage, FileText, Languages, LoaderCircle,
   Plus, RefreshCw, Search, Settings2, Sparkles, Trash2, Volume2, X, ImagePlus,
 } from 'lucide-solid';
-import { activeWorkspacePanelTab, batchProcessingActive, blurRegionPicking, currentProject, currentTranscript, ocrRegionEditing, ocrRegionPicking, playbackTime, projectSaveState, selectedOverlay, segmentVoicePreviewActive, setActiveWorkspacePanelTab, setBlurRegionPicking, setCurrentProject, setCurrentTranscript, setNotice, setOcrRegionEditing, setOcrRegionPicking, setProjectSaveState, setSeekRequest, setSegmentVoicePreviewActive, setSelectedOverlay, setTtsEvent, transcriptionEvent, translationEvent, ttsEvent, videoPlaying } from '../../../app/project-state';
+import { activeWorkspacePanelTab, batchProcessingActive, blurRegionPicking, currentProject, currentTranscript, ocrRegionEditing, ocrRegionPicking, playbackTime, projectSaveState, selectedOverlay, segmentVoicePreviewActive, setActiveWorkspacePanelTab, setAiRemovalPreview, setBlurRegionPicking, setCurrentProject, setCurrentTranscript, setNotice, setOcrRegionEditing, setOcrRegionPicking, setProjectSaveState, setSeekRequest, setSegmentVoicePreviewActive, setSelectedOverlay, setTtsEvent, transcriptionEvent, translationEvent, ttsEvent, videoPlaying } from '../../../app/project-state';
 import { projectService } from '../../../app/services/project-service';
 import { translationService } from '../../../app/services/translation-service';
 import { ttsService } from '../../../app/services/tts-service';
 import { dialogueService, type DialogueEnvironment } from '../../../app/services/dialogue-service';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import type { SubtitleTrackMetadata } from '../../projects/types';
-import type { AsrEnvironment, OcrEnvironment, Transcript, TranscriptSegment } from '../../transcript/types';
+import type { AsrEnvironment, OcrEnvironment, TextRemovalEnvironment, Transcript, TranscriptSegment } from '../../transcript/types';
 import type { AppSettings } from '../../../app/services/translation-service';
 import { compareSegmentTime, formatTimestamp, ttsWindowEnd, validateTranscript } from '../../transcript/transcript-utils';
 import Modal from '../../../shared/components/Modal';
@@ -87,6 +88,14 @@ export default function TranslationPanel() {
   const [checkingAsr, setCheckingAsr] = createSignal(false);
   const [asrEnvironment, setAsrEnvironment] = createSignal<AsrEnvironment>();
   const [ocrEnvironment, setOcrEnvironment] = createSignal<OcrEnvironment>();
+  const [textRemovalEnvironment, setTextRemovalEnvironment] = createSignal<TextRemovalEnvironment>();
+  const [textRemovalEnvironmentLoading, setTextRemovalEnvironmentLoading] = createSignal(false);
+  const [installingTextRemovalModel, setInstallingTextRemovalModel] = createSignal(false);
+  const [textRemovalProgress, setTextRemovalProgress] = createSignal({ progress: 0, downloadedBytes: 0, totalBytes: 208_044_816, message: '' });
+  const [textRemovalEnvironmentError, setTextRemovalEnvironmentError] = createSignal('');
+  const [textRemovalPreviewJobId, setTextRemovalPreviewJobId] = createSignal<string>();
+  const [textRemovalPreviewProgress, setTextRemovalPreviewProgress] = createSignal({ progress: 0, message: '' });
+  const [cancelingTextRemovalPreview, setCancelingTextRemovalPreview] = createSignal(false);
   const [asrMessage, setAsrMessage] = createSignal('');
   const [asrStage, setAsrStage] = createSignal('');
   const [asrProgress, setAsrProgress] = createSignal<number>();
@@ -116,14 +125,45 @@ export default function TranslationPanel() {
   let saveRevision = 0;
   let saving = false;
   let dubbingSaveTimer: number | undefined;
+  let dubbingSaveRevision = 0;
   let previewAudio: HTMLAudioElement | undefined;
   let lastTerminalEvent = '';
   let lastTranslationTerminalEvent = '';
   let lastTtsTerminalEvent = '';
+  let lastTextRemovalPreviewTerminalId: string | undefined;
+  let stopTextRemovalProgress: (() => void) | undefined;
+  let stopTextRemovalPreviewProgress: (() => void) | undefined;
 
   onMount(() => {
     void translationService.getSettings().then((response) => setTtsSettings(response.settings.tts)).catch(() => undefined);
     void dialogueService.environment().then(setDialogueEnvironment).catch(() => setDialogueEnvironment(undefined));
+    void listen<{ progress: number; downloadedBytes: number; totalBytes: number; message: string }>('text-removal-model-progress', (event) => {
+      const payload = event.payload;
+      setTextRemovalProgress({
+        progress: Number.isFinite(payload.progress) ? payload.progress : 0,
+        downloadedBytes: Number.isFinite(payload.downloadedBytes) ? payload.downloadedBytes : 0,
+        totalBytes: Number.isFinite(payload.totalBytes) ? payload.totalBytes : 208_044_816,
+        message: payload.message ?? 'Đang tải mô hình…',
+      });
+    }).then((unlisten) => { stopTextRemovalProgress = unlisten; });
+    void listen<{ projectId: string; jobId: string; status: string; progress: number; message: string; output: string | null; startSeconds: number; endSeconds: number; regionId: string; fps: number }>('text-removal-preview-progress', (event) => {
+      const payload = event.payload;
+      if (payload.projectId !== currentProject()?.id || (textRemovalPreviewJobId() && payload.jobId !== textRemovalPreviewJobId())) return;
+      if (!textRemovalPreviewJobId()) setTextRemovalPreviewJobId(payload.jobId);
+      if (payload.status === 'completed' || payload.status === 'failed' || payload.status === 'cancelled') lastTextRemovalPreviewTerminalId = payload.jobId;
+      setTextRemovalPreviewProgress({ progress: Number.isFinite(payload.progress) ? payload.progress : 0, message: payload.message ?? 'Đang xử lý preview…' });
+      if (payload.status === 'completed' && payload.output) {
+        setAiRemovalPreview({ projectId: payload.projectId, regionId: payload.regionId, path: payload.output, startSeconds: payload.startSeconds, endSeconds: payload.endSeconds, fps: payload.fps });
+        setTextRemovalPreviewJobId(undefined);
+        setNotice({ kind: 'success', message: 'Preview đã xử lý xong. Đang phát đoạn đã xóa chữ bằng AI.' });
+      } else if (payload.status === 'failed') {
+        setTextRemovalPreviewJobId(undefined);
+        setNotice({ kind: 'error', message: payload.message || 'Không thể xử lý preview xóa chữ.' });
+      } else if (payload.status === 'cancelled') {
+        setTextRemovalPreviewJobId(undefined);
+        setNotice({ kind: 'info', message: 'Đã hủy xử lý preview xóa chữ.' });
+      }
+    }).then((unlisten) => { stopTextRemovalPreviewProgress = unlisten; });
   });
 
   const dialogueReductionReady = () => !!dialogueEnvironment()?.runtimeInstalled && !!dialogueEnvironment()?.modelCached;
@@ -287,6 +327,8 @@ export default function TranslationPanel() {
     window.clearTimeout(saveTimer);
     window.clearTimeout(dubbingSaveTimer);
     previewAudio?.pause();
+    stopTextRemovalProgress?.();
+    stopTextRemovalPreviewProgress?.();
     setSegmentVoicePreviewActive(false);
   });
 
@@ -616,6 +658,64 @@ export default function TranslationPanel() {
     const selected = selectedOverlay();
     return selected?.type === 'blur' ? currentProject()?.blurRegions.find((item) => item.id === selected.id) : undefined;
   };
+  const refreshTextRemovalEnvironment = async () => {
+    setTextRemovalEnvironmentLoading(true);
+    setTextRemovalEnvironmentError('');
+    try {
+      setTextRemovalEnvironment(await projectService.getTextRemovalEnvironment());
+    } catch (error) {
+      setTextRemovalEnvironmentError(error instanceof Error ? error.message : 'Không thể kiểm tra mô hình xóa chữ.');
+    } finally {
+      setTextRemovalEnvironmentLoading(false);
+    }
+  };
+  const installTextRemovalModel = async () => {
+    setInstallingTextRemovalModel(true);
+    setTextRemovalProgress((value) => ({ ...value, progress: 0, downloadedBytes: 0, message: 'Đang kết nối…' }));
+    try {
+      await projectService.installTextRemovalModel();
+      setNotice({ kind: 'success', message: 'Đã cài mô hình xóa chữ bằng AI.' });
+      await refreshTextRemovalEnvironment();
+    } catch (error) {
+      setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể cài mô hình xóa chữ.' });
+    } finally {
+      setInstallingTextRemovalModel(false);
+    }
+  };
+
+  const startTextRemovalPreview = async (regionId: string) => {
+    const project = currentProject();
+    if (!project || !textRemovalEnvironment()?.modelInstalled || !textRemovalEnvironment()?.ocrReady) return;
+    setTextRemovalPreviewProgress({ progress: 0, message: 'Đang đưa vào hàng đợi…' });
+    setCancelingTextRemovalPreview(false);
+    try {
+      const id = await projectService.startTextRemovalPreview(project.id, regionId, playbackTime());
+      if (lastTextRemovalPreviewTerminalId !== id) {
+        setTextRemovalPreviewJobId(id);
+        setNotice({ kind: 'info', message: 'Đang xử lý đoạn preview quanh vị trí phát hiện tại.' });
+      }
+    } catch (error) {
+      setTextRemovalPreviewJobId(undefined);
+      setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể bắt đầu xử lý preview xóa chữ.' });
+    }
+  };
+
+  const cancelTextRemovalPreview = async () => {
+    const id = textRemovalPreviewJobId();
+    if (!id) return;
+    setCancelingTextRemovalPreview(true);
+    try {
+      await projectService.cancelTextRemovalPreview(id);
+    } catch (error) {
+      setCancelingTextRemovalPreview(false);
+      setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể hủy xử lý preview.' });
+    }
+  };
+  createEffect(on(
+    () => selectedBlur()?.effect === 'aiTextRemoval' ? selectedBlur()?.id : undefined,
+    (id) => { if (id) void refreshTextRemovalEnvironment(); },
+    { defer: true },
+  ));
   const selectedLogo = () => {
     const selected = selectedOverlay();
     return selected?.type === 'logo' ? currentProject()?.logos.find((item) => item.id === selected.id) : undefined;
@@ -653,6 +753,7 @@ export default function TranslationPanel() {
   const updateDubbingSettings = (changes: Partial<NonNullable<ReturnType<typeof currentProject>>['dubbing']>) => {
     const project = currentProject();
     if (!project) return;
+    const revision = ++dubbingSaveRevision;
     const dubbing = { ...project.dubbing, ...changes };
     setCurrentProject({ ...project, dubbing });
     window.clearTimeout(dubbingSaveTimer);
@@ -660,8 +761,13 @@ export default function TranslationPanel() {
       const latest = currentProject();
       if (!latest || latest.id !== project.id) return;
       void projectService.updateDubbingSettings(project.id, latest.dubbing)
-        .then((updated) => setCurrentProject((value) => value?.id === project.id ? { ...value, dubbing: updated.dubbing, updatedAt: updated.updatedAt } : value))
-        .catch((error: unknown) => setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể lưu cấu hình lồng tiếng.' }));
+        .then((updated) => {
+          if (revision !== dubbingSaveRevision) return;
+          setCurrentProject((value) => value?.id === project.id ? { ...value, dubbing: updated.dubbing, updatedAt: updated.updatedAt } : value);
+        })
+        .catch((error: unknown) => {
+          if (revision === dubbingSaveRevision) setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể lưu cấu hình lồng tiếng.' });
+        });
     }, 400);
   };
 
@@ -669,13 +775,16 @@ export default function TranslationPanel() {
     const project = currentProject();
     if (!project || ttsRunning()) return;
     window.clearTimeout(dubbingSaveTimer);
+    const revision = ++dubbingSaveRevision;
     const dubbing = { ...project.dubbing, fitMode: 'fit' as const };
     setCurrentProject({ ...project, dubbing });
     try {
       const updated = await projectService.updateDubbingSettings(project.id, dubbing);
+      if (revision !== dubbingSaveRevision) return;
       setCurrentProject((value) => value?.id === project.id ? { ...value, dubbing: updated.dubbing, updatedAt: updated.updatedAt } : value);
       await launchTts('segment', [segmentId]);
     } catch (error) {
+      if (revision !== dubbingSaveRevision) return;
       setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể lưu chế độ Fit.' });
     }
   };
@@ -1062,7 +1171,7 @@ export default function TranslationPanel() {
             <div class="resource-subsection"><span class="resource-subtitle">BLUR REGIONS <button class="inline-add-button" type="button" onClick={() => setNotice({ kind: 'info', message: 'Dùng nút Blur trên thanh công cụ preview để thêm vùng blur.' })}><Plus size={12} /> Thêm trên preview</button></span>
               <Show when={currentProject()?.blurRegions.length} fallback={<div class="media-inline-empty">Chưa có vùng blur.</div>}>
                 <For each={currentProject()?.blurRegions ?? []}>{(region) => <div class="overlay-resource-row">
-                  <button class="overlay-resource-select" type="button" onClick={() => { setSelectedOverlay({ type: 'blur', id: region.id }); setActiveWorkspacePanelTab('properties'); }}><span class="overlay-resource-chip blur-chip" /> <span><strong>{region.role === 'subtitle' ? 'Subtitle Blur' : 'Vùng blur'}</strong><small>{region.enabled ? `Mạnh ${Math.round(region.strength)}%` : 'Đang tắt'}</small></span></button>
+                  <button class="overlay-resource-select" type="button" onClick={() => { setSelectedOverlay({ type: 'blur', id: region.id }); setActiveWorkspacePanelTab('properties'); }}><span class="overlay-resource-chip blur-chip" /> <span><strong>{region.effect === 'aiTextRemoval' ? region.role === 'subtitle' ? 'Vùng phụ đề · AI' : 'Vùng xóa chữ bằng AI' : region.role === 'subtitle' ? 'Subtitle Blur' : 'Vùng blur'}</strong><small>{region.enabled ? region.effect === 'aiTextRemoval' ? 'AI text removal' : `Mạnh ${Math.round(region.strength)}%` : 'Đang tắt'}</small></span></button>
                   <label class="overlay-resource-toggle" title="Bật/tắt vùng blur"><input aria-label="Bật vùng blur" type="checkbox" checked={region.enabled} onChange={(event) => updateBlurSettings(region.id, { enabled: event.currentTarget.checked })} /></label>
                 </div>}</For>
               </Show>
@@ -1082,13 +1191,54 @@ export default function TranslationPanel() {
       <Show when={activeWorkspacePanelTab() === 'properties'}>
         <div class="properties-panel-content" role="tabpanel">
           <div class="properties-header"><span class="properties-icon"><Settings2 size={16} /></span><div><span>PROJECT SETTINGS</span><h3>Thuộc tính</h3></div></div>
-          <Show when={selectedBlur()}>{(region) => <div class="property-group overlay-property-group"><div class="property-group-title"><span>VÙNG BLUR</span><span class="property-status" classList={{ 'status-off': !region().enabled }}>{region().enabled ? 'BẬT' : 'TẮT'}</span></div>
-            <label class="property-control-row"><span>Loại vùng</span><select class="settings-select" value={region().role ?? 'generic'} onChange={(event) => updateBlurSettings(region().id, { role: event.currentTarget.value as 'generic' | 'subtitle' })}><option value="generic">Generic Blur</option><option value="subtitle">Subtitle Blur</option></select></label>
+          <Show when={selectedBlur()}>{(region) => <div class="property-group overlay-property-group"><div class="property-group-title"><span>{region().effect === 'aiTextRemoval' ? 'XÓA CHỮ BẰNG AI' : 'VÙNG BLUR'}</span><span class="property-status" classList={{ 'status-off': !region().enabled }}>{region().enabled ? 'BẬT' : 'TẮT'}</span></div>
+            <label class="property-control-row"><span>Loại vùng</span><select class="settings-select" value={region().role ?? 'generic'} onChange={(event) => updateBlurSettings(region().id, { role: event.currentTarget.value as 'generic' | 'subtitle' })}><option value="generic">{region().effect === 'aiTextRemoval' ? 'Vùng xóa chữ' : 'Generic Blur'}</option><option value="subtitle">{region().effect === 'aiTextRemoval' ? 'Subtitle Region' : 'Subtitle Blur'}</option></select></label>
             <Show when={region().role !== 'subtitle' && currentProject()?.subtitle.enabled}><p class="overlay-selection-hint">Chọn Subtitle Blur để chèn bản dịch vào ngay trong vùng blur này khi preview và export.</p></Show>
+            <label class="property-control-row"><span>Phương pháp</span><select class="settings-select" value={region().effect ?? 'blur'} onChange={(event) => updateBlurSettings(region().id, { effect: event.currentTarget.value as 'blur' | 'aiTextRemoval' })}><option value="blur">Làm mờ</option><option value="aiTextRemoval">Xóa chữ bằng AI</option></select></label>
             <label class="property-control-row"><span>Hiển thị</span><input type="checkbox" checked={region().enabled} onChange={(event) => updateBlurSettings(region().id, { enabled: event.currentTarget.checked })} /></label>
-            <label class="property-control-row"><span>Độ mạnh <small>{Math.round(region().strength)}%</small></span><input type="range" min="1" max="100" value={region().strength} onInput={(event) => updateBlurSettings(region().id, { strength: Number(event.currentTarget.value) })} /></label>
-            <label class="property-control-row"><span>Hòa mềm viền <small>{region().edgeBlend ?? 0}%</small></span><input type="range" min="0" max="50" value={region().edgeBlend ?? 0} onInput={(event) => updateBlurSettings(region().id, { edgeBlend: Number(event.currentTarget.value) })} /></label>
-            <label class="property-control-row"><span>Nhiễu hạt <small>{region().pixelNoise ?? 0}%</small></span><input type="range" min="0" max="100" value={region().pixelNoise ?? 0} onInput={(event) => updateBlurSettings(region().id, { pixelNoise: Number(event.currentTarget.value) })} /></label>
+            <Show when={(region().effect ?? 'blur') === 'blur'}>
+              <label class="property-control-row"><span>Độ mạnh <small>{Math.round(region().strength)}%</small></span><input type="range" min="1" max="100" value={region().strength} onInput={(event) => updateBlurSettings(region().id, { strength: Number(event.currentTarget.value) })} /></label>
+              <label class="property-control-row"><span>Hòa mềm viền <small>{region().edgeBlend ?? 0}%</small></span><input type="range" min="0" max="50" value={region().edgeBlend ?? 0} onInput={(event) => updateBlurSettings(region().id, { edgeBlend: Number(event.currentTarget.value) })} /></label>
+              <label class="property-control-row"><span>Nhiễu hạt <small>{region().pixelNoise ?? 0}%</small></span><input type="range" min="0" max="100" value={region().pixelNoise ?? 0} onInput={(event) => updateBlurSettings(region().id, { pixelNoise: Number(event.currentTarget.value) })} /></label>
+            </Show>
+            <Show when={region().effect === 'aiTextRemoval'}>
+              <div class="overlay-selection-hint ai-removal-info">
+                <strong>OCR mask + LaMa AI + frame lân cận</strong>
+                <span>Nhận diện vùng chữ bằng OCR rồi dùng LaMa tái tạo nền. Có thể xử lý nhanh đoạn 3 giây quanh vị trí phát để xem ngay trên preview trước khi export.</span>
+                <Show when={textRemovalEnvironmentLoading()}><span class="ai-removal-state"><LoaderCircle size={12} class="spin" /> Đang kiểm tra thành phần…</span></Show>
+                <Show when={!textRemovalEnvironmentLoading() && textRemovalEnvironment()}>{(environment) => <>
+                  <span class="ai-removal-state" classList={{ 'ai-removal-ready': environment().modelInstalled && environment().ocrReady }}>
+                    {environment().modelInstalled ? `LaMa đã cài · ${environment().cudaAvailable ? 'NVIDIA' : 'CPU'}` : 'Cần tải mô hình LaMa'}
+                    {environment().ocrReady ? ` · RapidOCR ${environment().ocrModel} sẵn sàng` : ` · RapidOCR ${environment().ocrModel} chưa sẵn sàng`}
+                  </span>
+                  <Show when={!environment().modelInstalled}>
+                    <button class="button button-quiet ai-removal-download" type="button" disabled={installingTextRemovalModel()} onClick={() => void installTextRemovalModel()}>
+                      <Show when={installingTextRemovalModel()} fallback={<Sparkles size={13} />}><LoaderCircle size={13} class="spin" /></Show>
+                      {installingTextRemovalModel() ? 'Đang tải mô hình…' : `Tải mô hình · ${(environment().estimatedDownloadBytes / 1024 / 1024).toFixed(0)} MiB`}
+                    </button>
+                    <Show when={installingTextRemovalModel()}>
+                      <span>{textRemovalProgress().message} · {(textRemovalProgress().downloadedBytes / 1024 / 1024).toFixed(0)} / {(textRemovalProgress().totalBytes / 1024 / 1024).toFixed(0)} MiB</span>
+                      <div class="job-progress-track ai-removal-progress"><span style={{ width: `${Math.max(2, textRemovalProgress().progress * 100)}%` }} /></div>
+                    </Show>
+                  </Show>
+                  <Show when={!environment().ocrReady}><span>Cài runtime và model RapidOCR đã chọn trong Cài đặt → Nhận dạng lời thoại trước khi export.</span></Show>
+                  <Show when={environment().modelInstalled && environment().ocrReady}>
+                    <div class="ai-removal-preview-actions">
+                      <button class="button button-primary ai-removal-preview-button" type="button" disabled={!region().enabled || !!textRemovalPreviewJobId()} onClick={() => void startTextRemovalPreview(region().id)}>
+                        <Show when={textRemovalPreviewJobId()} fallback={<Sparkles size={14} />}><LoaderCircle size={14} class="spin" /></Show>
+                        {textRemovalPreviewJobId() ? 'Đang xử lý preview…' : 'Xóa sub'}
+                      </button>
+                      <Show when={textRemovalPreviewJobId()}><button class="button button-quiet" type="button" disabled={cancelingTextRemovalPreview()} onClick={() => void cancelTextRemovalPreview()}>{cancelingTextRemovalPreview() ? 'Đang hủy…' : 'Hủy'}</button></Show>
+                    </div>
+                    <Show when={textRemovalPreviewJobId()}>
+                      <span class="ai-removal-state" role="status">{textRemovalPreviewProgress().message} · {Math.round(textRemovalPreviewProgress().progress * 100)}%</span>
+                      <div class="job-progress-track ai-removal-progress"><span style={{ width: `${Math.max(2, textRemovalPreviewProgress().progress * 100)}%` }} /></div>
+                    </Show>
+                  </Show>
+                </>}</Show>
+                <Show when={textRemovalEnvironmentError()}><span class="ai-removal-error">{textRemovalEnvironmentError()}</span><button class="button button-quiet ai-removal-download" type="button" onClick={() => void refreshTextRemovalEnvironment()}>Kiểm tra lại</button></Show>
+              </div>
+            </Show>
             <div class="overlay-property-grid"><label>X <input type="number" min="0" max={Math.round((1 - region().width) * 100)} step="1" value={Math.round(region().x * 100)} onInput={(event) => updateBlurSettings(region().id, { x: Number(event.currentTarget.value) / 100 })} /></label><label>Y <input type="number" min="0" max={Math.round((1 - region().height) * 100)} step="1" value={Math.round(region().y * 100)} onInput={(event) => updateBlurSettings(region().id, { y: Number(event.currentTarget.value) / 100 })} /></label><label>Rộng <input type="number" min="2" max={Math.round((1 - region().x) * 100)} value={Math.round(region().width * 100)} onInput={(event) => updateBlurSettings(region().id, { width: Number(event.currentTarget.value) / 100 })} /></label><label>Cao <input type="number" min="2" max={Math.round((1 - region().y) * 100)} value={Math.round(region().height * 100)} onInput={(event) => updateBlurSettings(region().id, { height: Number(event.currentTarget.value) / 100 })} /></label></div>
             <button class="button button-danger overlay-delete-button" type="button" onClick={() => { const project = currentProject(); if (!project) return; updateVisualSettings({ blurRegions: project.blurRegions.filter((item) => item.id !== region().id) }, true); setSelectedOverlay(null); }}><Trash2 size={13} /> Xóa vùng blur</button>
           </div>}</Show>

@@ -1,4 +1,4 @@
-use crate::project_service::{BlurRegion, BlurRegionRole, Project, ProjectLogo, SubtitleSettings};
+use crate::project_service::{BlurEffect, BlurRegion, BlurRegionRole, Project, ProjectLogo, SubtitleSettings};
 use crate::transcript_service::Transcript;
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +15,7 @@ pub struct PixelRect {
 #[serde(rename_all = "camelCase")]
 pub struct BlurRenderSpec {
     pub id: String,
+    pub effect: BlurEffect,
     pub role: BlurRegionRole,
     pub rect: PixelRect,
     pub enabled: bool,
@@ -43,6 +44,10 @@ pub struct LogoRenderSpec {
 pub struct ExportOptions {
     #[serde(default = "default_quality")]
     pub quality: String,
+    #[serde(default = "default_encoder")]
+    pub encoder: String,
+    #[serde(default)]
+    pub video_bitrate_kbps: Option<u32>,
     #[serde(default = "default_true")]
     pub apply_blur: bool,
     #[serde(default = "default_true")]
@@ -76,6 +81,9 @@ pub struct ExportOptions {
 fn default_quality() -> String {
     "balanced".to_string()
 }
+fn default_encoder() -> String {
+    "cpu".to_string()
+}
 fn default_true() -> bool {
     true
 }
@@ -94,6 +102,8 @@ impl Default for ExportOptions {
     fn default() -> Self {
         Self {
             quality: default_quality(),
+            encoder: default_encoder(),
+            video_bitrate_kbps: None,
             apply_blur: true,
             apply_logos: true,
             burn_subtitles: true,
@@ -178,6 +188,7 @@ pub struct RenderSpecification {
     pub subtitle: SubtitleRenderSpec,
     pub audio: RenderAudioConfig,
     pub quality: String,
+    pub video_bitrate_kbps: Option<u32>,
     pub output: RenderOutputConfig,
 }
 
@@ -288,6 +299,12 @@ pub fn build_render_specification(
     if !["balanced", "high", "fast"].contains(&options.quality.as_str()) {
         return Err("Chất lượng export không hợp lệ.".into());
     }
+    if !["cpu", "nvidia"].contains(&options.encoder.as_str()) {
+        return Err("Bộ mã hóa video không hợp lệ.".into());
+    }
+    if options.video_bitrate_kbps.is_some_and(|bitrate| !(500..=50_000).contains(&bitrate)) {
+        return Err("Bitrate video phải nằm trong khoảng 500–50.000 kbps.".into());
+    }
     let blur_regions = project
         .blur_regions
         .iter()
@@ -331,9 +348,10 @@ pub fn build_render_specification(
             dialogue_reduction_amount: options.dialogue_reduction_amount,
         },
         quality: options.quality.clone(),
+        video_bitrate_kbps: options.video_bitrate_kbps,
         output: RenderOutputConfig {
             container: "mp4".into(),
-            video_codec: "libx264".into(),
+            video_codec: if options.encoder == "nvidia" { "h264_nvenc" } else { "libx264" }.into(),
             audio_codec: "aac".into(),
             pixel_format: "yuv420p".into(),
         },
@@ -348,6 +366,7 @@ fn blur_spec(
 ) -> Result<BlurRenderSpec, String> {
     Ok(BlurRenderSpec {
         id: region.id.clone(),
+        effect: region.effect,
         role: region.role,
         rect: normalized_rect_to_pixels(
             region.x,
@@ -359,7 +378,11 @@ fn blur_spec(
         )?,
         enabled: (options.apply_blur && region.enabled)
             || (options.enable_subtitle_blur_override && region.role == BlurRegionRole::Subtitle),
-        strength_px: ((region.strength / 4.0).round() as u32).clamp(1, 32),
+        // The editor's blur strength is expressed in source-video pixels (the preview
+        // scales it by the displayed/source height ratio). Dividing by four here made
+        // exported blur far weaker than the preview and allowed hard subtitles to show
+        // through even at 100%. Keep export in the same source-pixel scale.
+        strength_px: (region.strength.round() as u32).clamp(1, 100),
         edge_blend: region.edge_blend,
         pixel_noise: region.pixel_noise,
         start_ms: region.start_ms,
@@ -753,6 +776,7 @@ mod tests {
                 end_ms: None,
                 enabled: true,
                 strength: 24.0,
+                effect: Default::default(),
                 role: BlurRegionRole::Subtitle,
                 edge_blend: 12,
                 pixel_noise: 10,

@@ -150,7 +150,7 @@ pub fn cancel_unified_job(
         "transcribe" => asr_service::cancel_transcription(asr_jobs, job_id),
         "translate" => translation_service::cancel_translation(translation_jobs, job_id),
         "tts" => tts_service::cancel(&tts_jobs, &job_id),
-        "export" => render_service::cancel_export(&render_jobs, &job_id),
+        "export" | "text_removal_preview" => render_service::cancel_export(&render_jobs, &job_id),
         "video_merge" | "tiktok_download" | "tiktok_cookie_login" => video_tools_service::cancel(&video_tools_jobs, &job_id),
         _ => Err("Loại job này chưa hỗ trợ hủy từ hàng đợi.".into()),
     }
@@ -352,6 +352,13 @@ pub async fn validate_export(
     })
     .await
     .map_err(|error| format!("Không thể kiểm tra video export: {error}"))?
+}
+
+#[tauri::command]
+pub async fn get_export_capabilities() -> Result<render_service::ExportCapabilities, String> {
+    tauri::async_runtime::spawn_blocking(render_service::export_capabilities)
+        .await
+        .map_err(|error| format!("Không thể kiểm tra encoder export: {error}"))
 }
 
 #[tauri::command]
@@ -1161,6 +1168,44 @@ pub async fn get_ocr_environment(app: tauri::AppHandle, model: String) -> Result
     tauri::async_runtime::spawn_blocking(move || asr_service::get_ocr_environment(app, model))
         .await
         .map_err(|error| format!("Không thể kiểm tra môi trường OCR: {error}"))?
+}
+
+#[tauri::command]
+pub async fn get_text_removal_environment(app: tauri::AppHandle) -> Result<crate::text_removal_service::TextRemovalEnvironment, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::text_removal_service::environment(app))
+        .await
+        .map_err(|error| format!("Không thể kiểm tra mô hình xóa chữ: {error}"))?
+}
+
+#[tauri::command]
+pub async fn install_text_removal_model(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::text_removal_service::install_model(app))
+        .await
+        .map_err(|error| format!("Không thể tải mô hình xóa chữ: {error}"))?
+}
+
+#[tauri::command]
+pub async fn start_text_removal_preview(
+    app: tauri::AppHandle,
+    jobs: tauri::State<'_, render_service::RenderJobs>,
+    project_id: String,
+    region_id: String,
+    current_time: f64,
+) -> Result<String, String> {
+    let jobs = jobs.inner().clone();
+    let project_store = store(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::text_removal_service::start_preview(
+            app,
+            &jobs,
+            project_store,
+            project_id,
+            region_id,
+            current_time,
+        )
+    })
+    .await
+    .map_err(|error| format!("Không thể khởi chạy preview xóa chữ: {error}"))?
 }
 
 #[tauri::command]

@@ -317,15 +317,16 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
     <For each={currentProject()?.blurRegions ?? []}>{(region) => {
       const rect = () => blurDraftRect(region);
       const active = () => { const current = selectedOverlay(); return current?.type === 'blur' && current.id === region.id; };
+      const edgeFeather = () => region.strength >= 95 ? 0 : ((region.edgeBlend ?? 0) / 50) * 0.1;
       return <div
         class="overlay-object overlay-blur"
-        classList={{ selected: active(), disabled: !region.enabled }}
+        classList={{ selected: active(), disabled: !region.enabled, 'overlay-ai-remove': region.effect === 'aiTextRemoval' }}
         data-overlay-id={region.id}
         role="button"
         tabindex="0"
-        aria-label={`Vùng blur ${region.id.slice(0, 8)}${region.enabled ? '' : ', đang tắt'}`}
+        aria-label={`${region.effect === 'aiTextRemoval' ? 'Vùng xóa chữ AI' : 'Vùng blur'} ${region.id.slice(0, 8)}${region.enabled ? '' : ', đang tắt'}`}
         title="Kéo để di chuyển · góc phải dưới để đổi kích thước"
-        style={{ left: `${rect().x * 100}%`, top: `${rect().y * 100}%`, width: `${rect().width * 100}%`, height: `${rect().height * 100}%`, '--blur-strength': `${region.strength * (props.height / Math.max(props.videoHeight, 1))}px`, '--blur-edge-x': `${(region.edgeBlend ?? 0) * Math.min(rect().width, rect().height) / Math.max(rect().width, 0.0001)}%`, '--blur-edge-y': `${(region.edgeBlend ?? 0) * Math.min(rect().width, rect().height) / Math.max(rect().height, 0.0001)}%` }}
+        style={{ left: `${rect().x * 100}%`, top: `${rect().y * 100}%`, width: `${rect().width * 100}%`, height: `${rect().height * 100}%`, '--blur-strength': `${region.strength * 2 * (props.height / Math.max(props.videoHeight, 1))}px`, '--blur-edge-x': `${edgeFeather() * 100 * Math.min(rect().width, rect().height) / Math.max(rect().width, 0.0001)}%`, '--blur-edge-y': `${edgeFeather() * 100 * Math.min(rect().width, rect().height) / Math.max(rect().height, 0.0001)}%` }}
         onPointerDown={(event) => beginPointer(event, 'blur', region.id, 'move')}
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
@@ -333,7 +334,7 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
           if (event.key.startsWith('Arrow')) { event.preventDefault(); event.stopPropagation(); nudge('blur', region.id, event.key, event.shiftKey, event.currentTarget.classList.contains('resize-focused')); }
         }}
       >
-        <Show when={active()}><span class="overlay-label">Blur region</span><button class="overlay-resize-handle" type="button" aria-label="Đổi kích thước vùng blur" onPointerDown={(event) => beginPointer(event, 'blur', region.id, 'resize')} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key.startsWith('Arrow')) { event.preventDefault(); event.stopPropagation(); nudge('blur', region.id, event.key, event.shiftKey, true); } }} /></Show>
+        <Show when={active()}><span class="overlay-label">{region.effect === 'aiTextRemoval' ? 'AI text removal' : 'Blur region'}</span><button class="overlay-resize-handle" type="button" aria-label="Đổi kích thước vùng xử lý" onPointerDown={(event) => beginPointer(event, 'blur', region.id, 'resize')} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key.startsWith('Arrow')) { event.preventDefault(); event.stopPropagation(); nudge('blur', region.id, event.key, event.shiftKey, true); } }} /></Show>
       </div>;
     }}</For>
     <For each={currentProject()?.logos ?? []}>{(logo) => {

@@ -1,6 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { Project, ProjectListResponse, SubtitleTrackMetadata, TranscriptSettings } from '../../features/projects/types';
-import type { AsrEnvironment, OcrEnvironment, Transcript } from '../../features/transcript/types';
+import type { AsrEnvironment, OcrEnvironment, TextRemovalEnvironment, Transcript } from '../../features/transcript/types';
 
 function asUserMessage(error: unknown): Error {
   if (error instanceof Error) return error;
@@ -61,6 +61,10 @@ export const projectService = {
   updateTranscriptSettings: (projectId: string, settings: TranscriptSettings) => call<Project>('update_transcript_settings', { projectId, settings }),
   getAsrEnvironment: (model: string, alignmentLanguage?: string) => call<AsrEnvironment>('get_asr_environment', { model, ...(alignmentLanguage ? { alignmentLanguage } : {}) }),
   getOcrEnvironment: (model: 'tiny' | 'small' | 'medium' = 'tiny') => call<OcrEnvironment>('get_ocr_environment', { model }),
+  getTextRemovalEnvironment: () => call<TextRemovalEnvironment>('get_text_removal_environment'),
+  installTextRemovalModel: () => call<void>('install_text_removal_model'),
+  startTextRemovalPreview: (projectId: string, regionId: string, currentTime: number) => call<string>('start_text_removal_preview', { projectId, regionId, currentTime }),
+  cancelTextRemovalPreview: (jobId: string) => call<boolean>('cancel_export', { jobId }),
   installOcrRuntime: () => call<void>('install_ocr_runtime'),
   installOcrModel: (model: 'tiny' | 'small' | 'medium' = 'tiny') => call<void>('install_ocr_model', { model }),
   removeOcrModel: (model: 'tiny' | 'small' | 'medium' = 'tiny') => call<number>('remove_ocr_model', { model }),

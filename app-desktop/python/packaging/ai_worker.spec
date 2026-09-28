@@ -41,6 +41,7 @@ hiddenimports += [
     "worker.asr.service",
     "worker.tts.service",
     "worker.ocr.service",
+    "worker.text_removal.service",
     "worker.tts.providers",
     "worker.dialogue.service",
     "worker.tiktok_drama.service",

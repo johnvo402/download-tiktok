@@ -124,3 +124,13 @@ export interface OcrEnvironment {
   cudaAvailable: boolean;
   activeDevice: 'cpu' | 'cuda';
 }
+
+export interface TextRemovalEnvironment {
+  modelInstalled: boolean;
+  modelBytes: number;
+  estimatedDownloadBytes: number;
+  ocrReady: boolean;
+  ocrModel: 'tiny' | 'small' | 'medium';
+  ocrCudaAvailable: boolean;
+  cudaAvailable: boolean;
+}

@@ -1,4 +1,4 @@
-use crate::project_service::{BlurRegionRole, Project, ProjectStore};
+use crate::project_service::{BlurEffect, BlurRegionRole, Project, ProjectStore};
 use crate::render_spec::{self, ExportOptions, RenderSpecification};
 use crate::transcript_service::{self, Transcript, TranscriptTtsStatus};
 use crate::video_service::{resolve_project_file, resolve_video};
@@ -6,7 +6,7 @@ use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -81,6 +81,55 @@ pub struct ExportValidation {
     pub expected_audio: bool,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportCapabilities {
+    pub nvidia_encoder_available: bool,
+    pub nvidia_message: String,
+}
+
+pub fn export_capabilities() -> ExportCapabilities {
+    match probe_nvenc() {
+        Ok(()) => ExportCapabilities {
+            nvidia_encoder_available: true,
+            nvidia_message: "NVIDIA NVENC sẵn sàng.".into(),
+        },
+        Err(message) => ExportCapabilities {
+            nvidia_encoder_available: false,
+            nvidia_message: message,
+        },
+    }
+}
+
+fn probe_nvenc() -> Result<(), String> {
+    let mut command = crate::runtime_paths::ffmpeg_command()
+        .map_err(|error| format!("Không kiểm tra được NVIDIA NVENC: {error}"))?;
+    command.args([
+        "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+        "color=c=black:s=64x64:r=1:d=1", "-frames:v", "1", "-c:v", "h264_nvenc",
+        "-f", "null", "-",
+    ]);
+    hide_console_window(&mut command);
+    let result = command
+        .output()
+        .map_err(|error| format!("Không chạy được kiểm tra NVIDIA NVENC: {error}"))?;
+    if result.status.success() {
+        return Ok(());
+    }
+    let details = String::from_utf8_lossy(&result.stderr)
+        .lines()
+        .rev()
+        .take(3)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join(" ");
+    Err(format!(
+        "NVIDIA NVENC chưa sẵn sàng. Hãy cài/cập nhật driver NVIDIA hoặc chọn mã hóa CPU. {details}"
+    ))
+}
+
 pub fn has_active_project_job(jobs: &RenderJobs, project_id: &str) -> bool {
     jobs.inner
         .lock()
@@ -98,6 +147,9 @@ pub fn validate_export(
     options: &ExportOptions,
 ) -> Result<ExportValidation, String> {
     validate_export_options(options)?;
+    if options.encoder == "nvidia" {
+        probe_nvenc()?;
+    }
     resolve_export_directory(store, project_id, options.output_directory.as_deref())?;
     let (project, _transcript, spec, dubbing_count, expected_audio) =
         prepare(store, project_id, options)?;
@@ -139,6 +191,9 @@ pub fn start_export(
     project_id: String,
     options: ExportOptions,
 ) -> Result<String, String> {
+    if options.encoder == "nvidia" {
+        probe_nvenc()?;
+    }
     let _guard = jobs
         .start_lock
         .lock()
@@ -158,6 +213,9 @@ pub fn start_export(
     if project.source.video_path.is_none() {
         return Err("Dự án chưa có video nguồn.".into());
     }
+    if options.apply_blur && project.blur_regions.iter().any(|region| region.enabled && region.effect == BlurEffect::AiTextRemoval) {
+        crate::text_removal_service::require_ready(&app)?;
+    }
     // Resolve and validate all immutable project inputs before a background job is registered.
     resolve_export_directory(&store, &project_id, options.output_directory.as_deref())?;
     let (_, _, spec, _, _) = prepare(&store, &project_id, &options)?;
@@ -168,7 +226,7 @@ pub fn start_export(
         project_id.clone(),
         project.name.clone(),
         "export",
-        &["cpu", "ffmpeg", "disk"],
+        if options.encoder == "nvidia" { &["gpu", "cpu", "ffmpeg", "disk"] } else { &["cpu", "ffmpeg", "disk"] },
         serde_json::to_value(&options).ok(),
     );
     let state = Arc::new(AtomicU8::new(JOB_RUNNING));
@@ -447,6 +505,15 @@ fn prepare(
 
 fn validate_export_options(options: &ExportOptions) -> Result<(), String> {
     validate_output_file_name(&options.output_file_name)?;
+    if !["cpu", "nvidia"].contains(&options.encoder.as_str()) {
+        return Err("Bộ mã hóa video không hợp lệ.".into());
+    }
+    if options
+        .video_bitrate_kbps
+        .is_some_and(|bitrate| !(500..=50_000).contains(&bitrate))
+    {
+        return Err("Bitrate video phải nằm trong khoảng 500–50.000 kbps.".into());
+    }
     if ![
         options.original_volume,
         options.dubbed_volume,
@@ -642,13 +709,34 @@ fn run_export_inner(
             .map_err(|error| format!("Không thể tạo phụ đề ASS: {error}"))?;
     }
     let source_duration = spec.duration;
+    let ai_patches = crate::text_removal_service::prepare_export_patches(
+        app,
+        &spec,
+        &source_path,
+        &render_dir,
+        state,
+        |progress, message| {
+            emit_event(app, event(
+                project_id,
+                job_id,
+                "running",
+                progress,
+                started.elapsed().as_secs_f64(),
+                source_duration,
+                None,
+                None,
+                message,
+                spec.subtitle.warnings.clone(),
+            ));
+        },
+    )?;
     let dialogue_stem = if options.dialogue_reduction {
         prepare_dialogue_stem(app, store, project_id, &project, &source_path, &render_dir, job_id, source_duration, started, state)?
     } else {
         None
     };
     let (graph, dub_items, logo_paths, audio_expected) =
-        build_filtergraph(store, project_id, &transcript, &spec, options, &ass_path, dialogue_stem.as_deref())?;
+        build_filtergraph(store, project_id, &transcript, &spec, options, &ass_path, dialogue_stem.as_deref(), &ai_patches)?;
     let filter_path = render_dir.join("filtergraph.txt");
     fs::write(&filter_path, &graph)
         .map_err(|error| format!("Không thể ghi filtergraph: {error}"))?;
@@ -670,6 +758,7 @@ fn run_export_inner(
         &source_path,
         &dub_items,
         &logo_paths,
+        &ai_patches,
         dialogue_stem.as_deref(),
         &filter_path,
         &staging_path,
@@ -686,11 +775,27 @@ fn run_export_inner(
         .stdout
         .take()
         .ok_or("Không đọc được tiến trình FFmpeg.")?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or("Không đọc được thông báo lỗi từ FFmpeg.")?;
     let (tx, rx) = mpsc::channel::<String>();
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines().flatten() {
             if tx.send(line).is_err() {
                 break;
+            }
+        }
+    });
+    let stderr_tail = Arc::new(Mutex::new(VecDeque::<String>::new()));
+    let stderr_tail_reader = stderr_tail.clone();
+    let stderr_reader = thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().flatten() {
+            if let Ok(mut tail) = stderr_tail_reader.lock() {
+                tail.push_back(line);
+                while tail.len() > 16 {
+                    tail.pop_front();
+                }
             }
         }
     });
@@ -701,6 +806,7 @@ fn run_export_inner(
         if state.load(Ordering::SeqCst) == JOB_CANCELLED {
             let _ = child.kill();
             let _ = child.wait();
+            let _ = stderr_reader.join();
             let _ = fs::remove_file(&staging_path);
             return Err("Đã hủy export.".into());
         }
@@ -713,7 +819,8 @@ fn run_export_inner(
                     speed = value.trim_end_matches('x').parse().ok();
                 }
                 if key == "progress" && last_emit.elapsed() >= Duration::from_millis(250) {
-                    let percent = (out_seconds / source_duration).clamp(0.0, 0.995);
+                    let encode_percent = (out_seconds / source_duration).clamp(0.0, 0.995);
+                    let percent = if ai_patches.is_empty() { encode_percent } else { 0.15 + encode_percent * 0.845 };
                     emit_event(
                         app,
                         event(
@@ -738,12 +845,20 @@ fn run_export_inner(
             .map_err(|error| format!("Không thể theo dõi FFmpeg: {error}"))?
         {
             if !status.success() {
+                let _ = stderr_reader.join();
                 let _ = fs::remove_file(&staging_path);
-                return Err(
-                    "FFmpeg render thất bại. Kiểm tra codec, vùng blur và tệp media rồi thử lại."
-                        .into(),
-                );
+                let details = stderr_tail
+                    .lock()
+                    .map(|tail| tail.iter().rev().cloned().collect::<Vec<_>>().join(" "))
+                    .unwrap_or_default();
+                let details: String = details.chars().take(900).collect();
+                return Err(if details.is_empty() {
+                    "FFmpeg render thất bại. Kiểm tra codec, vùng blur và tệp media rồi thử lại.".into()
+                } else {
+                    format!("FFmpeg render thất bại: {details}")
+                });
             }
+            let _ = stderr_reader.join();
             break;
         }
         thread::sleep(Duration::from_millis(80));
@@ -877,6 +992,7 @@ fn build_filtergraph(
     options: &ExportOptions,
     ass_path: &Path,
     dialogue_stem: Option<&Path>,
+    ai_patches: &[crate::text_removal_service::AiTextRemovalPatch],
 ) -> Result<(String, Vec<(PathBuf, f64, f64, String)>, Vec<PathBuf>, bool), String> {
     let dub_items = resolve_dubbing(store, project_id, transcript, options.include_dubbing)?;
     let logos: Vec<PathBuf> = if options.apply_logos {
@@ -890,8 +1006,8 @@ fn build_filtergraph(
     };
     let audio_expected =
         spec.audio.include_original || (spec.audio.include_dubbing && !dub_items.is_empty());
-    let dialogue_input = dialogue_stem.map(|_| 1 + dub_items.len() + logos.len());
-    let mut graph = build_video_filtergraph(spec, options, ass_path, dub_items.len());
+    let dialogue_input = dialogue_stem.map(|_| 1 + dub_items.len() + logos.len() + ai_patches.len());
+    let mut graph = build_video_filtergraph(spec, options, ass_path, dub_items.len(), ai_patches);
     graph.push_str(&build_audio_filtergraph(
         &spec.audio,
         &dub_items,
@@ -908,11 +1024,22 @@ fn build_video_filtergraph(
     options: &ExportOptions,
     ass_path: &Path,
     dub_count: usize,
+    ai_patches: &[crate::text_removal_service::AiTextRemovalPatch],
 ) -> String {
     let mut graph = String::new();
     let mut current = "0:v:0".to_string();
     let mut stage = 0usize;
-    for region in spec.blur_regions.iter().filter(|region| region.enabled) {
+    let logo_input_count = spec.logos.iter().filter(|logo| logo.enabled && options.apply_logos).count();
+    for (index, patch) in ai_patches.iter().enumerate() {
+        let output = format!("vclean{index}");
+        let input_index = 1 + dub_count + logo_input_count + index;
+        graph.push_str(&format!(
+            "[{current}][{input_index}:v]overlay={}:{}:eof_action=pass:enable='between(t,{:.6},{:.6})'[{output}];",
+            patch.rect.x, patch.rect.y, patch.start_seconds, patch.end_seconds
+        ));
+        current = output;
+    }
+    for region in spec.blur_regions.iter().filter(|region| region.enabled && region.effect == BlurEffect::Blur) {
         let rect = even_rect(region.rect, spec.width, spec.height);
         let base = format!("vbase{stage}");
         let source = format!("vsrc{stage}");
@@ -922,20 +1049,28 @@ fn build_video_filtergraph(
         let blurred = format!("vblur{stage}");
         let merged = format!("vmerged{stage}");
         let output = format!("vblurout{stage}");
-        graph.push_str(&format!("[{current}]split=2[{base}][{source}];[{source}]split=2[{original_source}][{blur_source}];[{original_source}]crop={}:{}:{}:{},format=yuv420p[{original}];[{blur_source}]crop={}:{}:{}:{},boxblur={}:2{}[{blurred}];", rect.width, rect.height, rect.x, rect.y, rect.width, rect.height, rect.x, rect.y, region.strength_px, if region.pixel_noise > 0 { format!(",noise=alls={}:allf=t+u", region.pixel_noise) } else { String::new() }));
-        if region.edge_blend > 0 {
-            // Feather radius is a percentage of the shorter blur-region side. The mask
-            // blends the original crop back in at all four edges, so noise and blur fade
-            // together instead of creating a hard rectangular seam.
-            let feather = ((rect.width.min(rect.height) as f64 * region.edge_blend as f64 / 100.0)
+        // Match the preview's CSS Gaussian blur. boxblur's radius is not equivalent
+        // to CSS blur() sigma, so using the same strength value made export visibly
+        // weaker and could leave hard subtitle glyphs readable. gblur uses the
+        // source-pixel strength directly and is not capped by half the crop height.
+        let blur_sigma = f64::from(region.strength_px.clamp(1, 100)) * 2.0;
+        let noise = if region.pixel_noise > 0 { format!(",noise=alls={}:allf=t+u", region.pixel_noise) } else { String::new() };
+        if region.edge_blend > 0 && region.strength_px < 95 {
+            // Edge softness only mixes original pixels into a narrow outer feather.
+            // At maximum strength remove that mix entirely so hard subtitles cannot
+            // remain readable near the region boundary.
+            let feather = ((rect.width.min(rect.height) as f64
+                * (region.edge_blend as f64 / 50.0).clamp(0.0, 1.0)
+                * 0.10)
                 .round() as u32)
                 .max(1);
             let merge_original = format!("vmergeorig{stage}");
             let mask_base = format!("vmaskbase{stage}");
             let mask = format!("vmask{stage}");
+            graph.push_str(&format!("[{current}]split=2[{base}][{source}];[{source}]split=2[{original_source}][{blur_source}];[{original_source}]crop={}:{}:{}:{},format=yuv420p[{original}];[{blur_source}]crop={}:{}:{}:{},format=yuv420p,gblur=sigma={:.1}:steps=2{noise}[{blurred}];", rect.width, rect.height, rect.x, rect.y, rect.width, rect.height, rect.x, rect.y, blur_sigma));
             graph.push_str(&format!("[{original}]split=2[{merge_original}][{mask_base}];[{mask_base}]format=gray,geq=lum='clip(min(min(X,W-X-1),min(Y,H-Y-1))*255/{feather},0,255)'[{mask}];[{merge_original}][{blurred}][{mask}]maskedmerge[{merged}];"));
         } else {
-            graph.push_str(&format!("[{blurred}]null[{merged}];"));
+            graph.push_str(&format!("[{current}]split=2[{base}][{blur_source}];[{blur_source}]crop={}:{}:{}:{},format=yuv420p,gblur=sigma={:.1}:steps=2{noise}[{merged}];", rect.width, rect.height, rect.x, rect.y, blur_sigma));
         }
         graph.push_str(&format!(
             "[{base}][{merged}]overlay={}:{}:enable='{}':eof_action=pass[{output}];",
@@ -1061,6 +1196,7 @@ fn build_ffmpeg_command(
     source: &Path,
     dubs: &[(PathBuf, f64, f64, String)],
     logos: &[PathBuf],
+    ai_patches: &[crate::text_removal_service::AiTextRemovalPatch],
     dialogue_stem: Option<&Path>,
     filter_script: &Path,
     output: &Path,
@@ -1076,6 +1212,15 @@ fn build_ffmpeg_command(
     for path in logos {
         command.args(["-loop", "1", "-i"]).arg(path);
     }
+    for patch in ai_patches {
+        command
+            .args(["-itsoffset"])
+            .arg(format!("{:.6}", patch.start_seconds))
+            .args(["-framerate"])
+            .arg(format!("{:.6}", patch.fps))
+            .arg("-i")
+            .arg(&patch.image_pattern);
+    }
     if let Some(path) = dialogue_stem { command.arg("-i").arg(path); }
     command
         .args(["-filter_complex_script"])
@@ -1086,15 +1231,24 @@ fn build_ffmpeg_command(
     } else {
         command.arg("-an");
     }
-    // `medium` improves compression efficiency over `faster`; CRF 23 keeps the
-    // H.264 quality default and avoids oversized output while retaining the source
-    // resolution. The separate fast/high profiles remain available.
     let (preset, crf) = encoder_settings(&spec.quality);
-    command
-        .arg("-c:v")
-        .arg(&spec.output.video_codec)
-        .args(["-preset", preset, "-crf", crf, "-pix_fmt"])
-        .arg(&spec.output.pixel_format)
+    command.arg("-c:v").arg(&spec.output.video_codec);
+    if let Some(bitrate_kbps) = spec.video_bitrate_kbps {
+        let bitrate = format!("{bitrate_kbps}k");
+        let maxrate = format!("{}k", ((bitrate_kbps as f64) * 1.15).round() as u32);
+        let bufsize = format!("{}k", bitrate_kbps.saturating_mul(2));
+        if spec.output.video_codec == "h264_nvenc" {
+            command.args(["-preset", nvenc_preset(&spec.quality), "-rc:v", "vbr"]);
+        } else {
+            command.args(["-preset", preset]);
+        }
+        command.args(["-b:v", &bitrate, "-maxrate", &maxrate, "-bufsize", &bufsize]);
+    } else if spec.output.video_codec == "h264_nvenc" {
+        command.args(["-preset", nvenc_preset(&spec.quality), "-rc:v", "vbr", "-cq:v", crf, "-b:v", "0"]);
+    } else {
+        command.args(["-preset", preset, "-crf", crf]);
+    }
+    command.args(["-pix_fmt", &spec.output.pixel_format])
         .arg("-c:a")
         .arg(&spec.output.audio_codec)
         .args([
@@ -1109,7 +1263,7 @@ fn build_ffmpeg_command(
         ])
         .arg(output)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     hide_console_window(&mut command);
     command
 }
@@ -1119,6 +1273,67 @@ fn encoder_settings(quality: &str) -> (&'static str, &'static str) {
         "fast" => ("ultrafast", "25"),
         "high" => ("slow", "18"),
         _ => ("medium", "23"),
+    }
+}
+
+pub(crate) fn register_auxiliary_job(
+    app: &AppHandle,
+    jobs: &RenderJobs,
+    job_id: String,
+    project_id: String,
+    project_name: String,
+    job_type: &str,
+    resources: &[&str],
+    state: Arc<AtomicU8>,
+) -> Result<(), String> {
+    let _guard = jobs
+        .start_lock
+        .lock()
+        .map_err(|_| "Không thể truy cập trạng thái tác vụ video.".to_string())?;
+    if jobs
+        .deleting
+        .lock()
+        .map_err(|_| "Không thể truy cập trạng thái tác vụ video.".to_string())?
+        .contains(&project_id)
+    {
+        return Err("Dự án đang được xóa.".into());
+    }
+    if has_active_project_job(jobs, &project_id) {
+        return Err("Một tác vụ video khác đang chạy trong dự án này.".into());
+    }
+    jobs.inner
+        .lock()
+        .map_err(|_| "Không thể truy cập trạng thái tác vụ video.".to_string())?
+        .insert(
+            job_id.clone(),
+            RenderJobEntry {
+                project_id: project_id.clone(),
+                state,
+            },
+        );
+    crate::job_service::register_job(
+        app,
+        job_id,
+        project_id,
+        project_name,
+        job_type,
+        resources,
+        None,
+    );
+    Ok(())
+}
+
+pub(crate) fn finish_auxiliary_job(jobs: &RenderJobs, job_id: &str) {
+    if let Ok(mut active) = jobs.inner.lock() {
+        active.remove(job_id);
+    }
+}
+
+fn nvenc_preset(quality: &str) -> &'static str {
+    match quality {
+        "fast" => "p2",
+        "high" => "p6",
+        _ => "p5",
     }
 }
 
@@ -1515,6 +1730,7 @@ mod tests {
                 end_ms: None,
                 enabled: true,
                 strength: 24.0,
+                effect: Default::default(),
                 role: BlurRegionRole::Subtitle,
                 edge_blend: 12,
                 pixel_noise: 10,
@@ -1629,9 +1845,9 @@ mod tests {
         let ass = project_root.join("cache/translated.ass");
         fs::write(&ass, render_spec::generate_ass(&spec).unwrap()).unwrap();
         let (graph, dubs, logos, expected_audio) =
-            build_filtergraph(&store, &project.id, &transcript, &spec, &options, &ass, None).unwrap();
+            build_filtergraph(&store, &project.id, &transcript, &spec, &options, &ass, None, &[]).unwrap();
         assert!(
-            graph.find("boxblur").unwrap() < graph.find("subtitles=").unwrap(),
+            graph.find("gblur=").unwrap() < graph.find("subtitles=").unwrap(),
             "blur must precede translated subtitles"
         );
         assert!(

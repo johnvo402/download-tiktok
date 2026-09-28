@@ -5,7 +5,7 @@ import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } 
 import {
   AlertTriangle, Film, Maximize2, Pause, Play, Plus, Volume1, Volume2, VolumeX,
 } from 'lucide-solid';
-import { blurRegionPicking, currentProject, currentTranscript, ocrRegionEditing, ocrRegionPicking, playbackTime, seekRequest, segmentVoicePreviewActive, setActiveWorkspacePanelTab, setBlurRegionPicking, setCurrentProject, setCurrentTranscript, setNotice, setOcrRegionEditing, setOcrRegionPicking, setPlaybackTime, setSeekRequest, setSelectedOverlay, setSegmentVoicePreviewActive, setVideoPlaying, selectedOverlay, videoPlaying } from '../../../app/project-state';
+import { aiRemovalPreview, blurRegionPicking, currentProject, currentTranscript, ocrRegionEditing, ocrRegionPicking, playbackTime, seekRequest, segmentVoicePreviewActive, setActiveWorkspacePanelTab, setAiRemovalPreview, setBlurRegionPicking, setCurrentProject, setCurrentTranscript, setNotice, setOcrRegionEditing, setOcrRegionPicking, setPlaybackTime, setSeekRequest, setSelectedOverlay, setSegmentVoicePreviewActive, setVideoPlaying, selectedOverlay, videoPlaying } from '../../../app/project-state';
 import { projectService } from '../../../app/services/project-service';
 import { ttsService } from '../../../app/services/tts-service';
 import { dialogueService } from '../../../app/services/dialogue-service';
@@ -97,6 +97,16 @@ export default function TranslationView() {
   let subtitleSyncFrameId: number | undefined;
   let subtitleSyncFrameKind: 'video' | 'animation' | undefined;
   let subtitleSyncActive = false;
+  let awaitingSourceSeek = false;
+  const activeAiPreview = () => aiRemovalPreview()?.projectId === currentProject()?.id ? aiRemovalPreview() : undefined;
+  const activeVideoUrl = createMemo(() => {
+    const preview = activeAiPreview();
+    return preview ? convertFileSrc(preview.path) : videoUrl();
+  });
+  const globalTimeForPlayer = (localTime: number) => {
+    const preview = activeAiPreview();
+    return preview ? preview.startSeconds + localTime : localTime;
+  };
 
   const syncPreviewSubtitle = (time: number) => {
     const activeId = findTranslatedSegmentAtTime(
@@ -126,7 +136,7 @@ export default function TranslationView() {
       subtitleSyncFrameId = undefined;
       subtitleSyncFrameKind = undefined;
       if (!subtitleSyncActive || videoElement.paused || videoElement.ended) return;
-      syncPreviewSubtitle(videoElement.currentTime);
+      syncPreviewSubtitle(globalTimeForPlayer(videoElement.currentTime));
       schedulePreviewSubtitleSync();
     };
     if (typeof frameVideo.requestVideoFrameCallback === 'function') {
@@ -141,14 +151,14 @@ export default function TranslationView() {
   const startPreviewSubtitleSync = () => {
     if (subtitleSyncActive) return;
     subtitleSyncActive = true;
-    if (videoElement) syncPreviewSubtitle(videoElement.currentTime);
+    if (videoElement) syncPreviewSubtitle(globalTimeForPlayer(videoElement.currentTime));
     schedulePreviewSubtitleSync();
   };
 
   createEffect(() => {
     const segments = currentTranscript()?.segments;
     const subtitleEnabled = currentProject()?.subtitle.enabled ?? false;
-    const time = videoElement && Number.isFinite(videoElement.currentTime) ? videoElement.currentTime : playbackTime();
+    const time = videoElement && Number.isFinite(videoElement.currentTime) ? globalTimeForPlayer(videoElement.currentTime) : playbackTime();
     void segments;
     void subtitleEnabled;
     syncPreviewSubtitle(time);
@@ -189,6 +199,8 @@ export default function TranslationView() {
     const projectId = project?.id;
     const videoPath = project?.source.videoPath;
     setVideoUrl('');
+    setAiRemovalPreview(undefined);
+    awaitingSourceSeek = false;
     setMediaError('');
     setMediaStatus('');
     setUsingProxy(false);
@@ -227,9 +239,29 @@ export default function TranslationView() {
     const target = seekRequest();
     if (target === null || !videoElement || !Number.isFinite(target)) return;
     if (videoElement.readyState < HTMLMediaElement.HAVE_METADATA) return;
-    videoElement.currentTime = Math.max(0, Math.min(target, duration() || target));
+    const preview = activeAiPreview();
+    if (preview && !awaitingSourceSeek && target >= preview.startSeconds && target <= preview.endSeconds) {
+      videoElement.currentTime = Math.max(0, Math.min(target - preview.startSeconds, videoElement.duration || target - preview.startSeconds));
+    } else if (preview) {
+      awaitingSourceSeek = true;
+      setAiRemovalPreview(undefined);
+      return;
+    } else if (awaitingSourceSeek) {
+      return;
+    } else {
+      videoElement.currentTime = Math.max(0, Math.min(target, duration() || target));
+    }
     setSeekRequest(null);
   });
+
+  const setPreviewGain = (node: GainNode | undefined, value: number) => {
+    if (!node || !audioContext) return;
+    const now = audioContext.currentTime;
+    const target = Math.max(-1, Math.min(1, value));
+    node.gain.cancelScheduledValues(now);
+    if (Math.abs(target) < 0.000001) node.gain.setValueAtTime(0, now);
+    else node.gain.setTargetAtTime(target, now, 0.025);
+  };
 
   createEffect(() => {
     const project = currentProject();
@@ -237,18 +269,18 @@ export default function TranslationView() {
     const ducking = project?.dubbing.duckingEnabled && activeDubbingSegment() ? 1 - (project.dubbing.duckingAmount ?? 0.75) : 1;
     const originalLevel = muted() ? 0 : Math.max(0, Math.min(1, sourceVolume * ducking));
     if (originalGain) {
-      originalGain.gain.value = originalLevel;
+      setPreviewGain(originalGain, originalLevel);
       if (videoElement) { videoElement.volume = 1; videoElement.muted = false; }
     } else if (videoElement) {
       videoElement.volume = originalLevel;
       videoElement.muted = muted();
     }
-    if (dubbingGain) dubbingGain.gain.value = project?.dubbing.enabled ? Math.max(0, Math.min(1, project.dubbing.dubbedVolume ?? 1)) : 0;
+    if (dubbingGain) setPreviewGain(dubbingGain, project?.dubbing.enabled ? Math.max(0, Math.min(1, project.dubbing.dubbedVolume ?? 1)) : 0);
     if (dialogueGain) {
       const reduction = project?.dubbing.dialogueReductionEnabled && dialogueStemPath()
         ? Math.max(0, Math.min(1, project.dubbing.dialogueReductionAmount ?? 0.65))
         : 0;
-      dialogueGain.gain.value = -originalLevel * reduction;
+      setPreviewGain(dialogueGain, -originalLevel * reduction);
     }
   });
 
@@ -258,7 +290,7 @@ export default function TranslationView() {
     requestAnimationFrame(updateContentBounds);
     onCleanup(() => frameResizeObserver?.disconnect());
     if (videoElement) {
-      videoElement.volume = volume();
+      videoElement.volume = volume() * (currentProject()?.dubbing.originalVolume ?? 1);
       videoElement.muted = muted();
     }
     void getCurrentWebview().onDragDropEvent((event) => {
@@ -550,11 +582,31 @@ export default function TranslationView() {
     }
   };
 
-  const togglePlayback = () => {
+  const togglePlayback = async () => {
     if (!videoElement || !videoUrl()) return;
     if (videoElement.paused) {
       if (segmentVoicePreviewActive()) setSegmentVoicePreviewActive(false);
-      void videoElement.play().catch(() => setMediaError('WebView không thể phát định dạng video này.'));
+      // Create and unlock the Web Audio graph while the Play click still carries
+      // user activation. Creating it from a later onPlay effect can leave the
+      // preview graph suspended, making gain controls appear ineffective.
+      ensureAudioGraph();
+      try {
+        if (audioContext?.state === 'suspended') {
+          try {
+            await audioContext.resume();
+          } catch {
+            setNotice({ kind: 'error', message: 'Không thể kích hoạt bộ trộn âm thanh preview của WebView.' });
+            return;
+          }
+        }
+      } catch {
+        setMediaError('WebView không thể phát định dạng video này.');
+      }
+      try {
+        await videoElement.play();
+      } catch {
+        setMediaError('WebView không thể phát định dạng video này.');
+      }
     }
     else videoElement.pause();
   };
@@ -608,7 +660,7 @@ export default function TranslationView() {
   };
 
   const onTimeUpdate = () => {
-    const time = videoElement.currentTime;
+    const time = globalTimeForPlayer(videoElement.currentTime);
     setPlayerTime(time);
     setPlaybackTime(time);
     syncPreviewSubtitle(time);
@@ -717,6 +769,9 @@ export default function TranslationView() {
           <Show when={currentProject()?.source.width && currentProject()?.source.height}>
             <span class="stage-resolution">{currentProject()?.source.width} × {currentProject()?.source.height}</span>
           </Show>
+          <Show when={activeAiPreview()}>
+            <button class="stage-tool-button ai-preview-return" type="button" title="Quay lại video nguồn" onClick={() => { const time = playerTime(); awaitingSourceSeek = true; setSeekRequest(time); setAiRemovalPreview(undefined); }}><Film size={13} /> Video nguồn</button>
+          </Show>
           <button class="stage-tool-button" type="button" disabled={!currentProject()?.source.videoPath} title="Kéo để vẽ vùng blur trên video" onClick={addBlurRegion}>{blurRegionPicking() ? 'Đang vẽ…' : '＋ Blur'}</button>
           <button class="stage-tool-button" type="button" disabled={!currentProject()} title="Thêm ảnh logo" onClick={() => void addLogo()}>＋ Logo</button>
           <button class="stage-tool-button" type="button" title="Chỉnh kiểu phụ đề" onClick={selectSubtitleProperties}>Subtitle</button>
@@ -729,14 +784,14 @@ export default function TranslationView() {
         <div
           ref={previewFrame!}
           class="preview-frame"
-          classList={{ 'preview-frame-has-video': !!videoUrl(), 'preview-drop-active': dragging() }}
+          classList={{ 'preview-frame-has-video': !!activeVideoUrl(), 'preview-drop-active': dragging(), 'preview-frame-ai-removal': !!activeAiPreview() }}
           onClick={(event) => {
             const target = event.target;
             if (target instanceof Element && target.closest('.video-content-overlay, .overlay-object, .overlay-subtitle-object, .stage-tool-button, button, input')) return;
             if (selectedOverlay()) setSelectedOverlay(null);
           }}
         >
-          <Show when={videoUrl()} fallback={
+          <Show when={activeVideoUrl()} fallback={
             <div class="no-video-content">
               <div class="no-video-symbol"><Film size={27} strokeWidth={1.5} /><span /></div>
               <h2>{importing() ? 'Đang nhập video…' : 'Thêm video của bạn'}</h2>
@@ -751,26 +806,34 @@ export default function TranslationView() {
             <video
               ref={videoElement!}
               class="workspace-video"
-              src={videoUrl()}
+              src={activeVideoUrl()}
               crossOrigin="anonymous"
               preload="metadata"
               playsinline
               onLoadedMetadata={() => {
-                if (Number.isFinite(videoElement.duration)) setDuration(videoElement.duration);
+                const preview = activeAiPreview();
+                if (!preview && Number.isFinite(videoElement.duration)) setDuration(videoElement.duration);
                 updateContentBounds();
-                if (seekRequest() !== null) {
-                  videoElement.currentTime = Math.max(0, Math.min(seekRequest()!, videoElement.duration || seekRequest()!));
+                if (preview) {
+                  videoElement.currentTime = 0;
+                  setPlayerTime(preview.startSeconds);
+                  setPlaybackTime(preview.startSeconds);
+                  awaitingSourceSeek = false;
+                } else if (seekRequest() !== null) {
+                  const target = seekRequest()!;
+                  videoElement.currentTime = Math.max(0, Math.min(target, videoElement.duration || target));
                   setSeekRequest(null);
+                  awaitingSourceSeek = false;
                 }
-                syncPreviewSubtitle(videoElement.currentTime);
+                syncPreviewSubtitle(globalTimeForPlayer(videoElement.currentTime));
                 setLoadingVideo(false);
               }}
               onTimeUpdate={onTimeUpdate}
               onPlay={() => { setPlaying(true); setVideoPlaying(true); startPreviewSubtitleSync(); }}
-              onPause={() => { setPlaying(false); setVideoPlaying(false); stopPreviewSubtitleSync(); syncPreviewSubtitle(videoElement.currentTime); dubbingAudio?.pause(); }}
-              onSeeking={() => { syncPreviewSubtitle(videoElement.currentTime); clearDubbingAudio(); activeDubId = undefined; finishedDubId = undefined; setActiveDubbingSegment(undefined); }}
+              onPause={() => { setPlaying(false); setVideoPlaying(false); stopPreviewSubtitleSync(); syncPreviewSubtitle(globalTimeForPlayer(videoElement.currentTime)); dubbingAudio?.pause(); }}
+              onSeeking={() => { syncPreviewSubtitle(globalTimeForPlayer(videoElement.currentTime)); clearDubbingAudio(); activeDubId = undefined; finishedDubId = undefined; setActiveDubbingSegment(undefined); }}
               onSeeked={onTimeUpdate}
-              onEnded={() => { setPlaying(false); setVideoPlaying(false); stopPreviewSubtitleSync(); syncPreviewSubtitle(videoElement.currentTime); clearDubbingAudio(); activeDubId = undefined; finishedDubId = undefined; }}
+              onEnded={() => { setPlaying(false); setVideoPlaying(false); stopPreviewSubtitleSync(); syncPreviewSubtitle(globalTimeForPlayer(videoElement.currentTime)); clearDubbingAudio(); activeDubId = undefined; finishedDubId = undefined; }}
               onError={() => void handleMediaError()}
             />
             <OverlayCanvas
@@ -794,6 +857,7 @@ export default function TranslationView() {
             </Show>
           </Show>
           <Show when={dragging()}><div class="drop-overlay"><div><Film size={25} /><strong>Thả video để nhập vào dự án</strong></div></div></Show>
+          <Show when={activeAiPreview()}><div class="ai-removal-preview-badge" role="status">Đoạn đã xử lý bằng AI · {formatTime(activeAiPreview()!.startSeconds)}–{formatTime(activeAiPreview()!.endSeconds)}</div></Show>
           <Show when={mediaStatus() && videoUrl()}><div class="media-status-overlay" role="status"><span class="spin status-spinner media-status-spinner" aria-hidden="true" /><span class="media-status-message">{mediaStatus()}</span></div></Show>
           <Show when={mediaError()}><div class="media-error-overlay" role="alert"><AlertTriangle size={17} /><span class="media-error-message">{mediaError()}</span><Show when={currentProject()?.source.videoPath}><button class="media-error-retry" type="button" onClick={retryPreview}>{usingProxy() ? 'Tạo lại preview' : 'Thử tạo preview'}</button></Show></div></Show>
         </div>
@@ -811,13 +875,13 @@ export default function TranslationView() {
           step="0.05"
           value={Math.min(playerTime(), totalDuration())}
           aria-label="Tìm vị trí video"
-          disabled={!videoUrl() || !totalDuration()}
+          disabled={!activeVideoUrl() || !totalDuration()}
           onInput={(event) => {
             const value = Number(event.currentTarget.value);
             setPlayerTime(value);
-            if (videoElement.readyState >= HTMLMediaElement.HAVE_METADATA) videoElement.currentTime = value;
             setPlaybackTime(value);
             syncPreviewSubtitle(value);
+            setSeekRequest(value);
           }}
         />
         <button class="playback-volume" type="button" aria-label={muted() ? 'Bật âm thanh' : 'Tắt âm thanh'} disabled={!videoUrl()} onClick={() => updateOriginalMute(!muted())}>
@@ -826,7 +890,7 @@ export default function TranslationView() {
         <input class="playback-volume-slider" type="range" min="0" max="1" step="0.01" value={muted() ? 0 : volume()} aria-label="Âm lượng video" disabled={!videoUrl()} onInput={(event) => { setVolume(Number(event.currentTarget.value)); if (muted()) updateOriginalMute(false); }} />
         <button class="playback-expand" type="button" aria-label="Toàn màn hình" disabled={!videoUrl()} onClick={toggleFullscreen}><Maximize2 size={15} /></button>
       </div>
-      <div class="preview-footnote"><span><span class="footnote-dot" /> {usingProxy() ? 'PREVIEW TƯƠNG THÍCH' : 'TỶ LỆ GỐC'}</span><span>{currentProject()?.source.videoPath ? currentProject()?.source.originalName : 'Kéo thả video vào khu vực xem trước'}</span></div>
+      <div class="preview-footnote"><span><span class="footnote-dot" /> {activeAiPreview() ? 'AI REMOVAL PREVIEW' : usingProxy() ? 'PREVIEW TƯƠNG THÍCH' : 'TỶ LỆ GỐC'}</span><span>{currentProject()?.source.videoPath ? currentProject()?.source.originalName : 'Kéo thả video vào khu vực xem trước'}</span></div>
 
       <Show when={replacePath()}>
         <Modal title="Thay video nguồn?" description="Transcript và dữ liệu phụ thuộc video hiện tại sẽ được xóa sau khi video mới nhập thành công." onClose={() => setReplacePath(undefined)} danger>

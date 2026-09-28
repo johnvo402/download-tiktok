@@ -130,6 +130,7 @@ export interface BlurRegion {
   endMs: number | null;
   enabled: boolean;
   strength: number;
+  effect?: 'blur' | 'aiTextRemoval';
   role: 'generic' | 'subtitle';
   /** Edge feather radius as a percentage of the region's shorter side. */
   edgeBlend: number;
