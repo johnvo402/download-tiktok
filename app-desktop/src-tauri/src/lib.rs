@@ -66,6 +66,7 @@ pub fn run() {
             commands::get_optional_runtime_status,
             commands::open_ai_components_folder,
             commands::install_optional_runtime,
+            commands::clear_ai_installation_cache,
             commands::get_runtime_health,
             commands::export_diagnostics,
             commands::list_projects,

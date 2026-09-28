@@ -132,7 +132,7 @@ export default function OptionalAiRuntimeCard(props: OptionalAiRuntimeCardProps)
       <Show when={installed() && modelReady()}><p class="provider-help">Bộ xử lý và model đã sẵn sàng{status()?.profile === 'cuda' ? ' trên NVIDIA' : ' trên CPU'}.</p></Show>
       <Show when={!installed() || !modelReady()}><button class="button button-primary" type="button" disabled={loading() || installing() || !!props.installDisabledReason} onClick={() => setConfirmProfile(activeProfile())}>{installing() ? 'Đang cài…' : props.feature === 'bandit' ? 'Cài tách thoại gốc' : 'Cài WhisperX và model'}</button></Show>
     </Show>
-    <Show when={status()?.profile && !installed()}><p class="provider-help">Bộ xử lý chung đã có; phần trùng lặp sẽ được dùng lại. Chỉ tải thêm gói cần cho tính năng này.</p></Show>
+    <Show when={status()?.profile && !installed()}><p class="provider-help">Các gói còn trong cache cài đặt sẽ được dùng lại để tiết kiệm mạng. Ứng dụng chuẩn bị bản cài mới trước khi thay bộ xử lý đang dùng.</p></Show>
     <Show when={status() && !status()!.nvidiaDetected}><p class="provider-help">Nếu máy có NVIDIA, hãy cập nhật driver rồi <button class="optional-runtime-refresh" type="button" disabled={loading() || installing()} onClick={() => void refreshStatus()}>kiểm tra lại</button>.</p></Show>
     <Show when={installing()}><div class="provider-help" role="status"><span class="spin status-spinner" /> {progress()}</div></Show>
     <Show when={error()}><div class="provider-feedback provider-feedback-error" role="alert">{error()}</div></Show>

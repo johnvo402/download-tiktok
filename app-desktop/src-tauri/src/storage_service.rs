@@ -22,6 +22,7 @@ pub struct StorageUsage {
     pub temporary_bytes: u64,
     pub logs_bytes: u64,
     pub ai_components_bytes: u64,
+    pub ai_installation_cache_bytes: u64,
     pub ai_components_directory: String,
     pub cache_directory: String,
     pub faster_whisper_directory: String,
@@ -264,7 +265,8 @@ pub fn usage(app: &AppHandle, jobs: &JobStore) -> Result<StorageUsage, String> {
         .saturating_add(directory_size(&app_cache.join("tmp")));
     let logs_bytes = directory_size(&data_root.join("logs"));
     let ai_components_directory = data_root.join("runtimes").join("advanced");
-    let ai_components_bytes = directory_size(&ai_components_directory);
+    let ai_installation_cache_bytes = directory_size(&ai_components_directory.join("cache"));
+    let ai_components_bytes = directory_size_excluding(&ai_components_directory, &["cache".into()]);
     Ok(StorageUsage {
         models_bytes,
         faster_whisper_bytes,
@@ -277,6 +279,7 @@ pub fn usage(app: &AppHandle, jobs: &JobStore) -> Result<StorageUsage, String> {
         temporary_bytes: project_temporary.saturating_add(global_temporary),
         logs_bytes,
         ai_components_bytes,
+        ai_installation_cache_bytes,
         ai_components_directory: ai_components_directory.to_string_lossy().into_owned(),
         cache_directory: app_cache.to_string_lossy().into_owned(),
         faster_whisper_directory: faster_whisper_directory.to_string_lossy().into_owned(),
@@ -370,11 +373,11 @@ fn open_directory(folder: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn directory_size(path: &Path) -> u64 {
+pub(crate) fn directory_size(path: &Path) -> u64 {
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return 0;
     };
-    if metadata.file_type().is_symlink() {
+    if metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
         return 0;
     }
     if metadata.is_file() {
@@ -394,7 +397,7 @@ fn directory_size(path: &Path) -> u64 {
 
 fn directory_size_excluding(path: &Path, excluded: &[String]) -> u64 {
     if fs::symlink_metadata(path)
-        .map(|metadata| metadata.file_type().is_symlink())
+        .map(|metadata| metadata.file_type().is_symlink() || is_reparse_point(&metadata))
         .unwrap_or(true)
     {
         return 0;

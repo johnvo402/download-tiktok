@@ -288,6 +288,58 @@ fn requirement_name(feature: &str) -> &'static str {
     }
 }
 
+fn cleanup_previous_runtime(root: &Path) {
+    // Retain downloaded wheels for later staging installs. UV_LINK_MODE=copy
+    // keeps the active runtime independent of this explicitly removable cache.
+    if let Err(error) = safe_remove(&root.join("previous"), root) {
+        log::warn!("Could not remove previous optional runtime: {error}");
+    }
+}
+
+fn clear_installation_cache_at(
+    root: &Path,
+    install_lock: &Mutex<()>,
+    clean: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<u64, String> {
+    let _guard = install_lock.try_lock()
+        .map_err(|_| "Đang cài tính năng AI. Hãy chờ cài xong rồi xóa cache cài đặt.".to_string())?;
+    let cache = root.join("cache");
+    match fs::symlink_metadata(&cache) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(format!("Không thể kiểm tra cache cài đặt: {error}")),
+        Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() || is_reparse_point(&metadata) => {
+            return Err("Thư mục cache cài đặt không an toàn.".into());
+        }
+        Ok(_) => ensure_plain_tree(&cache)?,
+    }
+    let bytes = crate::storage_service::directory_size(&cache);
+    clean(&cache)?;
+    Ok(bytes.saturating_sub(crate::storage_service::directory_size(&cache)))
+}
+
+pub fn clear_installation_cache() -> Result<u64, String> {
+    let root = ensure_runtime_root()?;
+    clear_installation_cache_at(&root, &INSTALL_LOCK, |cache| {
+        let uv = crate::runtime_paths::optional_installer()
+            .ok_or("Ứng dụng thiếu bộ dọn cache cài đặt. Hãy cập nhật JC AI.")?;
+        // uv owns its cache layout and takes a cross-process cache lock. Never
+        // remove its files directly while another app instance could use them.
+        let mut command = Command::new(uv);
+        hide_console(&mut command);
+        let output = command.args(["cache", "clean"])
+            .env("UV_CACHE_DIR", cache)
+            .env("UV_LOCK_TIMEOUT", "1")
+            .env("UV_NO_PROGRESS", "1")
+            .stdout(Stdio::null()).stderr(Stdio::piped()).output()
+            .map_err(|error| format!("Không thể mở bộ dọn cache: {error}"))?;
+        if !output.status.success() {
+            log::warn!("AI installation cache cleanup failed: {}", String::from_utf8_lossy(&output.stderr));
+            return Err("Chưa thể xóa cache cài đặt. Hãy chờ các lượt cài AI kết thúc rồi thử lại.".into());
+        }
+        Ok(())
+    })
+}
+
 fn install_feature(app: &AppHandle, uv: &Path, root: &Path, source: &Path, python: &Path, feature: &str, profile: &str) -> Result<(), String> {
     let python = python.to_str().ok_or("Đường dẫn bộ xử lý không hợp lệ.")?;
     let requirements = source.join(requirement_name(feature));
@@ -467,17 +519,53 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
         return Err(format!("Không thể hoàn tất trạng thái cài đặt: {error}"));
     }
     let _ = fs::remove_file(&marker_previous);
-    if replace { let _ = safe_remove(&root.join("previous"), &root); }
-    // Staging may temporarily duplicate the active runtime, but the previous
-    // runtime and download cache are removed after the atomic swap succeeds.
-    let _ = safe_remove(&root.join("cache"), &root);
+    if replace { cleanup_previous_runtime(&root); }
+    // Keep downloaded packages until the user explicitly clears them in
+    // Settings. Ordinary install success/failure must not evict this cache.
     emit(app, "Đã cài tính năng được chọn");
     Ok(status())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::is_onnxruntime_gpu_metadata_conflict;
+    use super::{is_onnxruntime_gpu_metadata_conflict, cleanup_previous_runtime, clear_installation_cache_at, safe_remove};
+    use std::{fs, sync::Mutex};
+    use tempfile::tempdir;
+
+    #[test]
+    fn successful_install_cleanup_keeps_downloads_and_current_runtime() {
+        let temp = tempdir().unwrap();
+        for name in ["cache", "current", "previous", "python", "models"] {
+            fs::create_dir(temp.path().join(name)).unwrap();
+            fs::write(temp.path().join(name).join("keep.bin"), b"data").unwrap();
+        }
+        cleanup_previous_runtime(temp.path());
+        assert!(!temp.path().join("previous").exists());
+        for name in ["cache", "current", "python", "models"] {
+            assert_eq!(fs::read(temp.path().join(name).join("keep.bin")).unwrap(), b"data");
+        }
+    }
+
+    #[test]
+    fn explicit_cache_cleanup_is_isolated_and_refuses_active_install() {
+        let temp = tempdir().unwrap();
+        let lock = Mutex::new(());
+        for name in ["cache", "current", "staging", "python", "models"] {
+            fs::create_dir(temp.path().join(name)).unwrap();
+            fs::write(temp.path().join(name).join("keep.bin"), b"data").unwrap();
+        }
+        let clean = |cache: &std::path::Path| safe_remove(cache, temp.path());
+        let guard = lock.lock().unwrap();
+        assert!(clear_installation_cache_at(temp.path(), &lock, clean).is_err());
+        assert!(temp.path().join("cache/keep.bin").exists());
+        drop(guard);
+        assert_eq!(clear_installation_cache_at(temp.path(), &lock, clean).unwrap(), 4);
+        assert!(!temp.path().join("cache").exists());
+        assert_eq!(clear_installation_cache_at(temp.path(), &lock, clean).unwrap(), 0);
+        for name in ["current", "staging", "python", "models"] {
+            assert_eq!(fs::read(temp.path().join(name).join("keep.bin")).unwrap(), b"data");
+        }
+    }
 
     #[test]
     fn accepts_expected_onnxruntime_gpu_metadata_gap() {

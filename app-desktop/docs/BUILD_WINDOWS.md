@@ -135,12 +135,48 @@ NSIS compression. There is no fixed promised release duration; download speed,
 runner load and cache eviction affect it. The installer stays self-contained;
 end users do not install Python/FFmpeg themselves.
 
+Local compression comparison on 2026-09-28 (Windows x64, JC AI 0.1.6):
+
+| Compressor | Bundle time | Installer size |
+| --- | ---: | ---: |
+| LZMA | 404.23 s | 292,096,100 bytes (278.6 MiB) |
+| zlib | 132.15 s | 397,329,463 bytes (378.9 MiB) |
+
+Both used the same application binary and worker, and both passed `7z t` with
+3,341 files / 932,353,145 uncompressed bytes. This was one local measurement, not
+a guarantee of GitHub Actions duration. zlib reduced measured packaging time by
+about 67% while increasing download size by about 36%. The cached-worker verify
+and startup stage took 2.45 s locally; GitHub cache download time is additional.
+
 Release tooling checks can be run without a full installer build:
 
 ```powershell
 npm run test:ci
 python -m unittest discover -s scripts/tests -p "test_*.py" -v
 ```
+
+## Optional AI installation cache (on the user's machine)
+
+This is separate from GitHub Actions build caches. Optional WhisperX, NVIDIA and
+BandIt installs share `runtimes/advanced/cache` through `UV_CACHE_DIR`. Successful
+installs retain downloaded packages. The app continues to build and verify a
+complete staging environment before swapping it with `current`, so a failed new
+feature installation cannot damage the working runtime. Unchanged packages can
+come from the retained local cache; changed versions or a manually cleared cache
+may require downloads. This does not eliminate staging/copying work on disk.
+
+Settings → Advanced shows **Cache cài đặt AI** separately from the installed AI
+components. **Xóa cache cài đặt** requires confirmation, uses the install mutex
+and `uv cache clean` (including uv's cross-process lock), and clears only the
+managed package cache. It does not remove `current`, the
+managed Python installation, model weights or project data. Ordinary temporary
+file cleanup does not clear this cache. No fresh multi-GB CUDA installation is
+needed to run the isolated filesystem tests for these rules.
+An isolated smoke check also installed `packaging==25.0` into a second environment
+using `uv pip install --offline` and the retained cache, then verified that the
+installed package still imported after `uv cache clean`. This validates the cache
+mechanism, not a fresh end-to-end CUDA/WhisperX/VieNeu/BandIt installation.
+See [uv cache behavior and locking](https://docs.astral.sh/uv/concepts/cache/).
 
 ## Installer behavior
 

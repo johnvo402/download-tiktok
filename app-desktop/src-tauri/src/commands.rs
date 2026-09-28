@@ -29,6 +29,12 @@ pub async fn install_optional_runtime(app: tauri::AppHandle, feature: String, pr
         .await.map_err(|error| format!("Không thể cài bộ xử lý bổ sung: {error}"))?
 }
 
+#[tauri::command]
+pub async fn clear_ai_installation_cache() -> Result<u64, String> {
+    tauri::async_runtime::spawn_blocking(optional_runtime::clear_installation_cache)
+        .await.map_err(|error| format!("Không thể xóa cache cài đặt: {error}"))?
+}
+
 fn store(app: &tauri::AppHandle) -> Result<ProjectStore, String> {
     let mut root = app
         .path()

@@ -12,6 +12,7 @@ export interface StorageUsage {
   temporaryBytes: number;
   logsBytes: number;
   aiComponentsBytes: number;
+  aiInstallationCacheBytes: number;
   aiComponentsDirectory: string;
   cacheDirectory: string;
   fasterWhisperDirectory: string;
@@ -30,6 +31,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const storageService = {
   usage: () => call<StorageUsage>('get_storage_usage'),
   clearTemporary: () => call<number>('clear_temporary_cache'),
+  clearAiInstallationCache: () => call<number>('clear_ai_installation_cache'),
   openCacheFolder: () => call<string>('open_cache_folder'),
   openAiComponentsFolder: () => call<string>('open_ai_components_folder'),
   openModelFolder: (kind: 'fasterWhisper' | 'vieNeuTts' | 'ocr' | 'dialogueSeparation') => call<string>('open_model_folder', { kind }),

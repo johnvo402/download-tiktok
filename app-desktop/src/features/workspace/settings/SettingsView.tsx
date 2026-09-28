@@ -103,6 +103,7 @@ export default function SettingsView() {
   const [storageUsage, setStorageUsage] = createSignal<StorageUsage>();
   const [storageBusy, setStorageBusy] = createSignal(false);
   const [storageError, setStorageError] = createSignal('');
+  const [showClearInstallCacheConfirm, setShowClearInstallCacheConfirm] = createSignal(false);
   const [runtimeHealth, setRuntimeHealth] = createSignal<RuntimeHealth>();
   const [runtimeHealthError, setRuntimeHealthError] = createSignal('');
   const [diagnosticsBusy, setDiagnosticsBusy] = createSignal(false);
@@ -131,6 +132,18 @@ export default function SettingsView() {
     setStorageError('');
     try { await openFolder(); }
     catch (error) { setStorageError(error instanceof Error ? error.message : String(error)); }
+  };
+  const clearInstallCache = async () => {
+    setShowClearInstallCacheConfirm(false);
+    setStorageBusy(true);
+    setStorageError('');
+    try {
+      const bytes = await storageService.clearAiInstallationCache();
+      showMessage(`Đã xóa ${formatBytes(bytes)} cache cài đặt.`, false);
+      await refreshStorage();
+    } catch (error) {
+      setStorageError(error instanceof Error ? error.message : String(error));
+    } finally { setStorageBusy(false); }
   };
   const refreshRuntimeHealth = async () => {
     setRuntimeHealthError('');
@@ -863,6 +876,7 @@ export default function SettingsView() {
                 </div>
                 <div><small>Dự án</small><strong>{storageUsage() ? formatBytes(storageUsage()!.projectsBytes) : '—'}</strong><span>Video, bản chép lời, âm thanh và video đã xuất</span></div>
                 <div><small>Xử lý AI bổ sung</small><strong>{storageUsage() ? formatBytes(storageUsage()!.aiComponentsBytes) : '—'}</strong><span title={storageUsage()?.aiComponentsDirectory}>Bộ xử lý CPU hoặc NVIDIA đã cài</span><button class="storage-model-open" type="button" aria-label="Mở thư mục xử lý AI bổ sung" title="Mở thư mục xử lý AI bổ sung" onClick={() => void openStorageFolder(() => storageService.openAiComponentsFolder())}><FolderOpen size={13} /></button></div>
+                <div><small>Cache cài đặt AI</small><strong>{storageUsage() ? formatBytes(storageUsage()!.aiInstallationCacheBytes) : '—'}</strong><span>Gói tải dùng lại cho lần cài sau, giúp tiết kiệm mạng</span><button class="button button-quiet" type="button" disabled={storageBusy() || !storageUsage()?.aiInstallationCacheBytes} onClick={() => setShowClearInstallCacheConfirm(true)}>Xóa cache cài đặt</button></div>
                 <div><small>Dữ liệu xem trước</small><strong>{storageUsage() ? formatBytes(storageUsage()!.projectCacheBytes) : '—'}</strong><span>Dữ liệu dùng để mở dự án nhanh hơn</span></div>
                 <div><small>Tệp tạm</small><strong>{storageUsage() ? formatBytes(storageUsage()!.temporaryBytes) : '—'}</strong><span>Tệp xuất video và lượt tải chưa xong</span></div>
                 <div><small>Bản ghi ứng dụng</small><strong>{storageUsage() ? formatBytes(storageUsage()!.logsBytes) : '—'}</strong><span>Thông tin hỗ trợ khi có lỗi</span></div>
@@ -926,6 +940,12 @@ export default function SettingsView() {
         <Modal title="Xóa mô hình BandIt v2?" description="Mô hình giảm thoại sẽ được xóa. Âm thanh và video đã tạo trong các dự án được giữ nguyên." onClose={() => setShowRemoveDialogueModelConfirm(false)}>
           <div class="model-confirm-card"><div class="job-banner-icon"><AudioLines size={17} /></div><div><strong>{formatBytes(dialogueEnvironment()?.modelBytes ?? 0)} sẽ được giải phóng</strong><p>Đang export thì không thể gỡ model. Có thể tải lại model sau.</p></div></div>
           <footer class="modal-actions"><button class="button button-quiet" type="button" onClick={() => setShowRemoveDialogueModelConfirm(false)}>Giữ model</button><button class="button button-danger" type="button" disabled={removingDialogueModel()} onClick={() => void removeDialogueModel()}>{removingDialogueModel() ? 'Đang xóa…' : 'Xóa model và file'}</button></footer>
+        </Modal>
+      </Show>
+      <Show when={showClearInstallCacheConfirm()}>
+        <Modal title="Xóa cache cài đặt AI?" description="Các tính năng AI và model đã cài vẫn dùng bình thường. Khi cài thêm tính năng, ứng dụng có thể cần tải lại các gói đã xóa." onClose={() => setShowClearInstallCacheConfirm(false)}>
+          <p class="provider-help">Có thể giải phóng {formatBytes(storageUsage()?.aiInstallationCacheBytes ?? 0)}. Giữ lại cache nếu bạn muốn tiết kiệm dung lượng mạng cho lần cài sau.</p>
+          <footer class="modal-actions"><button class="button button-quiet" type="button" onClick={() => setShowClearInstallCacheConfirm(false)}>Giữ lại</button><button class="button button-danger" type="button" disabled={storageBusy()} onClick={() => void clearInstallCache()}>Xóa cache cài đặt</button></footer>
         </Modal>
       </Show>
       <Show when={showTtsModelConfirm()}>
