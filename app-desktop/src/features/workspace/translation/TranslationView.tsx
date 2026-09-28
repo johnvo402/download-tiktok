@@ -329,6 +329,7 @@ export default function TranslationView() {
     dialogueAudio.pause();
     dialogueAudio.onloadedmetadata = null;
     dialogueAudio.onerror = null;
+    delete dialogueAudio.dataset.stemPath;
     if (dialogueAudio.hasAttribute('src')) {
       dialogueAudio.removeAttribute('src');
       dialogueAudio.load();
