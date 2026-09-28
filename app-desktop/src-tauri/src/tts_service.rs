@@ -1479,6 +1479,9 @@ fn commit_segment(
     if (applied_tempo - 1.0).abs() > 0.001 {
         filters.push(format!("atempo={applied_tempo:.4}"));
     }
+    if fit && !duration_overflow {
+        filters.push(format!("apad=whole_dur={slot_duration:.4}"));
+    }
     if duration_overflow {
         status = TranscriptTtsStatus::DurationOverflow;
         warning = Some(if fit {
@@ -1551,11 +1554,13 @@ fn commit_segment(
 
 fn plan_audio_tempo(audio_duration: f64, slot_duration: f64, speed: f64, fit: bool) -> (f64, bool) {
     let requested = if fit {
-        (audio_duration / slot_duration).max(1.0)
+        // Fit should use the available slot in both directions. Slow short clips
+        // only mildly so speech stays natural; any remaining gap is padded later.
+        (audio_duration / slot_duration).clamp(0.85, 2.0)
     } else {
         speed
     };
-    let applied = if fit { requested.min(2.0) } else { requested };
+    let applied = requested;
     (applied, audio_duration / applied > slot_duration + 0.02)
 }
 
@@ -2048,6 +2053,10 @@ mod tests {
         let (limited_tempo, still_overflows) = plan_audio_tempo(5.0, 2.0, 1.0, true);
         assert!((limited_tempo - 2.0).abs() < 0.001);
         assert!(still_overflows);
+
+        let (short_tempo, short_overflow) = plan_audio_tempo(0.7, 1.0, 1.0, true);
+        assert!((short_tempo - 0.85).abs() < 0.001);
+        assert!(!short_overflow);
     }
 
     #[test]

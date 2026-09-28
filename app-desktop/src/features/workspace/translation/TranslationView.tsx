@@ -8,6 +8,7 @@ import {
 import { blurRegionPicking, currentProject, currentTranscript, ocrRegionEditing, ocrRegionPicking, playbackTime, seekRequest, segmentVoicePreviewActive, setActiveWorkspacePanelTab, setBlurRegionPicking, setCurrentProject, setCurrentTranscript, setNotice, setOcrRegionEditing, setOcrRegionPicking, setPlaybackTime, setSeekRequest, setSelectedOverlay, setSegmentVoicePreviewActive, setVideoPlaying, selectedOverlay, videoPlaying } from '../../../app/project-state';
 import { projectService } from '../../../app/services/project-service';
 import { ttsService } from '../../../app/services/tts-service';
+import { dialogueService } from '../../../app/services/dialogue-service';
 import { findPlayableDubbingSegmentAtTime, findTranslatedSegmentAtTime } from '../../transcript/transcript-utils';
 import { needsCompatibilityPreview } from './video-utils';
 import Modal from '../../../shared/components/Modal';
@@ -34,13 +35,18 @@ export default function TranslationView() {
   let videoElement!: HTMLVideoElement;
   let previewFrame!: HTMLDivElement;
   let dubbingAudio: HTMLAudioElement | undefined;
+  let dialogueAudio: HTMLAudioElement | undefined;
   let audioContext: AudioContext | undefined;
   let originalGain: GainNode | undefined;
   let dubbingGain: GainNode | undefined;
+  let dialogueGain: GainNode | undefined;
   let activeDubId: string | undefined;
   let finishedDubId: string | undefined;
   let lastOverflowNoticeId: string | undefined;
   let dubLookupToken = 0;
+  let dialogueStemLookupToken = 0;
+  const [dialogueStemPath, setDialogueStemPath] = createSignal('');
+  const [dialogueStemLoading, setDialogueStemLoading] = createSignal(false);
   const [videoUrl, setVideoUrl] = createSignal('');
   const [importing, setImporting] = createSignal(false);
   const [loadingVideo, setLoadingVideo] = createSignal(false);
@@ -229,14 +235,21 @@ export default function TranslationView() {
     const project = currentProject();
     const sourceVolume = volume() * (project?.dubbing.originalVolume ?? 1);
     const ducking = project?.dubbing.duckingEnabled && activeDubbingSegment() ? 1 - (project.dubbing.duckingAmount ?? 0.75) : 1;
+    const originalLevel = muted() ? 0 : Math.max(0, Math.min(1, sourceVolume * ducking));
     if (originalGain) {
-      originalGain.gain.value = muted() ? 0 : Math.max(0, Math.min(1, sourceVolume * ducking));
+      originalGain.gain.value = originalLevel;
       if (videoElement) { videoElement.volume = 1; videoElement.muted = false; }
     } else if (videoElement) {
-      videoElement.volume = Math.max(0, Math.min(1, sourceVolume * ducking));
+      videoElement.volume = originalLevel;
       videoElement.muted = muted();
     }
     if (dubbingGain) dubbingGain.gain.value = project?.dubbing.enabled ? Math.max(0, Math.min(1, project.dubbing.dubbedVolume ?? 1)) : 0;
+    if (dialogueGain) {
+      const reduction = project?.dubbing.dialogueReductionEnabled && dialogueStemPath()
+        ? Math.max(0, Math.min(1, project.dubbing.dialogueReductionAmount ?? 0.65))
+        : 0;
+      dialogueGain.gain.value = -originalLevel * reduction;
+    }
   });
 
   onMount(() => {
@@ -285,11 +298,19 @@ export default function TranslationView() {
       videoSource.connect(originalGain).connect(audioContext.destination);
       dubbingAudio = new Audio();
       dubbingAudio.crossOrigin = 'anonymous';
+      dubbingAudio.preload = 'auto';
       const dubSource = audioContext.createMediaElementSource(dubbingAudio);
       dubbingGain = audioContext.createGain();
       dubSource.connect(dubbingGain).connect(audioContext.destination);
+      dialogueAudio = new Audio();
+      dialogueAudio.crossOrigin = 'anonymous';
+      dialogueAudio.preload = 'auto';
+      const dialogueSource = audioContext.createMediaElementSource(dialogueAudio);
+      dialogueGain = audioContext.createGain();
+      dialogueSource.connect(dialogueGain).connect(audioContext.destination);
       originalGain.gain.value = muted() ? 0 : volume() * (currentProject()?.dubbing.originalVolume ?? 1);
       dubbingGain.gain.value = currentProject()?.dubbing.enabled ? currentProject()?.dubbing.dubbedVolume ?? 1 : 0;
+      dialogueGain.gain.value = 0;
       void audioContext.resume();
       videoElement.volume = 1;
       videoElement.muted = false;
@@ -297,10 +318,91 @@ export default function TranslationView() {
       audioContext = undefined;
       originalGain = undefined;
       dubbingGain = undefined;
+      dialogueGain = undefined;
+      dialogueAudio = undefined;
       setNotice({ kind: 'error', message: 'Web Audio không khả dụng trong WebView; lồng tiếng preview chưa thể phát.' });
     }
   };
 
+  const clearDialogueAudio = () => {
+    if (!dialogueAudio) return;
+    dialogueAudio.pause();
+    dialogueAudio.onloadedmetadata = null;
+    dialogueAudio.onerror = null;
+    if (dialogueAudio.hasAttribute('src')) {
+      dialogueAudio.removeAttribute('src');
+      dialogueAudio.load();
+    }
+  };
+
+  const dialogueStemKey = createMemo(() => {
+    const project = currentProject();
+    return [project?.id ?? '', project?.source.videoPath ?? '', project?.dubbing.dialogueReductionEnabled ? '1' : '0'].join('\0');
+  });
+
+  createEffect(() => {
+    if (dialogueStemLoading()) setMediaStatus('Đang chuẩn bị BandIt preview…');
+    else if (mediaStatus() === 'Đang chuẩn bị BandIt preview…') setMediaStatus('');
+  });
+  createEffect(on(dialogueStemKey, () => {
+    const project = currentProject();
+    const projectId = project?.id;
+    const enabled = project?.dubbing.dialogueReductionEnabled ?? false;
+    dialogueStemLookupToken += 1;
+    const token = dialogueStemLookupToken;
+    setDialogueStemPath('');
+    setDialogueStemLoading(false);
+    clearDialogueAudio();
+    if (!projectId || !project?.source.videoPath || !enabled) return;
+    setDialogueStemLoading(true);
+    void dialogueService.preparePreviewStem(projectId).then((path) => {
+      if (token !== dialogueStemLookupToken || currentProject()?.id !== projectId) return;
+      setDialogueStemPath(path);
+    }).catch((error: unknown) => {
+      if (token !== dialogueStemLookupToken) return;
+      setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể chuẩn bị BandIt preview.' });
+    }).finally(() => {
+      if (token === dialogueStemLookupToken) setDialogueStemLoading(false);
+    });
+  }));
+
+  createEffect(() => {
+    const project = currentProject();
+    const path = dialogueStemPath();
+    const enabled = project?.dubbing.dialogueReductionEnabled ?? false;
+    const time = playbackTime();
+    const playingNow = videoPlaying();
+    const voicePreviewActive = segmentVoicePreviewActive();
+    if (!enabled || !path || !videoElement) {
+      if (dialogueAudio && !dialogueAudio.paused) dialogueAudio.pause();
+      return;
+    }
+    if (playingNow) ensureAudioGraph();
+    if (!dialogueAudio || !audioContext) return;
+    if (dialogueAudio.dataset.stemPath !== path) {
+      dialogueAudio.dataset.stemPath = path;
+      dialogueAudio.onloadedmetadata = () => {
+        if (!dialogueAudio || dialogueAudio.dataset.stemPath !== path) return;
+        dialogueAudio.currentTime = Math.max(0, Math.min(videoElement.currentTime, dialogueAudio.duration || videoElement.currentTime));
+        if (videoPlaying() && !segmentVoicePreviewActive()) {
+          void audioContext?.resume().then(() => dialogueAudio?.play()).catch(() => undefined);
+        }
+      };
+      dialogueAudio.onerror = () => setNotice({ kind: 'error', message: 'Không thể đọc stem thoại BandIt để preview.' });
+      dialogueAudio.src = convertFileSrc(path);
+      dialogueAudio.load();
+    }
+    if (voicePreviewActive) {
+      if (!dialogueAudio.paused) dialogueAudio.pause();
+      return;
+    }
+    if (dialogueAudio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      if (Math.abs(dialogueAudio.currentTime - time) > 0.12) dialogueAudio.currentTime = Math.max(0, Math.min(time, dialogueAudio.duration || time));
+      dialogueAudio.playbackRate = videoElement.playbackRate || 1;
+      if (playingNow && dialogueAudio.paused) void audioContext.resume().then(() => dialogueAudio?.play()).catch(() => undefined);
+      if (!playingNow && !dialogueAudio.paused) dialogueAudio.pause();
+    }
+  });
   const clearDubbingAudio = () => {
     dubLookupToken += 1;
     if (!dubbingAudio) return;
@@ -362,12 +464,16 @@ export default function TranslationView() {
         };
         dubbingAudio.onloadedmetadata = () => {
           if (token !== dubLookupToken || !dubbingAudio) return;
-          const offset = Math.max(0, playbackTime() - segment!.start);
-          if (offset >= dubbingAudio.duration) {
+          const elapsed = Math.max(0, playbackTime() - segment!.start);
+          if (elapsed >= dubbingAudio.duration) {
             finishedDubId = segmentId;
             return;
           }
-          dubbingAudio.currentTime = offset;
+          // Loading a local WAV can still take a few frames. Seeking by that tiny
+          // delay chops Vietnamese initial consonants (e.g. "Ma" -> "a").
+          // Preserve the attack for normal segment entry; only seek when the user
+          // actually starts well inside the segment.
+          dubbingAudio.currentTime = elapsed <= 0.25 ? 0 : elapsed;
           if (videoPlaying()) void dubbingAudio.play().catch(() => setNotice({ kind: 'error', message: 'Không thể phát audio lồng tiếng trên preview.' }));
         };
         dubbingAudio.src = convertFileSrc(path);
@@ -395,7 +501,9 @@ export default function TranslationView() {
     stopPreviewSubtitleSync();
     removeDropListener?.();
     setVideoPlaying(false);
+    dialogueStemLookupToken += 1;
     clearDubbingAudio();
+    clearDialogueAudio();
     void audioContext?.close();
   });
 

@@ -1,3 +1,4 @@
+use crate::project_service::ProjectStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -18,6 +19,7 @@ const MODEL_URLS: [&str; 2] = [
 ];
 const MODEL_DOWNLOAD_ATTEMPTS: usize = 4;
 static MODEL_LOCK: Mutex<()> = Mutex::new(());
+static STEM_LOCK: Mutex<()> = Mutex::new(());
 static MODEL_CHECK: Mutex<Option<(PathBuf, u64, SystemTime, bool)>> = Mutex::new(None);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -279,6 +281,98 @@ pub fn remove_model(app: &AppHandle, export_jobs: &crate::render_service::Render
     }
 }
 
+pub fn prepare_preview_stem(
+    app: &AppHandle,
+    store: &ProjectStore,
+    project_id: &str,
+) -> Result<PathBuf, String> {
+    let _guard = STEM_LOCK
+        .lock()
+        .map_err(|_| "Không thể khóa cache tách thoại preview.".to_string())?;
+    if !get_environment(app)?.ready() {
+        return Err("Giảm thoại gốc cần runtime và model BandIt v2 đã cài.".into());
+    }
+    let source = crate::video_service::resolve_video(store, project_id)?;
+    let project = store.get(project_id)?;
+    let project_root = store.project_directory(project_id)?;
+    let cache_root = project_root.join("cache");
+    let cache_dir = cache_root.join("audio-separation");
+    fs::create_dir_all(&cache_dir)
+        .map_err(|error| format!("Không thể tạo cache tách thoại preview: {error}"))?;
+    for directory in [&cache_root, &cache_dir] {
+        let metadata = fs::symlink_metadata(directory)
+            .map_err(|error| format!("Không thể xác minh cache tách thoại preview: {error}"))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err("Cache tách thoại preview không hợp lệ hoặc là symlink.".into());
+        }
+    }
+    let source_hash = project
+        .source
+        .checksum_sha256
+        .as_deref()
+        .filter(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .map(str::to_ascii_lowercase)
+        .map(Ok)
+        .unwrap_or_else(|| source_file_sha256(&source))?;
+    let cached = cache_dir.join(format!("{source_hash}_bandit-v2-multi_speech.wav"));
+    if let Ok(metadata) = fs::symlink_metadata(&cached) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("Cache stem thoại preview không hợp lệ.".into());
+        }
+        if metadata.len() > 44 {
+            return Ok(cached);
+        }
+        fs::remove_file(&cached)
+            .map_err(|error| format!("Không thể dọn stem preview lỗi: {error}"))?;
+    }
+
+    let input_wav = cache_dir.join(format!(".{source_hash}.preview-input.wav"));
+    let partial = cache_dir.join(format!(".{source_hash}.preview-speech.partial.wav"));
+    let _ = fs::remove_file(&input_wav);
+    let _ = fs::remove_file(&partial);
+    let _ = app.emit("dialogue-preview-progress", json!({"message":"Đang chuẩn bị audio để tách thoại preview…"}));
+    let mut extract = crate::runtime_paths::ffmpeg_command()?;
+    extract
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+        .arg(&source)
+        .args(["-map", "0:a:0", "-vn", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le"])
+        .arg(&input_wav)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let output = extract
+        .output()
+        .map_err(|error| format!("Không thể trích audio để preview BandIt: {error}"))?;
+    if !output.status.success() || !input_wav.is_file() || fs::metadata(&input_wav).map(|meta| meta.len()).unwrap_or(0) <= 44 {
+        let _ = fs::remove_file(&input_wav);
+        return Err(format!(
+            "FFmpeg không trích được audio cho BandIt preview: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    let separation = separate(
+        app,
+        &input_wav,
+        &partial,
+        || false,
+        |message| {
+            let _ = app.emit("dialogue-preview-progress", json!({"message": message}));
+        },
+    );
+    let _ = fs::remove_file(&input_wav);
+    if let Err(error) = separation {
+        let _ = fs::remove_file(&partial);
+        return Err(error);
+    }
+    if !partial.is_file() || fs::metadata(&partial).map(|meta| meta.len()).unwrap_or(0) <= 44 {
+        let _ = fs::remove_file(&partial);
+        return Err("BandIt không tạo được stem thoại preview hợp lệ.".into());
+    }
+    fs::rename(&partial, &cached)
+        .map_err(|error| format!("Không thể lưu stem thoại preview: {error}"))?;
+    let _ = app.emit("dialogue-preview-progress", json!({"message":"Stem BandIt preview đã sẵn sàng."}));
+    Ok(cached)
+}
 pub fn separate(
     app: &AppHandle,
     source_wav: &Path,
@@ -387,6 +481,21 @@ fn verify_model_if_present(path: &Path) -> Result<bool, String> {
     }
 }
 
+fn source_file_sha256(path: &Path) -> Result<String, String> {
+    let mut file = File::open(path).map_err(|error| format!("Không thể đọc video để tạo cache BandIt: {error}"))?;
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0u8; 1024 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|error| format!("Không thể tính checksum video cho BandIt: {error}"))?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
 fn file_sha256(path: &Path) -> Result<String, String> {
     let mut file = File::open(path).map_err(|error| format!("Không thể đọc model: {error}"))?;
     let mut digest = Sha256::new();

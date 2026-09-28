@@ -111,6 +111,7 @@ pub fn run() {
             commands::get_logo_asset_path,
             commands::get_tts_environment,
             commands::get_dialogue_environment,
+            commands::prepare_dialogue_preview_stem,
             commands::install_dialogue_model,
             commands::install_dialogue_model_from_file,
             commands::remove_dialogue_model,

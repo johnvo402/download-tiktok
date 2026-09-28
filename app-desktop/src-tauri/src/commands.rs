@@ -713,6 +713,21 @@ pub async fn get_dialogue_environment(app: tauri::AppHandle) -> Result<dialogue_
     tauri::async_runtime::spawn_blocking(move || dialogue_service::get_environment(&app))
         .await.map_err(|error| format!("Không thể kiểm tra model tách thoại: {error}"))?
 }
+#[tauri::command]
+pub async fn prepare_dialogue_preview_stem(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> Result<String, String> {
+    let root = projects_root(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = ProjectStore::new(root);
+        let path = dialogue_service::prepare_preview_stem(&app, &store, &project_id)?;
+        allow_verified_media_asset(&app, &path)?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|error| format!("Không thể chuẩn bị stem BandIt preview: {error}"))?
+}
 
 #[tauri::command]
 pub async fn install_dialogue_model(app: tauri::AppHandle) -> Result<(), String> {
