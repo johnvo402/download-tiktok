@@ -9,7 +9,7 @@ import { blurRegionPicking, currentProject, currentTranscript, ocrRegionEditing,
 import { projectService } from '../../../app/services/project-service';
 import { ttsService } from '../../../app/services/tts-service';
 import { dialogueService } from '../../../app/services/dialogue-service';
-import { findPlayableDubbingSegmentAtTime, findTranslatedSegmentAtTime } from '../../transcript/transcript-utils';
+import { findPlayableDubbingSegmentAtTime, findTranslatedSegmentAtTime, ttsWindowEnd } from '../../transcript/transcript-utils';
 import { needsCompatibilityPreview } from './video-utils';
 import Modal from '../../../shared/components/Modal';
 import OverlayCanvas from '../../overlays/OverlayCanvas';
@@ -435,7 +435,7 @@ export default function TranslationView() {
       return;
     }
     if (playingNow) ensureAudioGraph();
-    const overflow = enabled ? segments.find((item) => item.tts?.status === 'durationOverflow' && time >= item.start && time < item.end) : undefined;
+    const overflow = enabled ? segments.find((item) => item.tts?.status === 'durationOverflow' && time >= item.start && time < ttsWindowEnd(segments, item)) : undefined;
     if (overflow?.id && overflow.id !== lastOverflowNoticeId) {
       setNotice({ kind: 'info', message: 'Dubbing preview bỏ qua audio vượt thời lượng để tránh chồng hoặc cắt tiếng. Nghe thử segment riêng hoặc chạy Fit Audio.' });
       lastOverflowNoticeId = overflow.id;

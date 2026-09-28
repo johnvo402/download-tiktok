@@ -25,6 +25,20 @@ export function compareSegmentTime(left: TranscriptSegment, right: TranscriptSeg
   return left.start - right.start || left.end - right.end || left.id.localeCompare(right.id);
 }
 
+/**
+ * Return the TTS deadline without changing subtitle timestamps. The next cue
+ * bounds TTS even if transcript cues overlap; short audio is never padded just
+ * to fill the available time.
+ */
+export function ttsWindowEnd(segments: TranscriptSegment[], segment: TranscriptSegment): number {
+  let nextStart: number | undefined;
+  for (const candidate of segments) {
+    if (candidate.id === segment.id || candidate.start <= segment.start + 0.001) continue;
+    if (nextStart === undefined || candidate.start < nextStart) nextStart = candidate.start;
+  }
+  return nextStart ?? segment.end;
+}
+
 export function estimatedModelSize(model: string): string {
   const estimates: Record<string, string> = {
     tiny: '75 MB',
@@ -53,5 +67,5 @@ export function findPlayableDubbingSegmentAtTime(segments: TranscriptSegment[], 
   return segments.find((segment) => segment.id !== finishedId
     && !!segment.tts?.audioPath
     && segment.tts.status === 'ready'
-    && time >= segment.start && time < segment.end);
+    && time >= segment.start && time < ttsWindowEnd(segments, segment));
 }

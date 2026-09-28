@@ -12,7 +12,7 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import type { SubtitleTrackMetadata } from '../../projects/types';
 import type { AsrEnvironment, OcrEnvironment, Transcript, TranscriptSegment } from '../../transcript/types';
 import type { AppSettings } from '../../../app/services/translation-service';
-import { compareSegmentTime, formatTimestamp, validateTranscript } from '../../transcript/transcript-utils';
+import { compareSegmentTime, formatTimestamp, ttsWindowEnd, validateTranscript } from '../../transcript/transcript-utils';
 import Modal from '../../../shared/components/Modal';
 import { open } from '@tauri-apps/plugin-dialog';
 import { mergeVisualProject, updateVisualSettings } from '../../overlays/overlay-state';
@@ -966,9 +966,9 @@ export default function TranslationPanel() {
                       <div class="segment-translation-column"><textarea class="segment-translation-input" rows="2" aria-label="Bản dịch" placeholder="Chưa dịch" disabled={translationRunning()} value={segment().translated} onInput={(event) => updateSegment(segment().id, { translated: event.currentTarget.value })} />
                         <Show when={segment().tts}><div class="segment-tts-state">
                           <div class="segment-tts-summary">
-                            <span classList={{ 'tts-state-outdated': segment().tts?.status === 'outdated' || segment().tts?.status === 'failed', 'tts-state-overflow': segment().tts?.status === 'durationOverflow' }}>{segment().tts?.status === 'outdated' ? 'CẦN TẠO LẠI' : segment().tts?.status === 'durationOverflow' ? 'DÀI HƠN ĐOẠN' : segment().tts?.status === 'failed' ? 'TẠO LỖI' : segment().tts?.audioPath ? 'AUDIO SẴN SÀNG' : 'CHƯA CÓ AUDIO'}</span>
+                            <span classList={{ 'tts-state-outdated': segment().tts?.status === 'outdated' || segment().tts?.status === 'failed', 'tts-state-overflow': segment().tts?.status === 'durationOverflow' }}>{segment().tts?.status === 'outdated' ? 'CẦN TẠO LẠI' : segment().tts?.status === 'durationOverflow' ? 'DÀI HƠN KHUNG TTS' : segment().tts?.status === 'failed' ? 'TẠO LỖI' : segment().tts?.audioPath ? 'AUDIO SẴN SÀNG' : 'CHƯA CÓ AUDIO'}</span>
                             <Show when={segment().tts?.warning}><small class="segment-tts-warning">{segment().tts?.warning}</small></Show>
-                            <Show when={segment().tts?.duration}><small class="segment-tts-duration">Audio {segment().tts!.duration!.toFixed(1)}s / khung {(segment().end - segment().start).toFixed(1)}s</small></Show>
+                            <Show when={segment().tts?.duration}><small class="segment-tts-duration">Audio {segment().tts!.duration!.toFixed(1)}s / khung TTS tối đa {(ttsWindowEnd(transcript()?.segments ?? [], segment()) - segment().start).toFixed(1)}s</small></Show>
                           </div>
                           <div class="segment-tts-actions">
                             <button class="mini-tool-button" type="button" disabled={!segment().tts?.audioPath || segment().tts?.status === 'outdated' || segment().tts?.status === 'failed'} onClick={() => void previewTts(segment())}>{previewingTtsSegment() === segment().id ? 'Đang phát…' : 'Nghe thử'}</button>

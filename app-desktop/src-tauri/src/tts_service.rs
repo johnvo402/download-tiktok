@@ -78,6 +78,7 @@ pub struct TtsJobRequest {
 #[derive(Clone)]
 struct WorkItem {
     segment: TranscriptSegment,
+    slot_end: f64,
     fingerprint: String,
     text_hash: String,
     stage_path: PathBuf,
@@ -926,6 +927,9 @@ fn run_generation(
         if selected_scope && !selected.contains(&segment.id) {
             continue;
         }
+        // Transcript timestamps remain untouched. For dubbing only, use the
+        // next transcript cue as this segment's playback deadline.
+        let slot_end = tts_slot_end(segment, &snapshot.segments);
         if request.scope == "missing"
             && is_cached(
                 &store,
@@ -935,6 +939,7 @@ fn run_generation(
                 &voice,
                 speed,
                 fit,
+                slot_end,
                 reference_hash.as_deref(),
                 &model_revision,
             )
@@ -947,6 +952,7 @@ fn run_generation(
             &voice,
             speed,
             fit,
+            slot_end,
             reference_hash.as_deref(),
             &model_revision,
         );
@@ -961,6 +967,7 @@ fn run_generation(
         ));
         items.push(WorkItem {
             segment: segment.clone(),
+            slot_end,
             fingerprint,
             text_hash,
             stage_path,
@@ -1473,25 +1480,22 @@ fn commit_segment(
     let mut status = TranscriptTtsStatus::Ready;
     let initial_duration = probe_duration(&item.stage_path)?;
     let mut filters = Vec::new();
-    let slot_duration = item.segment.end - item.segment.start;
+    let slot_duration = item.slot_end - item.segment.start;
     let (applied_tempo, duration_overflow) =
         plan_audio_tempo(initial_duration, slot_duration, speed, fit);
     if (applied_tempo - 1.0).abs() > 0.001 {
         filters.push(format!("atempo={applied_tempo:.4}"));
     }
-    if fit && !duration_overflow {
-        filters.push(format!("apad=whole_dur={slot_duration:.4}"));
-    }
     if duration_overflow {
         status = TranscriptTtsStatus::DurationOverflow;
         warning = Some(if fit {
             format!(
-                "Audio vẫn dài hơn khung segment {} sau khi Fit đến giới hạn 2.00×.",
+                "Audio vẫn dài hơn khung TTS của segment {} sau khi Fit đến giới hạn 2.00×.",
                 item.segment.id
             )
         } else {
             format!(
-                "Audio dài hơn khung thoại segment {}. Chọn chế độ Fit hoặc rút gọn bản dịch.",
+                "Audio dài hơn khung TTS của segment {}. Chọn chế độ Fit hoặc rút gọn bản dịch.",
                 item.segment.id
             )
         });
@@ -1554,9 +1558,14 @@ fn commit_segment(
 
 fn plan_audio_tempo(audio_duration: f64, slot_duration: f64, speed: f64, fit: bool) -> (f64, bool) {
     let requested = if fit {
-        // Fit should use the available slot in both directions. Slow short clips
-        // only mildly so speech stays natural; any remaining gap is padded later.
-        (audio_duration / slot_duration).clamp(0.85, 2.0)
+        // The slot is a deadline, not a target duration. Keep naturally short
+        // speech at its original speed; only speed up clips that would overlap
+        // the next transcript cue.
+        if audio_duration <= slot_duration + 0.02 {
+            1.0
+        } else {
+            (audio_duration / slot_duration).clamp(1.0, 2.0)
+        }
     } else {
         speed
     };
@@ -1613,6 +1622,7 @@ fn is_cached(
     voice: &str,
     speed: f64,
     fit: bool,
+    slot_end: f64,
     reference_hash: Option<&str>,
     model_revision: &str,
 ) -> bool {
@@ -1627,6 +1637,7 @@ fn is_cached(
                 voice,
                 speed,
                 fit,
+                slot_end,
                 reference_hash,
                 model_revision,
             )
@@ -1651,12 +1662,13 @@ fn fingerprint(
     voice: &str,
     speed: f64,
     fit: bool,
+    slot_end: f64,
     reference_hash: Option<&str>,
     model_revision: &str,
 ) -> String {
     sha256(
         format!(
-            "{MODEL_ID}\0{model_revision}\0{}\0{}\0{}\0{}\0{voice}\0{speed:.4}\0{fit}\0{}",
+            "{MODEL_ID}\0{model_revision}\0{}\0{}\0{}\0{}\0{voice}\0{speed:.4}\0{fit}\0{slot_end:.4}\0{}",
             segment.id,
             segment.translated,
             segment.source_revision,
@@ -1665,6 +1677,21 @@ fn fingerprint(
         )
         .as_bytes(),
     )
+}
+
+fn tts_slot_end(segment: &TranscriptSegment, segments: &[TranscriptSegment]) -> f64 {
+    let next_start = segments
+        .iter()
+        .filter(|candidate| {
+            candidate.id != segment.id && candidate.start > segment.start + 0.001
+        })
+        .map(|candidate| candidate.start)
+        .min_by(f64::total_cmp);
+
+    // The next cue is the TTS deadline even when ASR timestamps overlap. This
+    // keeps generated dialogue from running over the following line, without
+    // changing subtitle timestamps.
+    next_start.unwrap_or(segment.end)
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -2019,22 +2046,22 @@ mod tests {
     fn cache_fingerprint_changes_when_translation_voice_or_speed_changes() {
         let item = sample();
         assert_eq!(
-            fingerprint(&item, "vi", "Mai Anh", 1.0, false, None, "rev-1"),
-            fingerprint(&item, "vi", "Mai Anh", 1.0, false, None, "rev-1")
+            fingerprint(&item, "vi", "Mai Anh", 1.0, false, 2.0, None, "rev-1"),
+            fingerprint(&item, "vi", "Mai Anh", 1.0, false, 2.0, None, "rev-1")
         );
         assert_ne!(
-            fingerprint(&item, "vi", "Mai Anh", 1.0, false, None, "rev-1"),
-            fingerprint(&item, "vi", "Minh Quân Pro", 1.0, false, None, "rev-1")
+            fingerprint(&item, "vi", "Mai Anh", 1.0, false, 2.0, None, "rev-1"),
+            fingerprint(&item, "vi", "Minh Quân Pro", 1.0, false, 2.0, None, "rev-1")
         );
         assert_ne!(
-            fingerprint(&item, "vi", "Mai Anh", 1.0, false, None, "rev-1"),
-            fingerprint(&item, "vi", "Mai Anh", 1.1, false, None, "rev-1")
+            fingerprint(&item, "vi", "Mai Anh", 1.0, false, 2.0, None, "rev-1"),
+            fingerprint(&item, "vi", "Mai Anh", 1.1, false, 2.0, None, "rev-1")
         );
         let mut changed = item.clone();
         changed.translated.push('!');
         assert_ne!(
-            fingerprint(&item, "vi", "Mai Anh", 1.0, false, None, "rev-1"),
-            fingerprint(&changed, "vi", "Mai Anh", 1.0, false, None, "rev-1")
+            fingerprint(&item, "vi", "Mai Anh", 1.0, false, 2.0, None, "rev-1"),
+            fingerprint(&changed, "vi", "Mai Anh", 1.0, false, 2.0, None, "rev-1")
         );
     }
 
@@ -2055,7 +2082,7 @@ mod tests {
         assert!(still_overflows);
 
         let (short_tempo, short_overflow) = plan_audio_tempo(0.7, 1.0, 1.0, true);
-        assert!((short_tempo - 0.85).abs() < 0.001);
+        assert!((short_tempo - 1.0).abs() < 0.001);
         assert!(!short_overflow);
     }
 
