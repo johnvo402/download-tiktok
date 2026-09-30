@@ -852,7 +852,7 @@ mod tests {
         assert!(
             build_render_specification(&p, &tr, 10.0, &ExportOptions::default())
                 .unwrap_err()
-                .contains("Subtitle Blur")
+                .contains("chưa có vùng subtitle")
         );
     }
     #[test]
