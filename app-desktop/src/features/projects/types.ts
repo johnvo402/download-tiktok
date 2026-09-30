@@ -25,7 +25,7 @@ export interface Project {
     sourceLanguage: string;
     targetLanguage: string;
     customPrompt: string;
-    /** Project-specific glossary, character names, lore, and translation context. */
+    /** Project glossary and translation memory; multilingual aliases share one approved target name. */
     context: string;
     segments: TranslationSegment[];
   };

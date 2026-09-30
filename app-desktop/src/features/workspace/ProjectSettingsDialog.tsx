@@ -121,13 +121,13 @@ export default function ProjectSettingsDialog(props: { project: Project; onClose
           <div class="project-setting-heading"><div><span class="provider-eyebrow">TRANSLATION MEMORY</span><h3 id="project-translation-context-title">Context dịch</h3></div><span class="project-setting-scope">THEO DỰ ÁN</span></div>
           <div class="translation-prompt-default" role="note">
             <strong>Ghi chú dùng xuyên suốt dự án</strong>
-            <p>Thêm tên nhân vật, cách dịch tên riêng, thuật ngữ, bối cảnh và quan hệ giữa các nhân vật. Mỗi ý nên nằm trên một dòng.</p>
+            <p>Lưu tên nhân vật, địa danh, danh từ quan trọng và thuật ngữ theo nhiều ngôn ngữ. Các tên nguồn khác nhau nhưng cùng một tên dịch sẽ được gom thành các bí danh của cùng một mục.</p>
           </div>
           <label class="provider-field project-custom-prompt">
             <span class="translation-prompt-label-row"><span>Context hiện tại</span><small>{translationContext().length}/20.000</small></span>
-            <textarea maxlength="20000" rows="7" value={translationContext()} placeholder={'Nhân vật: Alex Miller → Trương Vĩ\nBối cảnh: câu chuyện lấy bối cảnh trong một môn phái tu tiên\nThuật ngữ: core realm → cảnh giới cốt lõi'} onInput={(event) => setTranslationContext(event.currentTarget.value)} />
+            <textarea maxlength="20000" rows="7" value={translationContext()} placeholder={'Nhân vật: Lena Lawson [en] / 丽娜 [zh] → Lý Na [vi]\nĐịa danh: Xianjing [en] / 仙京 [zh] → Tiên Kinh [vi]\nDanh từ/thuật ngữ: core realm [en] / 核心境界 [zh] → cảnh giới cốt lõi [vi]\nBối cảnh: câu chuyện lấy bối cảnh trong một môn phái tu tiên'} onInput={(event) => setTranslationContext(event.currentTarget.value)} />
           </label>
-          <p class="provider-help">Gemini và Codex CLI nhận context này ở mỗi batch dịch. Sau mỗi batch hợp lệ, AI chỉ đề xuất các ý mới; ứng dụng sẽ thêm ý chưa có mà không thay thế ghi chú hiện tại. Google Cloud Translation NMT không hỗ trợ context prompt.</p>
+          <p class="provider-help">Gemini và Codex CLI nhận context này ở mỗi batch dịch. Bản dịch đã duyệt là khóa nhận diện: khi gặp cùng nhân vật, địa danh hoặc danh từ quan trọng dưới tên nguồn ngôn ngữ khác, ứng dụng thêm tên đó làm bí danh thay vì tạo một mục dịch riêng. Context cũ dạng một dòng vẫn được giữ và sẽ được nâng cấp khi AI bổ sung bí danh. Google Cloud Translation NMT không hỗ trợ context prompt.</p>
         </section>
 
         <section class="project-setting-section" aria-labelledby="project-tts-voice-title">
