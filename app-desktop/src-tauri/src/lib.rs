@@ -45,6 +45,11 @@ pub fn run() {
             if let Err(error) = log_service::initialize(&logs) {
                 eprintln!("Application file logger unavailable: {error}");
             }
+            match text_removal_service::cleanup_legacy_lama_assets(app.handle()) {
+                Ok(bytes) if bytes > 0 => log::info!("Removed retired LaMa model files ({bytes} bytes)"),
+                Ok(_) => {}
+                Err(error) => log::warn!("Could not remove retired LaMa model files: {error}"),
+            }
             match storage_service::migrate_local_storage(app.handle()) {
                 Ok(warnings) => for warning in warnings { log::warn!("Storage migration: {warning}"); },
                 Err(error) => log::warn!("Storage migration could not finish: {error}"),
@@ -86,7 +91,8 @@ pub fn run() {
             commands::get_asr_environment,
             commands::get_ocr_environment,
             commands::get_text_removal_environment,
-            commands::install_text_removal_model,
+            commands::install_sttn_text_removal_model,
+            commands::remove_sttn_text_removal_model,
             commands::start_text_removal_preview,
             commands::install_ocr_runtime,
             commands::install_ocr_model,

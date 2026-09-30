@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
-export type OptionalFeature = 'whisperx' | 'bandit' | 'acceleration';
+export type OptionalFeature = 'whisperx' | 'bandit' | 'acceleration' | 'sttn';
 export type RuntimeProfile = 'cpu' | 'cuda';
 
 export interface OptionalRuntimeStatus {

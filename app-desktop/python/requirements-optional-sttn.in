@@ -1,0 +1,4 @@
+torch==2.8.0
+torchaudio==2.8.0
+onnxruntime==1.30.0
+rapidocr==3.9.2

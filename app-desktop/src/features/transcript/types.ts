@@ -123,12 +123,18 @@ export interface OcrEnvironment {
   estimatedDownloadBytes: number;
   cudaAvailable: boolean;
   activeDevice: 'cpu' | 'cuda';
+  onnxRuntimeVersion?: string | null;
+  onnxRuntimeDevice?: string | null;
+  executionProviders?: string[];
+  runtimeError?: string | null;
 }
 
 export interface TextRemovalEnvironment {
-  modelInstalled: boolean;
-  modelBytes: number;
-  estimatedDownloadBytes: number;
+  sttnModelInstalled: boolean;
+  sttnModelBytes: number;
+  sttnEstimatedDownloadBytes: number;
+  sttnRuntimeInstalled: boolean;
+  sttnCudaAvailable: boolean;
   ocrReady: boolean;
   ocrModel: 'tiny' | 'small' | 'medium';
   ocrCudaAvailable: boolean;

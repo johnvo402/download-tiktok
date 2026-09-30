@@ -7,8 +7,9 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 
 static INSTALL_LOCK: Mutex<()> = Mutex::new(());
-const FEATURES: [&str; 3] = ["whisperx", "bandit", "acceleration"];
-const RUNTIME_VERSION: u32 = 6;
+const FEATURES: [&str; 4] = ["whisperx", "bandit", "acceleration", "sttn"];
+const RUNTIME_VERSION: u32 = 7;
+const CUDA_ONNXRUNTIME_VERSION: &str = "1.26.0";
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -66,7 +67,7 @@ fn read_marker() -> Option<RuntimeMarker> {
     // set when migrating to the current runtime so users do not silently lose
     // capabilities during the repair.
     if marker.runtime_version == 1 {
-        marker.features = FEATURES.iter()
+        marker.features = ["whisperx", "bandit", "acceleration"].iter()
             .filter(|feature| **feature != "acceleration" || marker.profile == "cuda")
             .map(|feature| (*feature).to_string())
             .collect();
@@ -148,18 +149,33 @@ fn run_uv(app: &AppHandle, uv: &Path, root: &Path, args: &[&str], stage: &str) -
     Err(format!("Không cài được ở bước ‘{stage}’. Kiểm tra kết nối và dung lượng ổ đĩa, rồi thử lại."))
 }
 
-fn verify_onnx_gpu_replacement(python: &Path) -> Result<(), String> {
-    let script = "from importlib.metadata import version\n\
-from packaging.version import Version\n\
-import onnxruntime as ort\n\
-assert Version(version('onnxruntime-gpu')) == Version('1.30.0')\n\
-assert Version(ort.__version__) == Version('1.30.0')\n\
-assert 'CUDAExecutionProvider' in ort.get_available_providers()\n";
+fn verify_onnx_gpu_replacement(python: &Path, source: &Path) -> Result<(), String> {
+    let dll_setup = if cfg!(windows) {
+        "import torch, os, pathlib\n_gpu_dll_directory = os.add_dll_directory(str(pathlib.Path(torch.__file__).parent / 'lib'))\n"
+    } else {
+        "import torch\n"
+    };
+    let script = format!(
+        r#"{dll_setup}from importlib.metadata import version
+from packaging.version import Version
+import onnxruntime as ort
+ort.preload_dlls()
+assert Version(version('onnxruntime-gpu')) == Version('{CUDA_ONNXRUNTIME_VERSION}')
+assert Version(ort.__version__) == Version('{CUDA_ONNXRUNTIME_VERSION}')
+assert 'CUDAExecutionProvider' in ort.get_available_providers()
+from worker.ocr.service import _cuda_runtime_probe
+available, detail = _cuda_runtime_probe()
+assert available, detail
+"#
+    );
     let mut command = Command::new(python);
     hide_console(&mut command);
     let output = command
         .arg("-c")
         .arg(script)
+        .current_dir(source)
+        .env("PYTHONPATH", source)
+        .env("JC_AI_GPU_RUNTIME", "1")
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()
@@ -185,6 +201,7 @@ fn check_dependencies(
     uv: &Path,
     root: &Path,
     python: &Path,
+    source: &Path,
     features: &[String],
 ) -> Result<(), String> {
     emit(app, "Kiểm tra xung đột dependency");
@@ -223,7 +240,7 @@ fn check_dependencies(
         && incompatibilities
             .iter()
             .all(|line| is_onnxruntime_gpu_metadata_conflict(line))
-        && verify_onnx_gpu_replacement(python).is_ok()
+        && verify_onnx_gpu_replacement(python, source).is_ok()
     {
         log::warn!(
             "Ignoring {} expected onnxruntime metadata conflict(s): {}",
@@ -284,7 +301,8 @@ fn requirement_name(feature: &str) -> &'static str {
     match feature {
         "whisperx" => "requirements-optional-whisperx.in",
         "bandit" => "requirements-optional-bandit.in",
-        _ => "requirements-optional-acceleration.in",
+        "acceleration" => "requirements-optional-acceleration.in",
+        _ => "requirements-optional-sttn.in",
     }
 }
 
@@ -345,7 +363,7 @@ fn install_feature(app: &AppHandle, uv: &Path, root: &Path, source: &Path, pytho
     let requirements = source.join(requirement_name(feature));
     let requirements = requirements.to_str().ok_or("Đường dẫn gói cài đặt không hợp lệ.")?;
     if !Path::new(requirements).is_file() { return Err("Ứng dụng thiếu danh sách thành phần. Hãy cập nhật hoặc cài lại JC AI.".into()); }
-    let torch_index = if profile == "cuda" { "https://download.pytorch.org/whl/cu126" } else { "https://download.pytorch.org/whl/cpu" };
+    let torch_index = if profile == "cuda" { "https://download.pytorch.org/whl/cu128" } else { "https://download.pytorch.org/whl/cpu" };
     let torch_label = if profile == "cuda" { "Cài bộ xử lý NVIDIA dùng chung" } else { "Cài bộ xử lý CPU dùng chung" };
     // uv checks the shared environment first. Already-installed torch and its
     // dependencies are reused by WhisperX and BandIt instead of downloaded twice.
@@ -360,11 +378,12 @@ fn install_feature(app: &AppHandle, uv: &Path, root: &Path, source: &Path, pytho
     run_uv(app, uv, root, &["pip", "install", "--no-progress", "--python", python, "-r", requirements], match feature {
         "whisperx" => "Cài WhisperX",
         "bandit" => "Cài tách thoại gốc",
-        _ => "Cài tăng tốc NVIDIA",
+        "acceleration" => "Cài tăng tốc NVIDIA",
+        _ => "Cài bộ xử lý STTN",
     })?;
     if feature == "acceleration" {
         run_uv(app, uv, root, &["pip", "uninstall", "--python", python, "onnxruntime"], "Chuẩn bị tăng tốc đọc chữ")?;
-        run_uv(app, uv, root, &["pip", "install", "--no-progress", "--python", python, "onnxruntime-gpu==1.30.0"], "Cài tăng tốc đọc chữ")?;
+        run_uv(app, uv, root, &["pip", "install", "--no-progress", "--python", python, "onnxruntime-gpu==1.26.0"], "Cài tăng tốc đọc chữ")?;
     }
     Ok(())
 }
@@ -375,7 +394,7 @@ fn verify(app: &AppHandle, python: &Path, source: &Path, features: &[String], pr
         "from packaging.version import Version\nimport torch\nassert Version(torch.__version__.split('+')[0]).release[:2] == (2, 8)\n",
     );
     if profile == "cuda" && cfg!(windows) {
-        script.push_str("import os, pathlib; gpu_dlls = os.add_dll_directory(str(pathlib.Path(torch.__file__).parent / 'lib'))\n");
+        script.push_str("import os, pathlib; gpu_dlls = os.add_dll_directory(str(pathlib.Path(torch.__file__).parent / 'lib'))\nimport onnxruntime; onnxruntime.preload_dlls()\n");
     }
     if features.iter().any(|feature| feature == "whisperx") {
         script.push_str(
@@ -387,6 +406,14 @@ fn verify(app: &AppHandle, python: &Path, source: &Path, features: &[String], pr
     if features.iter().any(|feature| feature == "bandit") {
         script.push_str("import bandit_infer, soundfile\n");
     }
+    if features.iter().any(|feature| feature == "sttn") {
+        let expected_onnx_version = if features.iter().any(|feature| feature == "acceleration") {
+            CUDA_ONNXRUNTIME_VERSION
+        } else {
+            "1.30.0"
+        };
+        script.push_str(&format!("import rapidocr, onnxruntime\nassert Version(onnxruntime.__version__) == Version('{expected_onnx_version}')\n"));
+    }
     if features.iter().any(|feature| feature == "acceleration") {
         script.push_str(
             "from importlib.metadata import version as package_version\n\
@@ -394,9 +421,14 @@ fn verify(app: &AppHandle, python: &Path, source: &Path, features: &[String], pr
             assert Version(gradio.__version__) == Version('5.49.1')\n\
             assert Version(transformers.__version__) == Version('4.57.6')\n\
             assert Version(huggingface_hub.__version__) == Version('0.36.2')\n\
-            assert Version(package_version('onnxruntime-gpu')) == Version('1.30.0')\n\
-            assert Version(onnxruntime.__version__) == Version('1.30.0')\n\
+            assert Version(package_version('onnxruntime-gpu')) == Version('1.26.0')\n\
+            assert Version(onnxruntime.__version__) == Version('1.26.0')\n\
             assert 'CUDAExecutionProvider' in onnxruntime.get_available_providers()\n",
+        );
+        script.push_str(
+            "from worker.ocr.service import _cuda_runtime_probe\n\
+            cuda_ready, cuda_error = _cuda_runtime_probe()\n\
+            assert cuda_ready, cuda_error\n",
         );
     }
     if profile == "cuda" {
@@ -407,7 +439,11 @@ fn verify(app: &AppHandle, python: &Path, source: &Path, features: &[String], pr
     }
     let mut command = Command::new(python);
     hide_console(&mut command);
-    let output = command.arg("-c").arg(&script).stdout(Stdio::null()).stderr(Stdio::piped()).output()
+    let output = command.arg("-c").arg(&script)
+        .current_dir(source)
+        .env("PYTHONPATH", source)
+        .env("JC_AI_GPU_RUNTIME", if profile == "cuda" { "1" } else { "0" })
+        .stdout(Stdio::null()).stderr(Stdio::piped()).output()
         .map_err(|error| format!("Không thể kiểm tra thành phần vừa cài: {error}"))?;
     if !output.status.success() {
         log::error!("Optional AI verification failed: {}", String::from_utf8_lossy(&output.stderr));
@@ -417,6 +453,7 @@ fn verify(app: &AppHandle, python: &Path, source: &Path, features: &[String], pr
     hide_console(&mut command);
     let output = command.arg("-c").arg("import worker.__main__")
         .current_dir(source).env("PYTHONPATH", source)
+        .env("JC_AI_GPU_RUNTIME", if profile == "cuda" { "1" } else { "0" })
         .env("PYTHONUTF8", "1")
         .stdout(Stdio::null()).stderr(Stdio::piped()).output()
         .map_err(|error| format!("Không thể kiểm tra bộ xử lý AI: {error}"))?;
@@ -476,9 +513,12 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
     run_uv(app, &uv, &root, &["venv", "--no-project", "--managed-python", "--python", "3.12", "--no-progress", destination.to_str().ok_or("Đường dẫn cài đặt không hợp lệ.")?], "Chuẩn bị bộ xử lý")?;
     let python = python_path(&destination);
     let install_result = (|| {
-        let requested: Vec<&str> = features.iter().map(String::as_str).collect();
+        let mut requested: Vec<&str> = features.iter().map(String::as_str).collect();
+        // OCR's optional CUDA build replaces the CPU onnxruntime package, so
+        // install it after STTN's CPU OCR dependencies when both are selected.
+        requested.sort_by_key(|item| *item == "acceleration");
         for item in requested { install_feature(app, &uv, &root, &source, &python, item, profile)?; }
-        check_dependencies(app, &uv, &root, &python, &features)?;
+        check_dependencies(app, &uv, &root, &python, &source, &features)?;
         verify(app, &python, &source, &features, profile)
     })();
     if let Err(error) = install_result {

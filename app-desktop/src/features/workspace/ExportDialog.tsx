@@ -54,6 +54,7 @@ export default function ExportDialog(props: { onClose: () => void }) {
   let unlisten: (() => void) | undefined;
 
   const subtitleBlur = () => project()?.blurRegions.find((region) => region.role === 'subtitle');
+  const subtitleRegion = () => subtitleBlur() ?? project()?.subtitle.region ?? null;
   const displayExportPath = (relative?: string | null) => {
     if (relative && /^(?:[a-zA-Z]:[\\/]|\\\\|\/)/.test(relative)) return relative;
     const filename = relative?.split(/[\\/]/).pop();
@@ -132,7 +133,7 @@ export default function ExportDialog(props: { onClose: () => void }) {
       const latestValidation = await renderService.validate(id, exportOptions);
       setValidation(latestValidation);
       if (!latestValidation.valid || latestValidation.warnings.length) {
-        setValidationError(latestValidation.warnings.length ? 'Có phụ đề không vừa Subtitle Blur ở cỡ chữ tối thiểu. Hãy kiểm tra layout trước khi export.' : 'Thiết lập hiện tại chưa sẵn sàng để export.');
+        setValidationError(latestValidation.warnings.length ? 'Có phụ đề không vừa vùng subtitle ở cỡ chữ tối thiểu. Hãy kiểm tra layout trước khi export.' : 'Thiết lập hiện tại chưa sẵn sàng để export.');
         return;
       }
       setValidationError('');
@@ -148,7 +149,7 @@ export default function ExportDialog(props: { onClose: () => void }) {
     try { await renderService.cancel(jobId()!); } catch (error) { setCanceling(false); setValidationError(error instanceof Error ? error.message : String(error)); }
   };
 
-  const needsSubtitleRegion = () => options().burnSubtitles && !subtitleBlur();
+  const needsSubtitleRegion = () => options().burnSubtitles && !subtitleRegion();
   const blockedByWarning = () => (validation()?.warnings.length ?? 0) > 0;
   const outputNameError = () => {
     const value = outputFileName().trim().replace(/\.mp4$/i, '');
@@ -166,9 +167,9 @@ export default function ExportDialog(props: { onClose: () => void }) {
       <div class="export-section"><h3>VIDEO</h3>
         <label class="export-option"><span>Áp dụng các vùng blur</span><input type="checkbox" checked={options().applyBlur} onChange={(event) => setOptions((value) => ({ ...value, applyBlur: event.currentTarget.checked }))} /></label>
         <label class="export-option"><span>Chèn logo</span><input type="checkbox" checked={options().applyLogos} onChange={(event) => setOptions((value) => ({ ...value, applyLogos: event.currentTarget.checked }))} /></label>
-        <label class="export-option"><span>Burn translated subtitle trong Subtitle Blur</span><input type="checkbox" checked={options().burnSubtitles} onChange={(event) => setOptions((value) => ({ ...value, burnSubtitles: event.currentTarget.checked }))} /></label>
+        <label class="export-option"><span>Chèn phụ đề dịch trong vùng subtitle</span><input type="checkbox" checked={options().burnSubtitles} onChange={(event) => setOptions((value) => ({ ...value, burnSubtitles: event.currentTarget.checked }))} /></label>
         <Show when={options().burnSubtitles && subtitleBlur() && !subtitleBlur()?.enabled}><label class="export-override"><input type="checkbox" checked={options().enableSubtitleBlurOverride} onChange={(event) => setOptions((value) => ({ ...value, enableSubtitleBlurOverride: event.currentTarget.checked }))} /><span>Bật Subtitle Blur cho lần export này, không đổi cấu hình project</span></label></Show>
-        <div class="export-option"><span>Vùng phụ đề</span><strong>{subtitleBlur() ? 'Subtitle Blur' : 'Chưa chọn'}</strong></div>
+        <div class="export-option"><span>Vùng phụ đề</span><strong>{subtitleBlur() ? 'Subtitle Region · Blur/STTN' : project()?.subtitle.region ? 'Vùng subtitle riêng' : 'Chưa chọn'}</strong></div>
       </div>
 
       <div class="export-section"><h3>AUDIO & QUALITY</h3>
@@ -189,7 +190,7 @@ export default function ExportDialog(props: { onClose: () => void }) {
         <Show when={estimatedOutputMiB() !== undefined}><small class="export-size-estimate">Dung lượng ước tính khoảng {estimatedOutputMiB()!.toFixed(1)} MiB · thực tế thay đổi theo nội dung và âm thanh.</small></Show>
       </div>
 
-      <Show when={needsSubtitleRegion()}><div class="export-alert"><AlertTriangle size={15} /><span>Phụ đề dịch được bật nhưng chưa có Subtitle Blur. Hãy chọn vùng blur trong Properties trước khi xuất; không có phụ đề global fallback.</span><button class="button button-quiet" type="button" onClick={() => { close(); setActiveWorkspacePanelTab('properties'); setNotice({ kind: 'info', message: 'Chọn một vùng blur và đặt Loại vùng thành Subtitle Blur.' }); }}>Properties</button></div></Show>
+      <Show when={needsSubtitleRegion()}><div class="export-alert"><AlertTriangle size={15} /><span>Phụ đề dịch đang bật nhưng chưa có vùng subtitle. Hãy chọn vùng riêng trên preview hoặc đặt một vùng blur làm Subtitle Region; app không tự đặt phụ đề ở vị trí global.</span><button class="button button-quiet" type="button" onClick={() => { close(); setActiveWorkspacePanelTab('properties'); setNotice({ kind: 'info', message: 'Trong Properties, chọn vùng subtitle trên preview hoặc đặt vùng blur thành Subtitle Region.' }); }}>Properties</button></div></Show>
       <Show when={validationError()}><div class="export-alert export-alert-error" role="alert"><AlertTriangle size={15} /><span>{validationError()}</span></div></Show>
 
       <Show when={checking()}><div class="export-validation"><LoaderCircle size={14} class="export-spinner" /> Đang kiểm tra layout và media…</div></Show>
@@ -197,7 +198,7 @@ export default function ExportDialog(props: { onClose: () => void }) {
         <div class="export-validation-title"><Check size={14} /> Layout phụ đề <span>{result().translatedSegments} segments</span></div>
         <div class="export-validation-row">{result().fitsNormally} vừa cỡ chữ đặt</div>
         <Show when={result().fitWithSmallerFont}><div class="export-validation-row">{result().fitWithSmallerFont} segment auto-fit; nhỏ nhất {result().smallestFontSize}px (cỡ đã đặt: {project()?.subtitle.fontSize ?? '—'}px)</div></Show>
-        <Show when={blockedByWarning()}><div class="export-alert export-alert-error"><AlertTriangle size={14} /><span>Không thể xuất an toàn: các segment sau không vừa vùng blur ở cỡ chữ tối thiểu. Mở rộng Subtitle Blur, giảm cỡ chữ tối thiểu hoặc rút gọn bản dịch; nội dung sẽ không bị cắt.</span></div><For each={result().warnings}>{(warning, index) => <div class="export-warning-segment">#{index() + 1} · {formatTime(warning.start)} — {warning.segmentId}</div>}</For></Show>
+      <Show when={blockedByWarning()}><div class="export-alert export-alert-error"><AlertTriangle size={14} /><span>Không thể xuất an toàn: các segment sau không vừa vùng subtitle ở cỡ chữ tối thiểu. Mở rộng vùng subtitle, giảm cỡ chữ tối thiểu hoặc rút gọn bản dịch; nội dung sẽ không bị cắt.</span></div><For each={result().warnings}>{(warning, index) => <div class="export-warning-segment">#{index() + 1} · {formatTime(warning.start)} — {warning.segmentId}</div>}</For></Show>
         <Show when={result().dubbingSegments}><div class="export-validation-row">{result().dubbingSegments} voice clips sẽ được đặt theo timestamp</div></Show>
       </div>}</Show>
 

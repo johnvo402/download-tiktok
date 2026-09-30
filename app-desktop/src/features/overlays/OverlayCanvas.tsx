@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { convertFileSrc } from '@tauri-apps/api/core';
-import { currentProject, currentTranscript, selectedOverlay, setActiveWorkspacePanelTab, setBlurRegionPicking, setCurrentProject, setNotice, setOcrRegionEditing, setOcrRegionPicking, setSelectedOverlay } from '../../app/project-state';
+import { currentProject, currentTranscript, selectedOverlay, setActiveWorkspacePanelTab, setBlurRegionPicking, setCurrentProject, setNotice, setOcrRegionEditing, setOcrRegionPicking, setSelectedOverlay, setSubtitleRegionPicking } from '../../app/project-state';
 import { projectService } from '../../app/services/project-service';
 import { mergeVisualProject, updateVisualSettings } from './overlay-state';
 import { blurRect, logoRect, moveRect, resizeRect, type Rect } from './overlay-utils';
@@ -16,14 +16,17 @@ interface OverlayCanvasProps {
   previewSubtitleSegmentId?: string;
   regionPicking?: boolean;
   blurRegionPicking?: boolean;
+  subtitleRegionPicking?: boolean;
   ocrRegionEditing?: boolean;
   ocrRegion?: Rect | null;
-  onRegionSelected?: (rect: Rect, kind: 'ocr' | 'blur') => void;
+  subtitleRegion?: Rect | null;
+  onRegionSelected?: (rect: Rect, kind: 'ocr' | 'blur' | 'subtitle') => void;
   onOcrRegionChange?: (rect: Rect) => void;
+  onSubtitleRegionChange?: (rect: Rect) => void;
   onOcrRegionDelete?: () => void;
 }
 
-type DragState = { kind: 'blur' | 'logo' | 'ocr'; id: string; mode: 'move' | 'resize'; pointerX: number; pointerY: number; rect: Rect; aspect?: number };
+type DragState = { kind: 'blur' | 'logo' | 'ocr' | 'subtitle'; id: string; mode: 'move' | 'resize'; pointerX: number; pointerY: number; rect: Rect; aspect?: number };
 
 function layoutPreviewSubtitle(text: string, fontFamily: string, configuredSize: number, minimumSize: number, weight: number, maxWidth: number, maxHeight: number, lineHeight: number, autoFit: boolean) {
   const canvas = document.createElement('canvas');
@@ -58,9 +61,9 @@ function layoutPreviewSubtitle(text: string, fontFamily: string, configuredSize:
 export default function OverlayCanvas(props: OverlayCanvasProps) {
   let layer!: HTMLDivElement;
   const [assetUrls, setAssetUrls] = createSignal<Record<string, string>>({});
-  const [draft, setDraft] = createSignal<{ kind: 'blur' | 'logo' | 'ocr'; id: string; rect: Rect }>();
+  const [draft, setDraft] = createSignal<{ kind: 'blur' | 'logo' | 'ocr' | 'subtitle'; id: string; rect: Rect }>();
   const [regionDraft, setRegionDraft] = createSignal<Rect>();
-  let pickingPointer: 'ocr' | 'blur' | null = null;
+  let pickingPointer: 'ocr' | 'blur' | 'subtitle' | null = null;
   let drag: DragState | undefined;
   let assetRequest = 0;
 
@@ -87,16 +90,21 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
   const blurDraftRect = (region: BlurRegion): Rect => draft()?.kind === 'blur' && draft()?.id === region.id ? draft()!.rect : blurRect(region);
   const logoDraftRect = (logo: ProjectLogo): Rect => draft()?.kind === 'logo' && draft()?.id === logo.id ? draft()!.rect : logoRect(logo);
   const ocrDraftRect = (): Rect | null => draft()?.kind === 'ocr' ? draft()!.rect : props.ocrRegion ?? null;
+  const subtitleDraftRect = (): Rect | null => draft()?.kind === 'subtitle' ? draft()!.rect : props.subtitleRegion ?? null;
 
-  const beginPointer = (event: PointerEvent & { currentTarget: HTMLElement }, kind: 'blur' | 'logo' | 'ocr', id: string, mode: 'move' | 'resize') => {
+  const beginPointer = (event: PointerEvent & { currentTarget: HTMLElement }, kind: 'blur' | 'logo' | 'ocr' | 'subtitle', id: string, mode: 'move' | 'resize') => {
     if (event.button !== 0 || !layer) return;
     event.preventDefault();
     event.stopPropagation();
     const project = currentProject();
     const object = kind === 'blur' ? project?.blurRegions.find((value) => value.id === id) : kind === 'logo' ? project?.logos.find((value) => value.id === id) : undefined;
-    const rect = kind === 'ocr' ? props.ocrRegion ?? undefined : kind === 'blur' ? object && blurRect(object as BlurRegion) : object && logoRect(object as ProjectLogo);
+    const rect = kind === 'ocr' ? props.ocrRegion ?? undefined : kind === 'subtitle' ? props.subtitleRegion ?? undefined : kind === 'blur' ? object && blurRect(object as BlurRegion) : object && logoRect(object as ProjectLogo);
     if (!rect) return;
     if (kind === 'ocr') setOcrRegionEditing(true);
+    else if (kind === 'subtitle') {
+      setSelectedOverlay({ type: 'subtitle' });
+      setActiveWorkspacePanelTab('properties');
+    }
     else {
       setSelectedOverlay({ type: kind, id });
       setActiveWorkspacePanelTab('properties');
@@ -148,7 +156,7 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
       (layer as HTMLDivElement & { __regionStart?: { x: number; y: number } }).__regionStart = undefined;
       const minimum = kind === 'blur' ? 0.02 : 0.01;
       if (rect && rect.width >= minimum && rect.height >= minimum) props.onRegionSelected?.(rect, kind);
-      else setNotice({ kind: 'error', message: kind === 'blur' ? 'Vùng blur quá nhỏ. Hãy kéo chọn vùng lớn hơn.' : 'Vùng OCR quá nhỏ. Hãy kéo chọn vùng subtitle lớn hơn.' });
+      else setNotice({ kind: 'error', message: kind === 'blur' ? 'Vùng blur quá nhỏ. Hãy kéo chọn vùng lớn hơn.' : kind === 'subtitle' ? 'Vùng subtitle quá nhỏ. Hãy kéo chọn vùng lớn hơn.' : 'Vùng OCR quá nhỏ. Hãy kéo chọn vùng subtitle lớn hơn.' });
       return;
     }
     if (!drag) return;
@@ -168,7 +176,8 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
   };
 
   const beginRegionPick = (event: PointerEvent) => {
-    const kind = props.regionPicking ? 'ocr' : props.blurRegionPicking ? 'blur' : null;
+    const hasSubtitleBlur = currentProject()?.blurRegions.some((region) => region.role === 'subtitle') ?? false;
+    const kind = props.regionPicking ? 'ocr' : props.blurRegionPicking ? 'blur' : props.subtitleRegionPicking && !hasSubtitleBlur ? 'subtitle' : null;
     if (!kind || event.button !== 0 || !layer) return;
     event.preventDefault();
     event.stopPropagation();
@@ -182,11 +191,13 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
     layer.setPointerCapture(event.pointerId);
   };
 
-  const commitRect = (kind: 'blur' | 'logo' | 'ocr', id: string, rect: Rect) => {
+  const commitRect = (kind: 'blur' | 'logo' | 'ocr' | 'subtitle', id: string, rect: Rect) => {
     const project = currentProject();
     if (!project) return;
     if (kind === 'ocr') {
       props.onOcrRegionChange?.(rect);
+    } else if (kind === 'subtitle') {
+      props.onSubtitleRegionChange?.(rect);
     } else if (kind === 'blur') {
       setCurrentProject({ ...project, blurRegions: project.blurRegions.map((item) => item.id === id ? { ...item, ...rect } : item) });
       updateVisualSettings({ blurRegions: currentProject()?.blurRegions ?? [] }, true);
@@ -196,10 +207,10 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
     }
   };
 
-  const nudge = (kind: 'blur' | 'logo' | 'ocr', id: string, key: string, shift: boolean, resize: boolean) => {
+  const nudge = (kind: 'blur' | 'logo' | 'ocr' | 'subtitle', id: string, key: string, shift: boolean, resize: boolean) => {
     const project = currentProject();
     const item = kind === 'blur' ? project?.blurRegions.find((value) => value.id === id) : kind === 'logo' ? project?.logos.find((value) => value.id === id) : undefined;
-    const rect = kind === 'ocr' ? props.ocrRegion ?? undefined : kind === 'blur' ? item && blurRect(item as BlurRegion) : item && logoRect(item as ProjectLogo);
+    const rect = kind === 'ocr' ? props.ocrRegion ?? undefined : kind === 'subtitle' ? props.subtitleRegion ?? undefined : kind === 'blur' ? item && blurRect(item as BlurRegion) : item && logoRect(item as ProjectLogo);
     if (!project || !rect) return;
     const step = (shift ? 10 : 1) / Math.max(layer?.clientWidth ?? 1000, 1);
     const stepY = (shift ? 10 : 1) / Math.max(layer?.clientHeight ?? 600, 1);
@@ -216,14 +227,15 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
   };
 
   const handleGlobalKey = (event: KeyboardEvent) => {
-    if ((props.regionPicking || props.blurRegionPicking) && event.key === 'Escape') {
+    if ((props.regionPicking || props.blurRegionPicking || props.subtitleRegionPicking) && event.key === 'Escape') {
       event.preventDefault();
-      const picking = props.regionPicking ? 'ocr' : 'blur';
+      const picking = props.regionPicking ? 'ocr' : props.blurRegionPicking ? 'blur' : 'subtitle';
       pickingPointer = null;
       setRegionDraft(undefined);
       if (picking === 'ocr') setOcrRegionPicking(false);
-      else setBlurRegionPicking(false);
-      setNotice({ kind: 'info', message: picking === 'ocr' ? 'Đã hủy chọn vùng OCR.' : 'Đã hủy vẽ vùng blur.' });
+      else if (picking === 'blur') setBlurRegionPicking(false);
+      else setSubtitleRegionPicking(false);
+      setNotice({ kind: 'info', message: picking === 'ocr' ? 'Đã hủy chọn vùng OCR.' : picking === 'blur' ? 'Đã hủy vẽ vùng blur.' : 'Đã hủy chọn vùng subtitle.' });
       return;
     }
     const target = event.target;
@@ -249,9 +261,9 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
       return;
     }
     if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
-    if (selected.type === 'subtitle') return;
+    if (selected.type === 'subtitle' && (!currentProject()?.subtitle.region || currentProject()?.blurRegions.some((region) => region.role === 'subtitle'))) return;
     event.preventDefault();
-    nudge(selected.type, selected.id, event.key, event.shiftKey, false);
+    nudge(selected.type, selected.type === 'subtitle' ? 'subtitle-region' : selected.id, event.key, event.shiftKey, false);
   };
 
   const removeLogoById = async (id: string) => {
@@ -278,22 +290,45 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
     return currentTranscript()?.segments.find((segment) => segment.id === id && segment.translated.trim());
   };
   const subtitle = () => currentProject()?.subtitle;
-  const subtitleRegion = () => currentProject()?.blurRegions.find((region) => region.role === 'subtitle' && region.enabled);
+  const subtitleBlurRegion = () => currentProject()?.blurRegions.find((region) => region.role === 'subtitle');
+  const subtitleRegion = () => {
+    const project = currentProject();
+    const blur = subtitleBlurRegion();
+    if (blur) return blur.enabled ? blur : null;
+    return project?.subtitle.region ?? null;
+  };
 
   return <div
     ref={layer!}
     class="video-content-overlay"
-    classList={{ 'region-picking': !!props.regionPicking || !!props.blurRegionPicking }}
-    style={{ left: `${props.left}px`, top: `${props.top}px`, width: `${props.width}px`, height: `${props.height}px`, 'pointer-events': props.regionPicking || props.blurRegionPicking || props.ocrRegionEditing ? 'auto' : 'none' }}
+    classList={{ 'region-picking': !!props.regionPicking || !!props.blurRegionPicking || !!props.subtitleRegionPicking }}
+    style={{ left: `${props.left}px`, top: `${props.top}px`, width: `${props.width}px`, height: `${props.height}px`, 'pointer-events': props.regionPicking || props.blurRegionPicking || props.subtitleRegionPicking || props.ocrRegionEditing ? 'auto' : 'none' }}
     onPointerDown={beginRegionPick}
     onPointerMove={onLayerPointerMove}
     onPointerUp={onLayerPointerUp}
     onPointerCancel={onLayerPointerUp}
   >
-    <Show when={props.regionPicking || props.blurRegionPicking}>
-      <div class="ocr-pick-instructions">{props.blurRegionPicking ? 'Kéo để vẽ vùng blur' : 'Kéo để khoanh vùng subtitle'} · Esc để hủy</div>
+    <Show when={props.regionPicking || props.blurRegionPicking || props.subtitleRegionPicking}>
+      <div class="ocr-pick-instructions">{props.blurRegionPicking ? 'Kéo để vẽ vùng blur' : props.subtitleRegionPicking ? 'Kéo để chọn vùng hiển thị phụ đề' : 'Kéo để khoanh vùng subtitle'} · Esc để hủy</div>
       <Show when={regionDraft()}>{(rect) => <div class="ocr-region-selection" style={{ left: `${rect().x * 100}%`, top: `${rect().y * 100}%`, width: `${rect().width * 100}%`, height: `${rect().height * 100}%` }} />}</Show>
     </Show>
+    <Show when={selectedOverlay()?.type === 'subtitle' && !props.subtitleRegionPicking && !subtitleBlurRegion() && props.subtitleRegion}>{(savedRegion) => {
+      const rect = () => subtitleDraftRect() ?? savedRegion();
+      return <div
+        class="overlay-object overlay-subtitle-region selected"
+        role="button"
+        tabindex="0"
+        aria-label="Vùng hiển thị phụ đề"
+        title="Kéo để di chuyển · kéo góc phải dưới để đổi kích thước"
+        style={{ left: `${rect().x * 100}%`, top: `${rect().y * 100}%`, width: `${rect().width * 100}%`, height: `${rect().height * 100}%` }}
+        onPointerDown={(event) => beginPointer(event, 'subtitle', 'subtitle-region', 'move')}
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => { if (event.key.startsWith('Arrow')) { event.preventDefault(); event.stopPropagation(); nudge('subtitle', 'subtitle-region', event.key, event.shiftKey, event.currentTarget.classList.contains('resize-focused')); } }}
+      >
+        <span class="overlay-label">Subtitle Region</span>
+        <button class="overlay-resize-handle" type="button" aria-label="Đổi kích thước vùng subtitle" onPointerDown={(event) => beginPointer(event, 'subtitle', 'subtitle-region', 'resize')} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key.startsWith('Arrow')) { event.preventDefault(); event.stopPropagation(); nudge('subtitle', 'subtitle-region', event.key, event.shiftKey, true); } }} />
+      </div>;
+    }}</Show>
     <Show when={props.ocrRegionEditing && props.ocrRegion}>{(savedRegion) => {
       const rect = () => ocrDraftRect() ?? savedRegion();
       return <div
@@ -320,11 +355,11 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
       const edgeFeather = () => region.strength >= 95 ? 0 : ((region.edgeBlend ?? 0) / 50) * 0.1;
       return <div
         class="overlay-object overlay-blur"
-        classList={{ selected: active(), disabled: !region.enabled, 'overlay-ai-remove': region.effect === 'aiTextRemoval' }}
+        classList={{ selected: active(), disabled: !region.enabled, 'overlay-ai-remove': region.effect === 'sttn' }}
         data-overlay-id={region.id}
         role="button"
         tabindex="0"
-        aria-label={`${region.effect === 'aiTextRemoval' ? 'Vùng xóa chữ AI' : 'Vùng blur'} ${region.id.slice(0, 8)}${region.enabled ? '' : ', đang tắt'}`}
+        aria-label={`${region.effect === 'sttn' ? 'Vùng xóa chữ STTN' : 'Vùng blur'} ${region.id.slice(0, 8)}${region.enabled ? '' : ', đang tắt'}`}
         title="Kéo để di chuyển · góc phải dưới để đổi kích thước"
         style={{ left: `${rect().x * 100}%`, top: `${rect().y * 100}%`, width: `${rect().width * 100}%`, height: `${rect().height * 100}%`, '--blur-strength': `${region.strength * 2 * (props.height / Math.max(props.videoHeight, 1))}px`, '--blur-edge-x': `${edgeFeather() * 100 * Math.min(rect().width, rect().height) / Math.max(rect().width, 0.0001)}%`, '--blur-edge-y': `${edgeFeather() * 100 * Math.min(rect().width, rect().height) / Math.max(rect().height, 0.0001)}%` }}
         onPointerDown={(event) => beginPointer(event, 'blur', region.id, 'move')}
@@ -334,7 +369,7 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
           if (event.key.startsWith('Arrow')) { event.preventDefault(); event.stopPropagation(); nudge('blur', region.id, event.key, event.shiftKey, event.currentTarget.classList.contains('resize-focused')); }
         }}
       >
-        <Show when={active()}><span class="overlay-label">{region.effect === 'aiTextRemoval' ? 'AI text removal' : 'Blur region'}</span><button class="overlay-resize-handle" type="button" aria-label="Đổi kích thước vùng xử lý" onPointerDown={(event) => beginPointer(event, 'blur', region.id, 'resize')} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key.startsWith('Arrow')) { event.preventDefault(); event.stopPropagation(); nudge('blur', region.id, event.key, event.shiftKey, true); } }} /></Show>
+        <Show when={active()}><span class="overlay-label">{region.effect === 'sttn' ? 'STTN' : 'Blur region'}</span><button class="overlay-resize-handle" type="button" aria-label="Đổi kích thước vùng xử lý" onPointerDown={(event) => beginPointer(event, 'blur', region.id, 'resize')} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key.startsWith('Arrow')) { event.preventDefault(); event.stopPropagation(); nudge('blur', region.id, event.key, event.shiftKey, true); } }} /></Show>
       </div>;
     }}</For>
     <For each={currentProject()?.logos ?? []}>{(logo) => {

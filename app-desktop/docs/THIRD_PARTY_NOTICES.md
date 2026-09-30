@@ -43,11 +43,12 @@ and [MOSS Audio Tokenizer ONNX (Apache-2.0)](https://huggingface.co/OpenMOSS-Tea
 Review the exact model repository card/license for every model before a public
 release; user-downloaded weights remain subject to their upstream terms.
 
-The optional AI text-removal feature downloads the LaMa ONNX weights from the
-pinned `edgetools/lama` repository revision. The model card declares the weights
-under Apache-2.0; the model is verified by SHA-256 before use. The app does not
-bundle these weights in the installer. See the [LaMa model card](https://huggingface.co/edgetools/lama)
-and its included license for the applicable notice and terms.
+The optional STTN video-inpainting mode downloads its checkpoint on demand
+(about 63 MiB) from the pretrained model linked by the official project. STTN's inference architecture in
+`python/worker/text_removal/sttn_model.py` follows the upstream
+[researchmm/STTN](https://github.com/researchmm/STTN) implementation, licensed
+under MIT; the checkpoint is not bundled in the installer. The download is
+verified against a pinned SHA-256 digest before installation.
 
 ## Tauri and frontend packages
 

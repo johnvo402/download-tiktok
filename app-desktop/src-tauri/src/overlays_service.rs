@@ -197,6 +197,20 @@ pub fn logo_asset_path(
 }
 
 fn validate_subtitle_settings(settings: &SubtitleSettings) -> Result<(), String> {
+    if let Some(region) = &settings.region {
+        if ![region.x, region.y, region.width, region.height]
+            .into_iter()
+            .all(f64::is_finite)
+            || region.x < 0.0
+            || region.y < 0.0
+            || region.width <= 0.0
+            || region.height <= 0.0
+            || region.x + region.width > 1.0 + 1e-9
+            || region.y + region.height > 1.0 + 1e-9
+        {
+            return Err("Vùng phụ đề phải nằm hoàn toàn trong khung video.".into());
+        }
+    }
     if !(8..=240).contains(&settings.font_size) {
         return Err("Cỡ chữ phụ đề phải nằm trong khoảng 8–240 px theo khung video.".into());
     }
@@ -271,9 +285,9 @@ fn validate_blur_regions(regions: &[BlurRegion]) -> Result<(), String> {
         if !region.strength.is_finite() || !(1.0..=100.0).contains(&region.strength) {
             return Err("Độ mạnh blur phải nằm trong khoảng 1–100.".into());
         }
-        if region.edge_blend > 50 || region.pixel_noise > 100 {
+        if region.edge_blend > 50 || region.pixel_noise > 100 || ![1, 2].contains(&region.text_removal_scan_fps) {
             return Err(
-                "Hòa mềm viền phải nằm trong khoảng 0–50% và nhiễu hạt trong khoảng 0–100%.".into(),
+                "Hòa mềm viền phải nằm trong khoảng 0–50%, nhiễu hạt trong khoảng 0–100% và tốc độ quét chữ phải là 1 hoặc 2 khung/giây.".into(),
             );
         }
         if region.end_ms.is_some_and(|end| end <= region.start_ms) {
@@ -570,6 +584,8 @@ mod tests {
             role: crate::project_service::BlurRegionRole::Generic,
             edge_blend: 0,
             pixel_noise: 0,
+            text_removal_scan_fps: 2,
+            text_removal_mode: crate::project_service::TextRemovalMode::OcrGuided,
         };
         let saved = save_visual_settings(
             &store,

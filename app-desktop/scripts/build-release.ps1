@@ -44,8 +44,8 @@ if ($env:OS -ne "Windows_NT") { throw "This script produces the Windows x64 rele
 if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne [System.Runtime.InteropServices.Architecture]::X64) {
     throw "Run the Windows x64 release build on an x64 Windows host."
 }
-$PythonVersion = & $Python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
-if ($LASTEXITCODE -ne 0 -or $PythonVersion -ne "3.12") { throw "Use a working Python 3.12 x64 interpreter for the release build." }
+$PythonVersion = & $Python -c 'import sys; print(sys.version_info.major * 100 + sys.version_info.minor)'
+if ($LASTEXITCODE -ne 0 -or $PythonVersion -ne "312") { throw "Use a working Python 3.12 x64 interpreter for the release build." }
 if ($RequireSigning -and -not $CertificateThumbprint) { throw "Provide -CertificateThumbprint for a signed public release." }
 if ($CertificateThumbprint -or $RequireSigning) {
     if (-not (Get-Command signtool.exe -ErrorAction SilentlyContinue)) { throw "Windows SDK signtool.exe was not found." }
@@ -74,6 +74,7 @@ foreach ($path in @(
     (Join-Path $Root "src-tauri\resources\optional-runtime\source\requirements-optional-whisperx.in"),
     (Join-Path $Root "src-tauri\resources\optional-runtime\source\requirements-optional-bandit.in"),
     (Join-Path $Root "src-tauri\resources\optional-runtime\source\requirements-optional-acceleration.in"),
+    (Join-Path $Root "src-tauri\resources\optional-runtime\source\requirements-optional-sttn.in"),
     (Join-Path $Root "src-tauri\resources\THIRD_PARTY_LICENSES.txt")
 )) { if (-not (Test-Path $path)) { throw "Release resource is missing: $path" } }
 

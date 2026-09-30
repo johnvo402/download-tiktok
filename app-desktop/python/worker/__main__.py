@@ -121,11 +121,13 @@ def main() -> int:
                     install_ocr(str(request["cacheDir"]), emit, str(request.get("model", "tiny")))
                 else:
                     transcribe_frames(request, emit)
-            elif operation in {"text_removal_inspect", "text_removal_process"}:
-                from worker.text_removal.service import inspect, process_frames
+            elif operation in {"text_removal_process", "text_removal_process_intervals", "text_removal_scan"}:
+                from worker.text_removal.service import process_frames, process_intervals, scan_subtitle_intervals
 
-                if operation == "text_removal_inspect":
-                    emit({"type": "capabilities", **inspect(str(request["cacheDir"]))})
+                if operation == "text_removal_scan":
+                    scan_subtitle_intervals(request, emit)
+                elif operation == "text_removal_process_intervals":
+                    process_intervals(request, emit)
                 else:
                     process_frames(request, emit)
             elif operation == "tts_inspect":

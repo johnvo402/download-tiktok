@@ -10,6 +10,7 @@ export const [seekRequest, setSeekRequest] = createSignal<number | null>(null);
 export const [videoPlaying, setVideoPlaying] = createSignal(false);
 export const [ocrRegionPicking, setOcrRegionPicking] = createSignal(false);
 export const [blurRegionPicking, setBlurRegionPicking] = createSignal(false);
+export const [subtitleRegionPicking, setSubtitleRegionPicking] = createSignal(false);
 export const [ocrRegionEditing, setOcrRegionEditing] = createSignal(false);
 export const [segmentVoicePreviewActive, setSegmentVoicePreviewActive] = createSignal(false);
 export const [projectSaveState, setProjectSaveState] = createSignal<'saved' | 'saving' | 'error'>('saved');

@@ -5,7 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
   AudioLines, Check, ChevronRight, CircleHelp, Cpu, FolderOpen, Globe2, Languages, LockKeyhole,
-  ArrowLeft, Info, Monitor, SlidersHorizontal, Sparkles, Volume2,
+  ArrowLeft, Info, LoaderCircle, Monitor, SlidersHorizontal, Sparkles, Trash2, Volume2,
 } from 'lucide-solid';
 import { translationService, type AppSettings } from '../../../app/services/translation-service';
 import { projectService } from '../../../app/services/project-service';
@@ -14,7 +14,7 @@ import { ttsService } from '../../../app/services/tts-service';
 import { formatBytes, storageService, type StorageUsage } from '../../../app/services/storage-service';
 import { runtimeService, type RuntimeHealth } from '../../../app/services/runtime-service';
 import type { TranslationProviderId } from '../../transcript/types';
-import type { AsrEnvironment, OcrEnvironment, TtsEnvironment } from '../../transcript/types';
+import type { AsrEnvironment, OcrEnvironment, TextRemovalEnvironment, TtsEnvironment } from '../../transcript/types';
 import { estimatedModelSize } from '../../transcript/transcript-utils';
 import Modal from '../../../shared/components/Modal';
 import { setAppStartupReady } from '../../../app/project-state';
@@ -40,7 +40,11 @@ const settingsNavigation: Array<{ name: SettingsSection; label: string; caption:
 export default function SettingsView() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [section, setSection] = createSignal<SettingsSection>('General');
+  const requestedSection = searchParams.section;
+  const initialSection = typeof requestedSection === 'string' && settingsNavigation.some((item) => item.name === requestedSection)
+    ? requestedSection as SettingsSection
+    : 'General';
+  const [section, setSection] = createSignal<SettingsSection>(initialSection);
   const [settings, setSettings] = createSignal<AppSettings>();
   const [geminiConfigured, setGeminiConfigured] = createSignal(false);
   const [cloudConfigured, setCloudConfigured] = createSignal(false);
@@ -73,6 +77,14 @@ export default function SettingsView() {
     totalBytes: 7 * 1024 * 1024,
     message: 'Đang chuẩn bị tải model…',
   });
+  const [textRemovalEnvironment, setTextRemovalEnvironment] = createSignal<TextRemovalEnvironment>();
+  const [textRemovalEnvironmentLoading, setTextRemovalEnvironmentLoading] = createSignal(false);
+  const [textRemovalEnvironmentError, setTextRemovalEnvironmentError] = createSignal('');
+  const [installingSttnModel, setInstallingSttnModel] = createSignal(false);
+  const [removingSttnModel, setRemovingSttnModel] = createSignal(false);
+  const [showSttnModelConfirm, setShowSttnModelConfirm] = createSignal(false);
+  const [showRemoveSttnModelConfirm, setShowRemoveSttnModelConfirm] = createSignal(false);
+  const [sttnModelProgress, setSttnModelProgress] = createSignal({ progress: 0, downloadedBytes: 0, totalBytes: 66_252_587, message: 'Đang chuẩn bị tải model…' });
   const [ttsEnvironment, setTtsEnvironment] = createSignal<TtsEnvironment>();
   const [ttsEnvironmentError, setTtsEnvironmentError] = createSignal('');
   const [ttsEnvironmentLoading, setTtsEnvironmentLoading] = createSignal(false);
@@ -111,6 +123,7 @@ export default function SettingsView() {
   let unlistenOcrModel: (() => void) | undefined;
   let unlistenDialogueModel: (() => void) | undefined;
   let unlistenOptionalRuntime: (() => void) | undefined;
+  let unlistenSttnModel: (() => void) | undefined;
   let asrEnvironmentRevision = 0;
   let ocrEnvironmentRevision = 0;
   const returnPath = () => {
@@ -168,6 +181,7 @@ export default function SettingsView() {
       setCloudConfigured(result.googleCloudCredentialConfigured);
       void refreshAsrEnvironment(result.settings.asr.model, result.settings.asr.language);
       void refreshOcrEnvironment(result.settings.asr.ocrModel);
+      void refreshTextRemovalEnvironment();
     }).catch((error: unknown) => showMessage(error, true));
     void refreshTtsEnvironment();
     void refreshDialogueEnvironment();
@@ -185,12 +199,20 @@ export default function SettingsView() {
         message: event.payload.message ?? value.message,
       }));
     }).then((unlisten) => { unlistenOcrModel = unlisten; }).catch(() => undefined);
+    void listen<{ progress?: number; downloadedBytes?: number; totalBytes?: number; message?: string }>('sttn-model-progress', (event) => {
+      setSttnModelProgress((value) => ({
+        progress: Math.max(0, Math.min(1, event.payload.progress ?? value.progress)),
+        downloadedBytes: Math.max(0, event.payload.downloadedBytes ?? value.downloadedBytes),
+        totalBytes: Math.max(1, event.payload.totalBytes ?? value.totalBytes),
+        message: event.payload.message ?? value.message,
+      }));
+    }).then((unlisten) => { unlistenSttnModel = unlisten; }).catch(() => undefined);
     void dialogueService.onModelProgress(setDialogueModelProgress)
       .then((unlisten) => { unlistenDialogueModel = unlisten; }).catch(() => undefined);
     void optionalRuntimeService.onProgress(setCudaInstallProgress)
       .then((unlisten) => { unlistenOptionalRuntime = unlisten; }).catch(() => undefined);
   });
-  onCleanup(() => { unlistenTtsModel?.(); unlistenOcrModel?.(); unlistenDialogueModel?.(); unlistenOptionalRuntime?.(); });
+  onCleanup(() => { unlistenTtsModel?.(); unlistenOcrModel?.(); unlistenDialogueModel?.(); unlistenOptionalRuntime?.(); unlistenSttnModel?.(); });
   const refreshDialogueEnvironment = async () => {
     setDialogueEnvironmentLoading(true);
     setDialogueEnvironmentError('');
@@ -230,6 +252,14 @@ export default function SettingsView() {
       if (revision === ocrEnvironmentRevision) setOcrEnvironmentError(error instanceof Error ? error.message : 'Không thể kiểm tra RapidOCR.');
     } finally { if (revision === ocrEnvironmentRevision) setOcrEnvironmentLoading(false); }
   };
+  const refreshTextRemovalEnvironment = async () => {
+    setTextRemovalEnvironmentLoading(true);
+    setTextRemovalEnvironmentError('');
+    try { setTextRemovalEnvironment(await projectService.getTextRemovalEnvironment()); }
+    catch (error) { setTextRemovalEnvironmentError(error instanceof Error ? error.message : 'Không thể kiểm tra STTN.'); }
+    finally { setTextRemovalEnvironmentLoading(false); }
+  };
+  const rapidOcrReady = () => !!ocrEnvironment()?.workerInstalled && !!ocrEnvironment()?.ocrInstalled && !!ocrEnvironment()?.runtimeInstalled && !!ocrEnvironment()?.modelCached;
   const updateTranslation = (update: Partial<AppSettings['translation']>) => {
     setSettings((value) => value ? { ...value, translation: { ...value.translation, ...update } } : value);
   };
@@ -287,7 +317,7 @@ export default function SettingsView() {
         : { ...current, asr: { ...current.asr, [target === 'ocr' ? 'ocrDevice' : 'device']: 'cuda' } };
       const saved = await translationService.saveSettings(next);
       setSettings(saved.settings);
-      await Promise.all([refreshAsrEnvironment(), refreshOcrEnvironment(), refreshTtsEnvironment(), refreshDialogueEnvironment(), refreshStorage()]);
+      await Promise.all([refreshAsrEnvironment(), refreshOcrEnvironment(), refreshTextRemovalEnvironment(), refreshTtsEnvironment(), refreshDialogueEnvironment(), refreshStorage()]);
       setCudaInstallTarget(undefined);
       showMessage('Đã cài thành phần NVIDIA và model cần thiết. Thiết bị CUDA đã được lưu.', false);
     } catch (error) {
@@ -306,6 +336,8 @@ export default function SettingsView() {
       setSettings(result.settings);
       setGeminiConfigured(result.geminiCredentialConfigured);
       setCloudConfigured(result.googleCloudCredentialConfigured);
+      await refreshOcrEnvironment(result.settings.asr.ocrModel);
+      await refreshTextRemovalEnvironment();
       showMessage('Đã lưu cấu hình ứng dụng trên thiết bị.', false);
     } catch (error) { showMessage(error, true); }
     finally { setBusy(false); }
@@ -450,6 +482,7 @@ export default function SettingsView() {
       setSettings(saved.settings);
       await projectService.installOcrModel(profile);
       await refreshOcrEnvironment(profile);
+      await refreshTextRemovalEnvironment();
       await refreshStorage();
       setOcrModelProgress((progress) => ({ ...progress, progress: 1, downloadedBytes: ocrEnvironment()?.modelBytes ?? progress.downloadedBytes, message: `Đã cài ${profileLabel}.` }));
       showMessage(`Đã cài ${profileLabel} trong thư mục Models dùng chung.`, false);
@@ -465,6 +498,7 @@ export default function SettingsView() {
     try {
       const removedBytes = await projectService.removeOcrModel(profile);
       await refreshOcrEnvironment(profile);
+      await refreshTextRemovalEnvironment();
       await refreshStorage();
       showMessage(`Đã xóa mô hình đọc chữ và giải phóng ${formatBytes(removedBytes)}. Dữ liệu dự án được giữ nguyên.`, false);
     } catch (error) {
@@ -521,10 +555,37 @@ export default function SettingsView() {
     try {
       await projectService.installOcrRuntime();
       await refreshOcrEnvironment();
+      await refreshTextRemovalEnvironment();
       showMessage('Bộ đọc chữ đã sẵn sàng. Tiếp theo, tải mô hình ở mục này.', false);
     } catch (error) {
       setOcrEnvironmentError(error instanceof Error ? error.message : 'Không thể cài bộ đọc chữ.');
     } finally { setInstallingOcrRuntime(false); }
+  };
+  const installSttnModel = async () => {
+    if (installingSttnModel()) return;
+    setShowSttnModelConfirm(false);
+    setInstallingSttnModel(true);
+    setSttnModelProgress({ progress: 0, downloadedBytes: 0, totalBytes: textRemovalEnvironment()?.sttnEstimatedDownloadBytes ?? 66_252_587, message: 'Đang kết nối…' });
+    setTextRemovalEnvironmentError('');
+    try {
+      await projectService.installSttnTextRemovalModel();
+      await Promise.all([refreshTextRemovalEnvironment(), refreshStorage()]);
+      showMessage('Đã cài model STTN trong thư mục Models dùng chung.', false);
+    } catch (error) {
+      setTextRemovalEnvironmentError(error instanceof Error ? error.message : 'Không thể cài model STTN.');
+    } finally { setInstallingSttnModel(false); }
+  };
+  const removeSttnModel = async () => {
+    setShowRemoveSttnModelConfirm(false);
+    setRemovingSttnModel(true);
+    setTextRemovalEnvironmentError('');
+    try {
+      await projectService.removeSttnTextRemovalModel();
+      await Promise.all([refreshTextRemovalEnvironment(), refreshStorage()]);
+      showMessage('Đã gỡ model STTN khỏi thư mục Models dùng chung.', false);
+    } catch (error) {
+      setTextRemovalEnvironmentError(error instanceof Error ? error.message : 'Không thể gỡ model STTN.');
+    } finally { setRemovingSttnModel(false); }
   };
   const previewTtsVoice = async () => {
     const voice = settings()?.tts.defaultVoice;
@@ -728,6 +789,7 @@ export default function SettingsView() {
 
               <p class="ocr-card-help">Dùng cho phụ đề nằm sẵn trong hình. Chọn chế độ đọc chữ trong Cài đặt dự án, rồi kéo chọn vùng phụ đề trên video. Tốc độ đọc được chọn riêng cho từng dự án.</p>
               <Show when={settings()!.asr.ocrDevice === 'cuda' && !ocrEnvironment()?.cudaAvailable}><p class="asr-config-warning" role="alert">Tăng tốc NVIDIA chưa sẵn sàng. Chọn lại NVIDIA trong mục Thiết bị để cài, hoặc dùng CPU.</p></Show>
+              <Show when={settings()!.asr.ocrDevice === 'cuda' && !!ocrEnvironment()?.runtimeError}><p class="asr-config-warning" role="alert">{ocrEnvironment()?.runtimeError}</p></Show>
 
               <Show when={!ocrEnvironmentLoading() && ocrEnvironment()?.workerInstalled && (!ocrEnvironment()?.ocrInstalled || !ocrEnvironment()?.runtimeInstalled)}>
                 <div class="ocr-install-callout">
@@ -757,6 +819,32 @@ export default function SettingsView() {
                 <button class="button button-quiet provider-action-secondary" type="button" disabled={ocrEnvironmentLoading() || installingOcrRuntime() || installingOcrModel() || removingOcrModel()} onClick={() => void refreshOcrEnvironment(settings()!.asr.ocrModel)}>{ocrEnvironmentLoading() ? 'Đang kiểm tra…' : 'Kiểm tra lại'}</button>
                 <Show when={ocrEnvironment()?.modelCached}><span class="version-chip">Đã cài · {formatBytes(ocrEnvironment()!.modelBytes)}</span><button class="button button-danger provider-action-secondary" type="button" disabled={installingOcrModel() || removingOcrModel()} onClick={() => setShowRemoveOcrModelConfirm(true)}>{removingOcrModel() ? 'Đang gỡ…' : `Gỡ ${settings()!.asr.ocrModel}`}</button></Show>
               </div>
+            </div>
+            <div class="settings-card ocr-settings-card">
+              <section class="ocr-ai-removal-section" aria-labelledby="ocr-ai-removal-title">
+                <div class="ocr-ai-removal-heading">
+                  <div><span class="provider-eyebrow">PHỤC HỒI NỀN SAU PHỤ ĐỀ</span><h4 id="ocr-ai-removal-title">AI Remove · STTN</h4>
+                    <p>STTN dùng các khung hình lân cận để phục hồi nền. RapidOCR chỉ dùng riêng khi cần phát hiện chữ trong video.</p></div>
+                  <button class="button button-quiet provider-action-secondary" type="button" disabled={textRemovalEnvironmentLoading() || installingSttnModel() || removingSttnModel()} onClick={() => void refreshTextRemovalEnvironment()}>{textRemovalEnvironmentLoading() ? 'Đang kiểm tra…' : 'Kiểm tra lại'}</button>
+                </div>
+                <Show when={!rapidOcrReady()}>
+                  <div class="ocr-ai-prerequisite" role="status"><Sparkles size={15} /><span><strong>RapidOCR chưa sẵn sàng</strong><small>Cài RapidOCR riêng để dò thời điểm có chữ. STTN được cài độc lập.</small></span></div>
+                </Show>
+                <div class="ocr-ai-addon-grid">
+                  <div class="ocr-ai-addon-card ocr-ai-sttn-card">
+                    <div class="ocr-ai-addon-title"><div><strong>STTN · Xóa chữ theo thời gian</strong><small>Dùng các khung hình lân cận · bộ xử lý và trọng số được cài riêng</small></div>
+                      <span class="version-chip">{textRemovalEnvironmentLoading() ? 'Đang kiểm tra' : textRemovalEnvironment()?.sttnModelInstalled ? `Model · ${formatBytes(textRemovalEnvironment()!.sttnModelBytes)}` : `Model · khoảng ${formatBytes(textRemovalEnvironment()?.sttnEstimatedDownloadBytes ?? 66_252_587)}`}</span>
+                    </div>
+                    <OptionalAiRuntimeCard embedded feature="sttn" available={textRemovalEnvironment()?.sttnRuntimeInstalled} preferredProfile={textRemovalEnvironment()?.sttnCudaAvailable ? 'cuda' : undefined} onInstalled={() => { void Promise.all([refreshTextRemovalEnvironment(), refreshStorage()]); }} />
+                    <div class="ocr-ai-addon-actions">
+                      <Show when={!textRemovalEnvironment()?.sttnModelInstalled}><button class="button button-primary" type="button" disabled={textRemovalEnvironmentLoading() || installingSttnModel()} onClick={() => setShowSttnModelConfirm(true)}><Show when={installingSttnModel()} fallback={<Sparkles size={14} />}><LoaderCircle size={14} class="spin" /></Show>{installingSttnModel() ? 'Đang cài model…' : 'Cài model STTN'}</button></Show>
+                      <Show when={textRemovalEnvironment()?.sttnModelInstalled}><span class="ocr-ai-ready-label"><Check size={13} /> Model đã cài</span><button class="button button-danger provider-action-secondary" type="button" disabled={removingSttnModel() || installingSttnModel()} onClick={() => setShowRemoveSttnModelConfirm(true)}><Trash2 size={13} />{removingSttnModel() ? 'Đang gỡ…' : 'Gỡ model'}</button></Show>
+                    </div>
+                    <Show when={installingSttnModel()}><div class="ocr-install-progress" role="status" aria-live="polite"><div class="ocr-progress-copy"><span class="spin status-spinner" /><span><strong>Đang cài model STTN</strong><small>{sttnModelProgress().message} · {formatBytes(sttnModelProgress().downloadedBytes)} / {formatBytes(sttnModelProgress().totalBytes)}</small></span><strong>{Math.round(sttnModelProgress().progress * 100)}%</strong></div><div class="job-progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(sttnModelProgress().progress * 100)}><span style={{ width: `${Math.max(2, sttnModelProgress().progress * 100)}%` }} /></div></div></Show>
+                  </div>
+                </div>
+                <Show when={textRemovalEnvironmentError()}><div class="provider-feedback provider-feedback-error" role="alert">{textRemovalEnvironmentError()}</div></Show>
+              </section>
             </div>
             <div class="settings-card ocr-settings-card dialogue-settings-card">
               <div class="ocr-card-heading">
@@ -928,6 +1016,18 @@ export default function SettingsView() {
         <Modal title={`Cài ${ocrEnvironment()?.model ?? 'PP-OCRv6 Tiny'}?`} description="Trọng số OCR được tải riêng vào thư mục Models dùng chung. Tải chỉ bắt đầu sau khi bạn xác nhận." onClose={() => setShowOcrModelConfirm(false)}>
           <div class="model-confirm-card"><div class="job-banner-icon"><Sparkles size={17} /></div><div><strong>{ocrEnvironment()?.model ?? 'PP-OCRv6 Tiny'} · khoảng {formatBytes(ocrEnvironment()?.estimatedDownloadBytes ?? 7 * 1024 * 1024)}</strong><p>{settings()?.asr.ocrModel === 'tiny' ? 'Tiny ưu tiên tốc độ và dung lượng nhỏ.' : settings()?.asr.ocrModel === 'small' ? 'Small cân bằng tốc độ và độ chính xác, dung lượng lớn hơn Tiny.' : 'Medium là model lớn, dùng nhiều bộ nhớ và phù hợp khi ưu tiên độ chính xác.'} Lần đầu cần Internet; sau khi cài, transcript chạy offline. Tiến trình sẽ hiển thị dung lượng tải.</p></div></div>
           <footer class="modal-actions"><button class="button button-quiet" type="button" onClick={() => setShowOcrModelConfirm(false)}>Hủy</button><button class="button button-primary" type="button" onClick={() => void installOcrModel()}>Tải model OCR</button></footer>
+        </Modal>
+      </Show>
+      <Show when={showSttnModelConfirm()}>
+        <Modal title="Cài model STTN?" description="Model STTN được tải riêng với bộ xử lý CPU/NVIDIA và lưu dùng chung trên thiết bị. RapidOCR chỉ cần khi chạy chức năng xóa chữ." onClose={() => setShowSttnModelConfirm(false)}>
+          <div class="model-confirm-card"><div class="job-banner-icon"><Sparkles size={17} /></div><div><strong>STTN · khoảng {formatBytes(textRemovalEnvironment()?.sttnEstimatedDownloadBytes ?? 66_252_587)}</strong><p>Model tải một lần và dùng được cho mọi project.</p></div></div>
+          <footer class="modal-actions"><button class="button button-quiet" type="button" onClick={() => setShowSttnModelConfirm(false)}>Hủy</button><button class="button button-primary" type="button" disabled={installingSttnModel()} onClick={() => void installSttnModel()}>{installingSttnModel() ? 'Đang cài…' : 'Tải và cài model'}</button></footer>
+        </Modal>
+      </Show>
+      <Show when={showRemoveSttnModelConfirm()}>
+        <Modal title="Gỡ model STTN?" description="Chỉ xóa trọng số model STTN. Bộ xử lý STTN, project và các model khác được giữ nguyên." onClose={() => setShowRemoveSttnModelConfirm(false)}>
+          <div class="model-confirm-card"><div class="job-banner-icon"><Trash2 size={17} /></div><div><strong>{formatBytes(textRemovalEnvironment()?.sttnModelBytes ?? 0)} sẽ được giải phóng</strong><p>Bạn có thể tải lại model trong Cài đặt ứng dụng.</p></div></div>
+          <footer class="modal-actions"><button class="button button-quiet" type="button" onClick={() => setShowRemoveSttnModelConfirm(false)}>Giữ model</button><button class="button button-danger" type="button" disabled={removingSttnModel()} onClick={() => void removeSttnModel()}>{removingSttnModel() ? 'Đang gỡ…' : 'Gỡ model và file'}</button></footer>
         </Modal>
       </Show>
       <Show when={showRemoveOcrModelConfirm()}>

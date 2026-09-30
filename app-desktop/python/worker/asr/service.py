@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
+import threading
 import time
 from typing import Any, Callable
 import uuid
@@ -377,6 +378,82 @@ def _transcribe_audio(
     return results, getattr(info, "language", None)
 
 
+def _install_pyav_metadata_errors_compat() -> str:
+    """Keep faster-whisper compatible with older PyAV builds in existing installs.
+
+    faster-whisper passes ``metadata_errors`` to ``av.open``. Some packaged or
+    previously installed PyAV builds do not accept that keyword. Retrying
+    without it preserves the normal decoder behavior and avoids failing an
+    otherwise valid local WAV transcription.
+    """
+    import av
+
+    original_open = av.open
+    if getattr(original_open, "_jc_ai_metadata_errors_compat", False):
+        return str(getattr(av, "__version__", "unknown"))
+
+    def open_compat(file: Any, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return original_open(file, *args, **kwargs)
+        except TypeError as error:
+            message = str(error)
+            if "metadata_errors" not in message or "unexpected keyword argument" not in message:
+                raise
+            compatible_kwargs = dict(kwargs)
+            compatible_kwargs.pop("metadata_errors", None)
+            LOGGER.warning(
+                "PyAV %s does not support metadata_errors; retrying av.open without that optional argument",
+                getattr(av, "__version__", "unknown"),
+            )
+            return original_open(file, *args, **compatible_kwargs)
+
+    setattr(open_compat, "_jc_ai_metadata_errors_compat", True)
+    av.open = open_compat
+    return str(getattr(av, "__version__", "unknown"))
+
+
+def _load_whisper_model_with_progress(
+    model_name: str,
+    model_dir: Path,
+    device: str,
+    compute_type: str,
+    cpu_threads: int,
+    emit: Emitter,
+) -> Any:
+    started = time.monotonic()
+    stop_progress = threading.Event()
+
+    def report_loading_time() -> None:
+        while not stop_progress.wait(10):
+            elapsed = int(time.monotonic() - started)
+            progress(
+                emit,
+                "model-loading",
+                f"Đang nạp model {model_name} vào bộ nhớ · {elapsed} giây",
+            )
+
+    progress(
+        emit,
+        "model-loading",
+        f"Đang nạp model {model_name} vào bộ nhớ. Model lớn có thể cần vài phút…",
+    )
+    reporter = threading.Thread(target=report_loading_time, name="asr-model-load-progress", daemon=True)
+    reporter.start()
+    try:
+        from faster_whisper import WhisperModel
+
+        return WhisperModel(
+            str(model_dir),
+            device=device,
+            compute_type=compute_type,
+            cpu_threads=cpu_threads,
+            local_files_only=True,
+        )
+    finally:
+        stop_progress.set()
+        reporter.join(timeout=1)
+
+
 def _cpu_thread_budget() -> int:
     """Scale CTranslate2 CPU inference to physical cores without using every logical thread."""
     logical_cores = os.cpu_count() or 8
@@ -451,22 +528,25 @@ def transcribe(request: dict[str, Any], emit: Emitter) -> None:
     except ImportError as error:
         raise RuntimeError("Bộ nhận dạng lời thoại chưa sẵn sàng. Hãy cập nhật hoặc cài lại JC AI.") from error
 
+    pyav_version = _install_pyav_metadata_errors_compat()
+    LOGGER.info("Speech Recognition dependencies: PyAV %s; model=%s; requested device=%s", pyav_version, model_name, device)
+
     model_dir = _model_directory(cache_dir, model_name)
     if not _model_is_complete(model_dir):
         raise RuntimeError(f"Model {model_name} chưa được cài. Mở Cài đặt → Speech Recognition để cài model trước khi tạo transcript.")
-    progress(emit, "model-loading", f"Loading {model_name} model")
     LOGGER.info("Loading model %s on %s", model_name, device)
     try:
         compute_type = "default" if device == "auto" else "int8" if device == "cpu" else "float16"
         cpu_threads = _cpu_thread_budget() if device in {"cpu", "auto"} else 4
         # Load only from the validated local directory. Passing the model name
         # here would allow faster-whisper to contact Hugging Face on every run.
-        model = WhisperModel(
-            str(model_dir),
-            device=device,
-            compute_type=compute_type,
-            cpu_threads=cpu_threads,
-            local_files_only=True,
+        model = _load_whisper_model_with_progress(
+            model_name,
+            model_dir,
+            device,
+            compute_type,
+            cpu_threads,
+            emit,
         )
         LOGGER.info("Speech Recognition compute type %s, CPU thread budget %s", compute_type, cpu_threads)
     except Exception as error:

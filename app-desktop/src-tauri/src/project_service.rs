@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
-const SCHEMA_VERSION: u32 = 8;
+const SCHEMA_VERSION: u32 = 10;
 const LEGACY_TTS_VOICE: &str = "Ngọc Lan";
 const DEFAULT_TTS_VOICE: &str = "Ngọc Huyền";
 const MAX_NAME_CHARS: usize = 100;
@@ -228,14 +228,33 @@ pub struct BlurRegion {
     pub edge_blend: u8,
     #[serde(default)]
     pub pixel_noise: u8,
+    #[serde(default = "default_text_removal_scan_fps")]
+    pub text_removal_scan_fps: u8,
+    #[serde(default)]
+    pub text_removal_mode: TextRemovalMode,
 }
+
+fn default_text_removal_scan_fps() -> u8 { 2 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum BlurEffect {
     #[default]
+    #[serde(alias = "smartFill", alias = "aiTextRemoval")]
     Blur,
-    AiTextRemoval,
+    /// Temporal video inpainting using STTN.
+    Sttn,
+}
+
+/// Controls how STTN creates the inpainting mask for a selected region.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TextRemovalMode {
+    /// RapidOCR finds text and limits inpainting to detected glyphs.
+    #[default]
+    OcrGuided,
+    /// Inpaint the entire selected rectangle for the region's active time span.
+    FullRegion,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -285,6 +304,8 @@ pub struct TranslationSettings {
     pub target_language: String,
     #[serde(default)]
     pub custom_prompt: String,
+    #[serde(default)]
+    pub context: String,
     pub segments: Vec<TranslationSegment>,
 }
 
@@ -321,6 +342,18 @@ pub struct SubtitleSettings {
     pub min_font_size: u16,
     #[serde(default = "default_subtitle_vertical_alignment")]
     pub vertical_alignment: String,
+    /// Optional normalized subtitle placement rectangle used when no blur region is assigned the subtitle role.
+    #[serde(default)]
+    pub region: Option<SubtitleRegion>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubtitleRegion {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 fn default_subtitle_font_size() -> u16 {
@@ -375,6 +408,7 @@ impl Default for SubtitleSettings {
             auto_fit: default_subtitle_auto_fit(),
             min_font_size: default_subtitle_min_font_size(),
             vertical_alignment: default_subtitle_vertical_alignment(),
+            region: None,
         }
     }
 }
@@ -501,6 +535,7 @@ impl ProjectStore {
                 source_language: "auto".to_string(),
                 target_language: "vi".to_string(),
                 custom_prompt: String::new(),
+                context: String::new(),
                 segments: Vec::new(),
             },
             subtitle: SubtitleSettings::default(),
@@ -862,6 +897,19 @@ pub fn validate_translation_custom_prompt(prompt: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn validate_translation_context(context: &str) -> Result<(), String> {
+    if context.chars().count() > 20_000
+        || context
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err(
+            "Context dịch tối đa 20.000 ký tự và không được chứa ký tự điều khiển.".to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn canonical_project_id(id: &str) -> Result<String, String> {
     Uuid::parse_str(id)
         .map(|uuid| uuid.to_string())
@@ -1137,7 +1185,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec_pretty(&old).unwrap()).unwrap();
 
         let upgraded = store.get(&project.id).unwrap();
-        assert_eq!(upgraded.schema_version, 8);
+        assert_eq!(upgraded.schema_version, 10);
         assert_eq!(upgraded.id, project.id);
         assert_eq!(upgraded.name, "Legacy project");
         assert_eq!(upgraded.source.video_path, None);
@@ -1146,7 +1194,7 @@ mod tests {
         assert_eq!(upgraded.subtitle.alignment, "center");
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(persisted["schemaVersion"], 8);
+        assert_eq!(persisted["schemaVersion"], 10);
         assert_eq!(
             fs::read_dir(path.parent().unwrap())
                 .unwrap()
@@ -1178,10 +1226,11 @@ mod tests {
         assert_eq!(loaded.blur_regions[0].role, BlurRegionRole::Generic);
         assert_eq!(loaded.blur_regions[0].edge_blend, 0);
         assert_eq!(loaded.blur_regions[0].pixel_noise, 0);
-        assert_eq!(loaded.schema_version, 8);
+        assert_eq!(loaded.blur_regions[0].text_removal_scan_fps, 2);
+        assert_eq!(loaded.schema_version, 10);
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(file).unwrap()).unwrap();
-        assert_eq!(persisted["schemaVersion"], 8);
+        assert_eq!(persisted["schemaVersion"], 10);
         assert_eq!(persisted["blurRegions"][0]["role"], "generic");
     }
 

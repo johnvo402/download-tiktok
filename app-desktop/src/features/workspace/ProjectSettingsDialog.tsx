@@ -9,6 +9,7 @@ import Modal from '../../shared/components/Modal';
 
 export default function ProjectSettingsDialog(props: { project: Project; onClose: () => void }) {
   const [customPrompt, setCustomPrompt] = createSignal(props.project.translation.customPrompt ?? '');
+  const [translationContext, setTranslationContext] = createSignal(props.project.translation.context ?? '');
   const [transcriptMode, setTranscriptMode] = createSignal<'speechRecognition' | 'ocr'>(props.project.transcriptSettings?.mode ?? 'speechRecognition');
   const [ocrFps, setOcrFps] = createSignal<1 | 2 | 4>(props.project.transcriptSettings?.ocrFps ?? 2);
   const [voiceValue, setVoiceValue] = createSignal('');
@@ -71,6 +72,7 @@ export default function ProjectSettingsDialog(props: { project: Project; onClose
     try {
       const updated = await projectService.updateProjectPreferences(props.project.id, {
         customPrompt: customPrompt(),
+        translationContext: translationContext(),
         voice,
         voiceProfileId,
         transcriptSettings: {
@@ -80,7 +82,7 @@ export default function ProjectSettingsDialog(props: { project: Project; onClose
         },
       });
       if (currentProject()?.id === updated.id) setCurrentProject(updated);
-      setNotice({ kind: 'success', message: 'Đã lưu prompt, giọng TTS và cách tạo transcript cho dự án này.' });
+      setNotice({ kind: 'success', message: 'Đã lưu prompt, context dịch, giọng TTS và cách tạo transcript cho dự án này.' });
       props.onClose();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Không thể lưu cài đặt dự án.');
@@ -113,6 +115,19 @@ export default function ProjectSettingsDialog(props: { project: Project; onClose
             <textarea maxlength="8000" rows="4" value={customPrompt()} placeholder="Ví dụ: Dùng giọng tự nhiên, thân mật; giữ cách xưng hô nhất quán…" onInput={(event) => setCustomPrompt(event.currentTarget.value)} />
           </label>
           <p class="provider-help">Gemini và Codex CLI dùng hướng dẫn này. Google Cloud Translation NMT không hỗ trợ prompt.</p>
+        </section>
+
+        <section class="project-setting-section" aria-labelledby="project-translation-context-title">
+          <div class="project-setting-heading"><div><span class="provider-eyebrow">TRANSLATION MEMORY</span><h3 id="project-translation-context-title">Context dịch</h3></div><span class="project-setting-scope">THEO DỰ ÁN</span></div>
+          <div class="translation-prompt-default" role="note">
+            <strong>Ghi chú dùng xuyên suốt dự án</strong>
+            <p>Thêm tên nhân vật, cách dịch tên riêng, thuật ngữ, bối cảnh và quan hệ giữa các nhân vật. Mỗi ý nên nằm trên một dòng.</p>
+          </div>
+          <label class="provider-field project-custom-prompt">
+            <span class="translation-prompt-label-row"><span>Context hiện tại</span><small>{translationContext().length}/20.000</small></span>
+            <textarea maxlength="20000" rows="7" value={translationContext()} placeholder={'Nhân vật: Alex Miller → Trương Vĩ\nBối cảnh: câu chuyện lấy bối cảnh trong một môn phái tu tiên\nThuật ngữ: core realm → cảnh giới cốt lõi'} onInput={(event) => setTranslationContext(event.currentTarget.value)} />
+          </label>
+          <p class="provider-help">Gemini và Codex CLI nhận context này ở mỗi batch dịch. Sau mỗi batch hợp lệ, AI chỉ đề xuất các ý mới; ứng dụng sẽ thêm ý chưa có mà không thay thế ghi chú hiện tại. Google Cloud Translation NMT không hỗ trợ context prompt.</p>
         </section>
 
         <section class="project-setting-section" aria-labelledby="project-tts-voice-title">

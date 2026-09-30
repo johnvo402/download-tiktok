@@ -115,6 +115,10 @@ pub struct OcrEnvironment {
     pub estimated_download_bytes: u64,
     pub cuda_available: bool,
     pub active_device: String,
+    pub onnx_runtime_version: Option<String>,
+    pub onnx_runtime_device: Option<String>,
+    pub execution_providers: Vec<String>,
+    pub runtime_error: Option<String>,
 }
 
 fn default_asr_engine() -> String {
@@ -234,6 +238,16 @@ pub fn get_ocr_environment(app: AppHandle, model: String) -> Result<OcrEnvironme
         "cacheDir": ocr_cache_dir(&app)?,
         "model": model,
     }))?;
+    let providers = response.get("executionProviders").and_then(|value| value.as_array())
+        .map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let runtime_version = response.get("onnxRuntimeVersion").and_then(|value| value.as_str());
+    let runtime_device = response.get("onnxRuntimeDevice").and_then(|value| value.as_str());
+    let cuda_available = response.get("cudaAvailable").and_then(|value| value.as_bool()).unwrap_or(false);
+    log::info!(
+        "RapidOCR environment: model={}, runtime={}, ORT device={}, providers={:?}, CUDA ready={}",
+        model, runtime_version.unwrap_or("unknown"), runtime_device.unwrap_or("unknown"), providers, cuda_available
+    );
     Ok(OcrEnvironment {
         worker_installed: response.get("workerInstalled").and_then(|value| value.as_bool()).unwrap_or(false),
         ocr_installed: response.get("ocrInstalled").and_then(|value| value.as_bool()).unwrap_or(false),
@@ -244,8 +258,12 @@ pub fn get_ocr_environment(app: AppHandle, model: String) -> Result<OcrEnvironme
         model_profile: response.get("modelProfile").and_then(|value| value.as_str()).unwrap_or("tiny").to_string(),
         model_bytes: response.get("modelBytes").and_then(|value| value.as_u64()).unwrap_or(0),
         estimated_download_bytes: response.get("estimatedDownloadBytes").and_then(|value| value.as_u64()).unwrap_or(7 * 1024 * 1024),
-        cuda_available: response.get("cudaAvailable").and_then(|value| value.as_bool()).unwrap_or(false),
+        cuda_available,
         active_device: response.get("activeDevice").and_then(|value| value.as_str()).unwrap_or("cpu").to_string(),
+        onnx_runtime_version: runtime_version.map(str::to_string),
+        onnx_runtime_device: runtime_device.map(str::to_string),
+        execution_providers: providers,
+        runtime_error: response.get("runtimeError").and_then(|value| value.as_str()).map(str::to_string),
     })
 }
 
@@ -577,13 +595,24 @@ pub fn generate_transcript(
         return Err("Không tìm thấy thư mục Python worker trong checkout hiện tại.".to_string());
     }
     let cache_dir = asr_cache_dir(&app)?;
-    let mut cuda_available = false;
+    let cuda_available;
     if options.mode == "ocr" {
         let environment = inspect_worker(&worker, &serde_json::json!({
             "operation": "ocr_inspect",
             "cacheDir": app.path().app_data_dir().map_err(|error| error.to_string())?.join("models"),
             "model": options.ocr_model,
         }))?;
+        cuda_available = environment.get("cudaAvailable").and_then(|value| value.as_bool()).unwrap_or(false);
+        let provider_list = environment.get("executionProviders").map(ToString::to_string).unwrap_or_else(|| "[]".to_string());
+        log::info!(
+            "Starting OCR transcript: project={}, model={}, requested_device={}, ORT device={}, providers={}, CUDA ready={}",
+            project_id,
+            options.ocr_model,
+            options.ocr_device,
+            environment.get("onnxRuntimeDevice").and_then(|value| value.as_str()).unwrap_or("unknown"),
+            provider_list,
+            cuda_available,
+        );
         if !environment.get("workerInstalled").and_then(|value| value.as_bool()).unwrap_or(false) {
             return Err("Bộ xử lý AI chưa sẵn sàng. Hãy cập nhật hoặc cài lại JC AI.".into());
         }
@@ -646,7 +675,11 @@ pub fn generate_transcript(
     );
     drop(entries);
     drop(deleting);
-    let use_gpu = options.mode == "speechRecognition" && (options.device == "cuda" || options.device == "auto" && cuda_available);
+    let use_gpu = if options.mode == "ocr" {
+        options.ocr_device == "cuda" || options.ocr_device == "auto" && cuda_available
+    } else {
+        options.device == "cuda" || options.device == "auto" && cuda_available
+    };
     let mut resources = vec!["python-worker", "disk"];
     resources.push(if use_gpu { "gpu" } else { "cpu" });
     crate::job_service::register_job(
@@ -1033,6 +1066,13 @@ fn run_worker_request(
     job_id: &str,
     canceled: &AtomicBool,
 ) -> Result<(), String> {
+    let operation = request.get("operation").and_then(|value| value.as_str()).unwrap_or("unknown");
+    if operation == "ocr_transcribe" {
+        log::info!("Starting RapidOCR worker request: model={}, requested_device={}, fps={}",
+            request.get("model").and_then(|value| value.as_str()).unwrap_or("unknown"),
+            request.get("device").and_then(|value| value.as_str()).unwrap_or("auto"),
+            request.get("fps").and_then(|value| value.as_f64()).unwrap_or(0.0));
+    }
     let mut child = python_command(worker)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1151,6 +1191,11 @@ fn run_worker_request(
     }
     let stderr = stderr_thread.join().unwrap_or_default();
     if let Some(error) = worker_error {
+        match operation {
+            "ocr_transcribe" => log::error!("RapidOCR worker failed: {}; stderr={}", error, stderr_tail(&stderr, 40)),
+            "transcribe" => log::error!("Speech recognition worker failed: {}; stderr={}", error, stderr_tail(&stderr, 60)),
+            _ => {}
+        }
         return Err(error);
     }
     if !exit_status.is_some_and(|status| status.success()) {
@@ -1158,9 +1203,23 @@ fn run_worker_request(
         return Err("Nhận dạng lời thoại đã dừng bất ngờ. Mở Cài đặt → Nhận dạng lời thoại để kiểm tra thành phần đã cài.".to_string());
     }
     if !completed {
+        match operation {
+            "ocr_transcribe" => log::error!("RapidOCR worker exited without completion: stderr={}", stderr_tail(&stderr, 40)),
+            "transcribe" => log::error!("Speech recognition worker exited without completion: stderr={}", stderr_tail(&stderr, 60)),
+            _ => {}
+        }
         return Err("Nhận dạng lời thoại đã dừng trước khi hoàn tất bản chép lời.".to_string());
     }
+    match operation {
+        "ocr_transcribe" => log::info!("RapidOCR worker completed; diagnostics: {}", stderr_tail(&stderr, 40)),
+        "transcribe" if !stderr.trim().is_empty() => log::info!("Speech recognition worker diagnostics: {}", stderr_tail(&stderr, 40)),
+        _ => {}
+    }
     Ok(())
+}
+
+fn stderr_tail(stderr: &str, limit: usize) -> String {
+    stderr.lines().rev().take(limit).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | ")
 }
 
 fn inspect_worker(worker: &Path, request: &serde_json::Value) -> Result<serde_json::Value, String> {

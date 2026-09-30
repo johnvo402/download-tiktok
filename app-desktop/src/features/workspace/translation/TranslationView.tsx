@@ -5,7 +5,7 @@ import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } 
 import {
   AlertTriangle, Film, Maximize2, Pause, Play, Plus, Volume1, Volume2, VolumeX,
 } from 'lucide-solid';
-import { aiRemovalPreview, blurRegionPicking, currentProject, currentTranscript, ocrRegionEditing, ocrRegionPicking, playbackTime, seekRequest, segmentVoicePreviewActive, setActiveWorkspacePanelTab, setAiRemovalPreview, setBlurRegionPicking, setCurrentProject, setCurrentTranscript, setNotice, setOcrRegionEditing, setOcrRegionPicking, setPlaybackTime, setSeekRequest, setSelectedOverlay, setSegmentVoicePreviewActive, setVideoPlaying, selectedOverlay, videoPlaying } from '../../../app/project-state';
+import { aiRemovalPreview, blurRegionPicking, currentProject, currentTranscript, ocrRegionEditing, ocrRegionPicking, playbackTime, seekRequest, segmentVoicePreviewActive, setActiveWorkspacePanelTab, setAiRemovalPreview, setBlurRegionPicking, setCurrentProject, setCurrentTranscript, setNotice, setOcrRegionEditing, setOcrRegionPicking, setPlaybackTime, setSeekRequest, setSelectedOverlay, setSegmentVoicePreviewActive, setSubtitleRegionPicking, setVideoPlaying, selectedOverlay, subtitleRegionPicking, videoPlaying } from '../../../app/project-state';
 import { projectService } from '../../../app/services/project-service';
 import { ttsService } from '../../../app/services/tts-service';
 import { dialogueService } from '../../../app/services/dialogue-service';
@@ -14,7 +14,7 @@ import { needsCompatibilityPreview } from './video-utils';
 import Modal from '../../../shared/components/Modal';
 import OverlayCanvas from '../../overlays/OverlayCanvas';
 import { fitContainRect } from '../../overlays/overlay-utils';
-import { updateVisualSettings, mergeVisualProject } from '../../overlays/overlay-state';
+import { updateVisualSettings, mergeVisualProject, flushVisualSettings } from '../../overlays/overlay-state';
 
 function formatTime(seconds: number) {
   if (!Number.isFinite(seconds) || seconds < 0) return '00:00';
@@ -681,6 +681,7 @@ export default function TranslationView() {
     if (!project?.source.videoPath) return;
     setOcrRegionPicking(false);
     setOcrRegionEditing(false);
+    setSubtitleRegionPicking(false);
     setBlurRegionPicking(true);
     setNotice({ kind: 'info', message: 'Kéo trên video để vẽ vùng blur. Nhấn Esc để hủy.' });
   };
@@ -688,8 +689,9 @@ export default function TranslationView() {
   const createBlurRegion = (rect: { x: number; y: number; width: number; height: number }) => {
     const project = currentProject();
     if (!project) return;
-    const region = { id: crypto.randomUUID(), ...rect, startMs: 0, endMs: null, enabled: true, strength: 24, role: 'generic' as const, edgeBlend: 10, pixelNoise: 0 };
+    const region = { id: crypto.randomUUID(), ...rect, startMs: 0, endMs: null, enabled: true, strength: 24, role: 'generic' as const, edgeBlend: 10, pixelNoise: 0, textRemovalScanFps: 2 as const, textRemovalMode: 'ocrGuided' as const };
     setBlurRegionPicking(false);
+    setSubtitleRegionPicking(false);
     updateVisualSettings({ blurRegions: [...project.blurRegions, region] }, true);
     setSelectedOverlay({ type: 'blur', id: region.id });
     setActiveWorkspacePanelTab('properties');
@@ -717,6 +719,42 @@ export default function TranslationView() {
     setActiveWorkspacePanelTab('properties');
   };
 
+  const hasSubtitleBlurRegion = () => currentProject()?.blurRegions.some((region) => region.role === 'subtitle') ?? false;
+
+  const addSubtitleRegion = () => {
+    const project = currentProject();
+    if (!project?.source.videoPath) return;
+    if (hasSubtitleBlurRegion()) {
+      setNotice({ kind: 'info', message: 'Đã có vùng Blur/STTN mang vai trò Subtitle Region. Hãy chỉnh vị trí trong vùng đó; vùng subtitle riêng hiện không khả dụng.' });
+      return;
+    }
+    setOcrRegionPicking(false);
+    setOcrRegionEditing(false);
+    setBlurRegionPicking(false);
+    setSelectedOverlay({ type: 'subtitle' });
+    setActiveWorkspacePanelTab('properties');
+    setSubtitleRegionPicking(true);
+    setNotice({ kind: 'info', message: 'Kéo trên video để chọn vùng hiển thị phụ đề. Nhấn Esc để hủy.' });
+  };
+
+  const saveSubtitleRegion = async (region: { x: number; y: number; width: number; height: number }) => {
+    const project = currentProject();
+    if (!project) return;
+    setSubtitleRegionPicking(false);
+    try {
+      await flushVisualSettings(project.id);
+      const latest = currentProject();
+      if (!latest || latest.id !== project.id) return;
+      const updated = await projectService.updateSubtitleSettings(project.id, { ...latest.subtitle, region });
+      mergeVisualProject(updated);
+      setSelectedOverlay({ type: 'subtitle' });
+      setActiveWorkspacePanelTab('properties');
+      setNotice({ kind: 'success', message: 'Đã lưu vùng hiển thị phụ đề cho dự án.' });
+    } catch (error) {
+      setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể lưu vùng subtitle.' });
+    }
+  };
+
   const totalDuration = () => Number.isFinite(duration()) && duration() > 0 ? duration() : 0;
 
   const saveOcrRegion = async (region: { x: number; y: number; width: number; height: number }) => {
@@ -731,6 +769,7 @@ export default function TranslationView() {
       setCurrentProject(updated);
       setOcrRegionPicking(false);
       setBlurRegionPicking(false);
+      setSubtitleRegionPicking(false);
       setOcrRegionEditing(true);
       setSelectedOverlay(null);
       setActiveWorkspacePanelTab('transcript');
@@ -774,6 +813,7 @@ export default function TranslationView() {
           </Show>
           <button class="stage-tool-button" type="button" disabled={!currentProject()?.source.videoPath} title="Kéo để vẽ vùng blur trên video" onClick={addBlurRegion}>{blurRegionPicking() ? 'Đang vẽ…' : '＋ Blur'}</button>
           <button class="stage-tool-button" type="button" disabled={!currentProject()} title="Thêm ảnh logo" onClick={() => void addLogo()}>＋ Logo</button>
+          <button class="stage-tool-button" type="button" disabled={!currentProject()?.source.videoPath || hasSubtitleBlurRegion()} title={hasSubtitleBlurRegion() ? 'Đang có một vùng Blur/STTN mang vai trò Subtitle Region' : 'Kéo để chọn vùng hiển thị phụ đề trên video'} onClick={addSubtitleRegion}>{subtitleRegionPicking() ? 'Đang chọn vùng…' : '＋ Vùng subtitle'}</button>
           <button class="stage-tool-button" type="button" title="Chỉnh kiểu phụ đề" onClick={selectSubtitleProperties}>Subtitle</button>
           <Show when={currentProject()?.source.videoPath}>
             <button class="stage-replace-button" type="button" disabled={importing()} onClick={browse}><Plus size={13} /> Replace</button>
@@ -846,10 +886,13 @@ export default function TranslationView() {
               previewSubtitleSegmentId={previewSubtitleSegmentId()}
               regionPicking={ocrRegionPicking()}
               blurRegionPicking={blurRegionPicking()}
+              subtitleRegionPicking={subtitleRegionPicking()}
               ocrRegionEditing={ocrRegionEditing()}
               ocrRegion={currentProject()?.transcriptSettings?.mode === 'ocr' ? currentProject()?.transcriptSettings?.ocrRegion : null}
-              onRegionSelected={(region, kind) => kind === 'ocr' ? void saveOcrRegion(region) : createBlurRegion(region)}
+              subtitleRegion={currentProject()?.subtitle.region ?? null}
+              onRegionSelected={(region, kind) => kind === 'ocr' ? void saveOcrRegion(region) : kind === 'blur' ? createBlurRegion(region) : void saveSubtitleRegion(region)}
               onOcrRegionChange={(region) => void updateOcrRegion(region)}
+              onSubtitleRegionChange={(region) => void saveSubtitleRegion(region)}
               onOcrRegionDelete={() => void deleteOcrRegion()}
             />
             <Show when={!playing() && !mediaError()}>

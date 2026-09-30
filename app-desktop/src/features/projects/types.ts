@@ -25,6 +25,8 @@ export interface Project {
     sourceLanguage: string;
     targetLanguage: string;
     customPrompt: string;
+    /** Project-specific glossary, character names, lore, and translation context. */
+    context: string;
     segments: TranslationSegment[];
   };
   subtitle: {
@@ -49,6 +51,8 @@ export interface Project {
     autoFit: boolean;
     minFontSize: number;
     verticalAlignment: 'top' | 'middle' | 'bottom';
+    /** Normalized subtitle placement used when no blur region has the subtitle role. */
+    region?: { x: number; y: number; width: number; height: number } | null;
   };
   dubbing: {
     enabled: boolean;
@@ -130,12 +134,16 @@ export interface BlurRegion {
   endMs: number | null;
   enabled: boolean;
   strength: number;
-  effect?: 'blur' | 'aiTextRemoval';
+  effect?: 'blur' | 'sttn';
   role: 'generic' | 'subtitle';
   /** Edge feather radius as a percentage of the region's shorter side. */
   edgeBlend: number;
   /** FFmpeg noise strength from 0–100, applied only inside the blurred area. */
   pixelNoise: number;
+  /** Sparse RapidOCR scan rate used only by AI text removal. */
+  textRemovalScanFps: 1 | 2;
+  /** Defaults to OCR-guided for projects created by older app versions. */
+  textRemovalMode?: 'ocrGuided' | 'fullRegion';
 }
 
 export interface ProjectLogo {

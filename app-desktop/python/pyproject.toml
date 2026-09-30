@@ -34,7 +34,7 @@ whisperx = [
 ocr = ["rapidocr==3.9.2", "onnxruntime==1.30.0"]
 # Optional NVIDIA CUDA provider for development machines. Default release builds
 # remain CPU-first; CUDA release packaging needs a separately validated worker.
-ocr-cuda = ["rapidocr==3.9.2", "onnxruntime-gpu==1.30.0"]
+ocr-cuda = ["rapidocr==3.9.2", "onnxruntime-gpu==1.26.0"]
 # Optional, large runtime for cinematic dialogue/music/effects separation.
 # Install CPU PyTorch first with scripts/setup-dialogue-dev.ps1.
 dialogue = [

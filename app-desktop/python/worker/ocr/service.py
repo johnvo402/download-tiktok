@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import unicodedata
 from difflib import SequenceMatcher
+from threading import Lock
 from pathlib import Path
 from typing import Any, Callable
 
@@ -28,6 +30,99 @@ MODEL_PROFILES: dict[str, dict[str, Any]] = {
         "optionalFiles": ("ppocrv6_dict.txt",),
     },
 }
+
+_CUDA_PROBE_LOCK = Lock()
+_CUDA_PROBE_SUCCEEDED = False
+
+
+def _protobuf_varint(value: int) -> bytes:
+    encoded = bytearray()
+    while value > 0x7F:
+        encoded.append((value & 0x7F) | 0x80)
+        value >>= 7
+    encoded.append(value)
+    return bytes(encoded)
+
+
+def _protobuf_int(field_number: int, value: int) -> bytes:
+    return _protobuf_varint(field_number << 3) + _protobuf_varint(value)
+
+
+def _protobuf_bytes(field_number: int, value: bytes) -> bytes:
+    return (
+        _protobuf_varint((field_number << 3) | 2)
+        + _protobuf_varint(len(value))
+        + value
+    )
+
+
+def _cuda_probe_model() -> bytes:
+    """Build a tiny ONNX Add graph without adding the ONNX package as a dependency."""
+    tensor_shape = _protobuf_bytes(1, _protobuf_int(1, 1))
+    tensor_type = _protobuf_int(1, 1) + _protobuf_bytes(2, tensor_shape)
+    value_type = _protobuf_bytes(1, tensor_type)
+
+    def value_info(name: bytes) -> bytes:
+        return _protobuf_bytes(1, name) + _protobuf_bytes(2, value_type)
+
+    add_node = (
+        _protobuf_bytes(1, b"left")
+        + _protobuf_bytes(1, b"right")
+        + _protobuf_bytes(2, b"sum")
+        + _protobuf_bytes(3, b"cuda_probe_add")
+        + _protobuf_bytes(4, b"Add")
+    )
+    graph = (
+        _protobuf_bytes(1, add_node)
+        + _protobuf_bytes(2, b"cuda_probe")
+        + _protobuf_bytes(11, value_info(b"left"))
+        + _protobuf_bytes(11, value_info(b"right"))
+        + _protobuf_bytes(12, value_info(b"sum"))
+    )
+    opset = _protobuf_int(2, 13)
+    return _protobuf_int(1, 8) + _protobuf_bytes(7, graph) + _protobuf_bytes(8, opset)
+
+
+def _cuda_runtime_probe() -> tuple[bool, str | None]:
+    """Confirm the CUDA provider can load and execute a CUDA kernel, not just advertise itself."""
+    global _CUDA_PROBE_SUCCEEDED
+    if _CUDA_PROBE_SUCCEEDED:
+        return True, None
+
+    with _CUDA_PROBE_LOCK:
+        if _CUDA_PROBE_SUCCEEDED:
+            return True, None
+        try:
+            import numpy as np
+            import onnxruntime as ort
+
+            providers = list(ort.get_available_providers())
+            if "CUDAExecutionProvider" not in providers:
+                return False, "ONNX Runtime không có CUDAExecutionProvider."
+            if hasattr(ort, "preload_dlls"):
+                ort.preload_dlls()
+
+            options = ort.SessionOptions()
+            options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+            session = ort.InferenceSession(
+                _cuda_probe_model(),
+                sess_options=options,
+                providers=["CUDAExecutionProvider"],
+            )
+            active_providers = list(session.get_providers())
+            if not active_providers or active_providers[0] != "CUDAExecutionProvider":
+                return False, f"Phiên ONNX Runtime đang dùng provider: {active_providers}."
+
+            output = session.run(
+                ["sum"],
+                {"left": np.array([1.0], dtype=np.float32), "right": np.array([2.0], dtype=np.float32)},
+            )[0]
+            if output.tolist() != [3.0]:
+                return False, "Phép thử tính toán trên CUDA trả về kết quả không hợp lệ."
+            _CUDA_PROBE_SUCCEEDED = True
+            return True, None
+        except Exception as error:
+            return False, f"{type(error).__name__}: {error}"
 
 
 def _model_files(root: Path) -> dict[str, Path]:
@@ -73,11 +168,32 @@ def _model_root(cache_dir: str, model: str) -> Path:
 
 
 def _cuda_available() -> bool:
+    available, _ = _cuda_runtime_probe()
+    return available
+
+
+def _runtime_diagnostics() -> dict[str, Any]:
     try:
-        import onnxruntime
-        return "CUDAExecutionProvider" in onnxruntime.get_available_providers()
-    except (ImportError, OSError, RuntimeError):
-        return False
+        import onnxruntime as ort
+        version = str(getattr(ort, "__version__", "unknown"))
+        providers = list(ort.get_available_providers())
+        device = str(ort.get_device())
+        cuda_available, cuda_error = _cuda_runtime_probe()
+        return {
+            "onnxRuntimeVersion": version,
+            "onnxRuntimeDevice": device,
+            "executionProviders": providers,
+            "cudaAvailable": cuda_available,
+            "runtimeError": cuda_error,
+        }
+    except (ImportError, OSError, RuntimeError) as error:
+        return {
+            "onnxRuntimeVersion": None,
+            "onnxRuntimeDevice": None,
+            "executionProviders": [],
+            "cudaAvailable": False,
+            "runtimeError": str(error),
+        }
 
 
 def _runtime_installed() -> bool:
@@ -92,9 +208,13 @@ def _resolved_device(device: str | None) -> tuple[str, bool]:
     selected = device or "auto"
     if selected not in ("auto", "cpu", "cuda"):
         raise ValueError("Thiết bị OCR phải là auto, cpu hoặc cuda.")
-    available = _cuda_available()
+    available, cuda_error = _cuda_runtime_probe()
     if selected == "cuda" and not available:
-        raise RuntimeError("Tăng tốc NVIDIA chưa sẵn sàng cho đọc chữ. Chọn Tự động hoặc CPU, hoặc cài bản NVIDIA trong Cài đặt.")
+        detail = f" Chi tiết: {cuda_error}" if cuda_error else ""
+        raise RuntimeError(
+            "Tăng tốc NVIDIA chưa khởi tạo được cho đọc chữ. Kiểm tra driver và thành phần CUDA trong Cài đặt."
+            f"{detail}"
+        )
     return ("cuda" if selected == "cuda" or (selected == "auto" and available) else "cpu", available)
 
 
@@ -107,7 +227,16 @@ def inspect_ocr(cache_dir: str, model: str = DEFAULT_MODEL) -> dict[str, Any]:
         installed = False
     root = _model_root(cache_dir, selected_model)
     cached, model_bytes = _model_cached(root, selected_model)
-    cuda_available = _cuda_available()
+    runtime = _runtime_diagnostics()
+    cuda_available = bool(runtime["cudaAvailable"])
+    LOGGER.info(
+        "RapidOCR environment: model=%s, runtime=%s, device=%s, providers=%s, cudaReady=%s",
+        selected_model,
+        runtime["onnxRuntimeVersion"],
+        runtime["onnxRuntimeDevice"],
+        runtime["executionProviders"],
+        cuda_available,
+    )
     return {
         "workerInstalled": True,
         "ocrInstalled": installed,
@@ -120,6 +249,10 @@ def inspect_ocr(cache_dir: str, model: str = DEFAULT_MODEL) -> dict[str, Any]:
         "estimatedDownloadBytes": config["estimatedBytes"],
         "cudaAvailable": cuda_available,
         "activeDevice": "cuda" if cuda_available else "cpu",
+        "onnxRuntimeVersion": runtime["onnxRuntimeVersion"],
+        "onnxRuntimeDevice": runtime["onnxRuntimeDevice"],
+        "executionProviders": runtime["executionProviders"],
+        "runtimeError": runtime.get("runtimeError"),
     }
 
 
@@ -132,6 +265,15 @@ def _create_engine(cache_dir: str, model: str = DEFAULT_MODEL, device: str = "au
     if not _runtime_installed():
         raise RuntimeError("Bộ đọc chữ chưa đầy đủ. Hãy cập nhật hoặc cài lại JC AI.")
     active_device, _ = _resolved_device(device)
+    runtime = _runtime_diagnostics()
+    LOGGER.info(
+        "RapidOCR engine requested: device=%s, resolved=%s, model=%s, runtime=%s, providers=%s",
+        device or "auto",
+        active_device,
+        selected_model,
+        runtime["onnxRuntimeVersion"],
+        runtime["executionProviders"],
+    )
     root = _model_root(cache_dir, selected_model)
     root.mkdir(parents=True, exist_ok=True)
     # RapidOCR 3.x supports separate PP-OCRv6 Tiny, Small, and Medium profiles.
@@ -146,6 +288,38 @@ def _create_engine(cache_dir: str, model: str = DEFAULT_MODEL, device: str = "au
         "Rec.ocr_version": OCRVersion.PPOCRV6,
         "Rec.model_type": getattr(ModelType, config["enum"]),
     })
+
+
+def _engine_session_providers(engine: Any) -> dict[str, list[str]]:
+    """Return providers registered on RapidOCR's lazily initialized ORT sessions."""
+    sessions: dict[str, list[str]] = {}
+    for component_name, label in (("text_det", "det"), ("text_cls", "cls"), ("text_rec", "rec")):
+        component = getattr(engine, component_name, None)
+        wrapper = getattr(component, "session", None)
+        session = getattr(wrapper, "session", wrapper)
+        get_providers = getattr(session, "get_providers", None)
+        if callable(get_providers):
+            try:
+                sessions[label] = list(get_providers())
+            except Exception as error:  # diagnostics must not mask OCR errors
+                LOGGER.warning("Could not inspect RapidOCR %s session providers: %s", label, error)
+    return sessions
+
+
+def verify_engine_device(engine: Any, resolved_device: str, operation: str = "transcription") -> dict[str, list[str]]:
+    sessions = _engine_session_providers(engine)
+    LOGGER.info("RapidOCR %s session providers: %s", operation, sessions or "not exposed")
+    if resolved_device == "cuda":
+        if not sessions:
+            raise RuntimeError("Không xác minh được RapidOCR đã khởi tạo phiên CUDA. Hãy cập nhật runtime OCR rồi thử lại.")
+        cpu_only = [name for name, providers in sessions.items()
+                    if not providers or providers[0] != "CUDAExecutionProvider"]
+        if cpu_only:
+            raise RuntimeError(
+                "RapidOCR được chọn chạy NVIDIA nhưng phiên model đang dùng CPU "
+                f"({', '.join(cpu_only)}). Hãy mở Cài đặt → Nhận dạng lời thoại, kiểm tra lại tăng tốc NVIDIA."
+            )
+    return sessions
 
 
 def install_ocr(cache_dir: str, emit: Callable[[dict[str, object]], None], model: str = DEFAULT_MODEL) -> None:
@@ -294,10 +468,12 @@ def transcribe_frames(request: dict[str, Any], emit: Callable[[dict[str, object]
     frames = sorted(frames_dir.glob("frame_*.jpg"))
     if not frames:
         raise RuntimeError("FFmpeg không trích xuất được frame trong vùng OCR đã chọn.")
+    requested_device = str(request.get("device", "auto"))
+    resolved_device, _ = _resolved_device(requested_device)
     engine = _create_engine(
         str(request["cacheDir"]),
         str(request.get("model", DEFAULT_MODEL)),
-        str(request.get("device", "auto")),
+        requested_device,
     )
     groups: list[dict[str, Any]] = []
     total = len(frames)
@@ -305,12 +481,18 @@ def transcribe_frames(request: dict[str, Any], emit: Callable[[dict[str, object]
     # Allow a missed OCR sample (for example, a subtitle animation frame) to
     # bridge the same caption, while keeping separate captions apart.
     repeat_gap = min(1.5, interval * 2.5)
+    started = time.perf_counter()
+    detected_frames = 0
     for index, path in enumerate(frames):
         match = re.search(r"frame_(\d+)\.jpg$", path.name)
         timestamp = max(0.0, (int(match.group(1)) - 1) / fps) if match else index / fps
-        text = _extract_text(engine(str(path)))
+        result = engine(str(path))
+        if index == 0:
+            verify_engine_device(engine, resolved_device, "transcript")
+        text = _extract_text(result)
         normalized = _normalized(text)
         if normalized:
+            detected_frames += 1
             if groups and timestamp - groups[-1]["end"] <= repeat_gap and _repeat_similarity(groups[-1]["normalized"], normalized) >= 0.78:
                 groups[-1]["end"] = max(groups[-1]["end"], timestamp + interval)
                 _add_variant(groups[-1], text, normalized)
@@ -334,4 +516,15 @@ def transcribe_frames(request: dict[str, Any], emit: Callable[[dict[str, object]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"language": request.get("language", "zh"), "segments": [{"start": item["start"], "end": item["end"], "text": item["text"]} for item in merged]}
     output_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    elapsed = time.perf_counter() - started
+    LOGGER.info(
+        "RapidOCR transcript complete: device=%s, model=%s, frames=%d, detectedFrames=%d, segments=%d, elapsed=%.2fs, avg=%.1fms/frame",
+        resolved_device,
+        request.get("model", DEFAULT_MODEL),
+        total,
+        detected_frames,
+        len(merged),
+        elapsed,
+        elapsed * 1000 / max(total, 1),
+    )
     emit({"type": "completed", "job": "ocr_transcribe", "output": str(output_path), "segments": len(merged)})

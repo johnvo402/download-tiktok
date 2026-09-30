@@ -106,7 +106,9 @@ fn probe_nvenc() -> Result<(), String> {
         .map_err(|error| format!("Không kiểm tra được NVIDIA NVENC: {error}"))?;
     command.args([
         "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
-        "color=c=black:s=64x64:r=1:d=1", "-frames:v", "1", "-c:v", "h264_nvenc",
+        // NVENC rejects very small test frames on some driver/GPU combinations.
+        // Use a modest, ordinary H.264 size and the same pixel format as export.
+        "color=c=black:s=256x256:r=1:d=1", "-frames:v", "1", "-pix_fmt", "yuv420p", "-c:v", "h264_nvenc",
         "-f", "null", "-",
     ]);
     hide_console_window(&mut command);
@@ -116,17 +118,18 @@ fn probe_nvenc() -> Result<(), String> {
     if result.status.success() {
         return Ok(());
     }
+    // FFmpeg's final lines only say that no packets were written. Keep the
+    // beginning of stderr so useful causes such as "Cannot load nvcuda.dll"
+    // or "InitializeEncoder failed" are shown to the user.
     let details = String::from_utf8_lossy(&result.stderr)
         .lines()
-        .rev()
-        .take(3)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .take(6)
+        .map(str::trim)
         .collect::<Vec<_>>()
         .join(" ");
     Err(format!(
-        "NVIDIA NVENC chưa sẵn sàng. Hãy cài/cập nhật driver NVIDIA hoặc chọn mã hóa CPU. {details}"
+        "FFmpeg không khởi tạo được NVIDIA NVENC. Kiểm tra driver NVIDIA hoặc chọn mã hóa CPU. {details}"
     ))
 }
 
@@ -213,8 +216,16 @@ pub fn start_export(
     if project.source.video_path.is_none() {
         return Err("Dự án chưa có video nguồn.".into());
     }
-    if options.apply_blur && project.blur_regions.iter().any(|region| region.enabled && region.effect == BlurEffect::AiTextRemoval) {
-        crate::text_removal_service::require_ready(&app)?;
+    if options.apply_blur {
+        let removal_regions: Vec<_> = project.blur_regions.iter().filter(|region| {
+            region.enabled && region.effect == BlurEffect::Sttn
+        }).collect();
+        if !removal_regions.is_empty() {
+            let effects: Vec<_> = removal_regions.iter().map(|region| region.effect).collect();
+            // Every AI restoration mode now uses sparse RapidOCR to limit work
+            // to time ranges where subtitle text is present.
+            crate::text_removal_service::require_effects_ready(&app, &effects, true)?;
+        }
     }
     // Resolve and validate all immutable project inputs before a background job is registered.
     resolve_export_directory(&store, &project_id, options.output_directory.as_deref())?;
@@ -1734,6 +1745,8 @@ mod tests {
                 role: BlurRegionRole::Subtitle,
                 edge_blend: 12,
                 pixel_noise: 10,
+                text_removal_scan_fps: 2,
+                text_removal_mode: crate::project_service::TextRemovalMode::OcrGuided,
             });
 
         let logo = project_root.join("media/overlays/logo.png");

@@ -1,4 +1,4 @@
-use crate::project_service::{BlurEffect, BlurRegion, BlurRegionRole, Project, ProjectLogo, SubtitleSettings};
+use crate::project_service::{BlurEffect, BlurRegion, BlurRegionRole, Project, ProjectLogo, SubtitleSettings, TextRemovalMode};
 use crate::transcript_service::Transcript;
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +22,8 @@ pub struct BlurRenderSpec {
     pub strength_px: u32,
     pub edge_blend: u8,
     pub pixel_noise: u8,
+    pub text_removal_scan_fps: u8,
+    pub text_removal_mode: TextRemovalMode,
     pub start_ms: u64,
     pub end_ms: Option<u64>,
 }
@@ -385,6 +387,8 @@ fn blur_spec(
         strength_px: (region.strength.round() as u32).clamp(1, 100),
         edge_blend: region.edge_blend,
         pixel_noise: region.pixel_noise,
+        text_removal_scan_fps: region.text_removal_scan_fps,
+        text_removal_mode: region.text_removal_mode,
         start_ms: region.start_ms,
         end_ms: region.end_ms,
     })
@@ -420,13 +424,21 @@ fn subtitle_spec(
         .iter()
         .filter(|region| region.role == BlurRegionRole::Subtitle)
         .collect();
-    if enabled && selected.len() != 1 {
-        return Err("Phụ đề dịch đang bật nhưng chưa có một vùng blur được chọn làm Subtitle Blur. Hãy chọn vùng trong Properties.".into());
+    if enabled && selected.len() > 1 {
+        return Err("Chỉ được có một vùng mang vai trò Subtitle Region.".into());
+    }
+    if enabled && selected.is_empty() && settings.region.is_none() {
+        return Err("Phụ đề dịch đang bật nhưng chưa có vùng subtitle. Hãy chọn vùng trên preview hoặc đặt một vùng blur làm Subtitle Region.".into());
     }
     let region = selected
         .first()
         .map(|item| {
             normalized_rect_to_pixels(item.x, item.y, item.width, item.height, width, height)
+        })
+        .or_else(|| {
+            settings.region.as_ref().map(|item| {
+                normalized_rect_to_pixels(item.x, item.y, item.width, item.height, width, height)
+            })
         })
         .transpose()?;
     if enabled
@@ -440,7 +452,7 @@ fn subtitle_spec(
     let mut events = Vec::new();
     let mut warnings = Vec::new();
     if enabled {
-        let rect = region.ok_or("Không thể xác định vùng subtitle blur.")?;
+        let rect = region.ok_or("Không thể xác định vùng subtitle.")?;
         let mut seen = std::collections::HashSet::new();
         for segment in &transcript.segments {
             if !segment.translated.trim().is_empty() {
@@ -460,7 +472,7 @@ fn subtitle_spec(
                 }
                 let layout = layout_subtitle(&segment.translated, rect, settings)?;
                 if !layout.fits {
-                    warnings.push(SubtitleLayoutWarning { segment_id: segment.id.clone(), start: segment.start, end: segment.end, message: "Nội dung không vừa vùng blur ở cỡ chữ tối thiểu; không thể xuất an toàn nếu không chỉnh vùng hoặc nội dung.".into() });
+                    warnings.push(SubtitleLayoutWarning { segment_id: segment.id.clone(), start: segment.start, end: segment.end, message: "Nội dung không vừa vùng subtitle ở cỡ chữ tối thiểu; không thể xuất an toàn nếu không chỉnh vùng hoặc nội dung.".into() });
                 }
                 events.push(SubtitleEvent {
                     segment_id: segment.id.clone(),
@@ -762,6 +774,7 @@ mod tests {
                 source_language: "en".into(),
                 target_language: "vi".into(),
                 custom_prompt: String::new(),
+                context: String::new(),
                 segments: vec![],
             },
             subtitle: SubtitleSettings::default(),
@@ -780,6 +793,8 @@ mod tests {
                 role: BlurRegionRole::Subtitle,
                 edge_blend: 12,
                 pixel_noise: 10,
+                text_removal_scan_fps: 2,
+                text_removal_mode: TextRemovalMode::OcrGuided,
             }],
             logos: vec![],
             transcript_settings: crate::project_service::TranscriptSettings::default(),

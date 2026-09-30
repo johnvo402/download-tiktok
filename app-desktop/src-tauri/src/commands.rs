@@ -932,11 +932,13 @@ pub fn update_project_preferences(
     app: tauri::AppHandle,
     project_id: String,
     custom_prompt: String,
+    translation_context: String,
     voice: Option<String>,
     voice_profile_id: Option<String>,
     transcript_settings: Option<crate::project_service::TranscriptSettings>,
 ) -> Result<Project, String> {
     crate::project_service::validate_translation_custom_prompt(&custom_prompt)?;
+    crate::project_service::validate_translation_context(&translation_context)?;
     let selected_voice = if let Some(profile_id) = voice_profile_id.as_deref() {
         uuid::Uuid::parse_str(profile_id)
             .map_err(|_| "Voice profile của dự án không hợp lệ.".to_string())?;
@@ -965,6 +967,7 @@ pub fn update_project_preferences(
         project.transcript_settings = settings;
     }
     project.translation.custom_prompt = custom_prompt;
+    project.translation.context = translation_context;
     if let Some(selected_voice) = selected_voice { project.dubbing.voice = Some(selected_voice); }
     if voice.is_some() || voice_profile_id.is_some() { project.dubbing.voice_profile_id = voice_profile_id; }
     projects.update_project(&project)
@@ -1178,10 +1181,17 @@ pub async fn get_text_removal_environment(app: tauri::AppHandle) -> Result<crate
 }
 
 #[tauri::command]
-pub async fn install_text_removal_model(app: tauri::AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || crate::text_removal_service::install_model(app))
+pub async fn install_sttn_text_removal_model(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::text_removal_service::install_sttn_model(app))
         .await
-        .map_err(|error| format!("Không thể tải mô hình xóa chữ: {error}"))?
+        .map_err(|error| format!("Không thể tải model STTN: {error}"))?
+}
+
+#[tauri::command]
+pub async fn remove_sttn_text_removal_model(app: tauri::AppHandle) -> Result<u64, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::text_removal_service::remove_sttn_model(app))
+        .await
+        .map_err(|error| format!("Không thể gỡ model STTN: {error}"))?
 }
 
 #[tauri::command]

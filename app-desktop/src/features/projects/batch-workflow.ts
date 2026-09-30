@@ -88,8 +88,8 @@ export async function validateBatchProjects(projectIds: string[], steps: BatchSt
         if (!ttsEnvironment?.workerInstalled) reasons.push('VieNeu-TTS SDK chưa sẵn sàng; mở Cài đặt → Voice / TTS để xem cách khắc phục.');
         else if (!ttsEnvironment.modelCached) reasons.push('Model VieNeu-TTS chưa được tải.');
       }
-      if (project.subtitle.enabled && steps.export && !project.blurRegions.some((region) => region.role === 'subtitle')) {
-        reasons.push('Export subtitle cần một vùng blur có vai trò Subtitle Blur.');
+      if (project.subtitle.enabled && steps.export && !project.blurRegions.some((region) => region.role === 'subtitle') && !project.subtitle.region) {
+        reasons.push('Export phụ đề cần một vùng subtitle đã chọn trong preview hoặc một vùng blur có vai trò Subtitle Region.');
       }
       if (project.dubbing.enabled && steps.export && !steps.generateMissingVoices && transcript) {
         const incomplete = transcript.segments.some((segment) => segment.translated.trim()
