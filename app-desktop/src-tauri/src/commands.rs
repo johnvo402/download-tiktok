@@ -506,12 +506,13 @@ pub async fn start_video_merge(
     source_directory: String,
     file_paths: Vec<String>,
     output_directory: Option<String>,
+    frame_mode: Option<video_tools_service::MergeFrameMode>,
 ) -> Result<String, String> {
     let jobs = jobs.inner().clone();
     let root = projects_root(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = PROJECT_JOB_START_LOCK.lock().map_err(|_| "Không thể khóa trạng thái project jobs.".to_string())?;
-        video_tools_service::start_video_merge(app, &jobs, ProjectStore::new(root), project_id, source_directory, file_paths, output_directory)
+        video_tools_service::start_video_merge(app, &jobs, ProjectStore::new(root), project_id, source_directory, file_paths, output_directory, frame_mode)
     })
     .await
     .map_err(|error| format!("Không thể bắt đầu gộp video: {error}"))?

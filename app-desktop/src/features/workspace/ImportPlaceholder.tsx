@@ -7,7 +7,7 @@ import {
 } from 'lucide-solid';
 import { currentProject, setNotice } from '../../app/project-state';
 import { jobService } from '../../app/services/job-service';
-import { videoToolsService, type MergeVideoInfo, type TikTokCookieInfo, type TikTokDramaInfo, type VideoToolProgress } from '../../app/services/video-tools-service';
+import { videoToolsService, type MergeFrameMode, type MergeVideoInfo, type TikTokCookieInfo, type TikTokDramaInfo, type VideoToolProgress } from '../../app/services/video-tools-service';
 
 type Tab = 'tiktok' | 'merge';
 
@@ -39,6 +39,7 @@ export default function ImportPlaceholder() {
   const [tab, setTab] = createSignal<Tab>('tiktok');
   const [tiktokOutput, setTiktokOutput] = createSignal('');
   const [mergeOutput, setMergeOutput] = createSignal('');
+  const [mergeFrameMode, setMergeFrameMode] = createSignal<MergeFrameMode>('source');
   const [tiktokUrl, setTiktokUrl] = createSignal('');
   const [cookieFile, setCookieFile] = createSignal('');
   const [cookieInfo, setCookieInfo] = createSignal<TikTokCookieInfo>();
@@ -232,7 +233,7 @@ export default function ImportPlaceholder() {
     setMergeJobId(undefined);
     setMergeError('');
     try {
-      const job = await videoToolsService.startMerge(id, sourceDirectory(), videos().map((video) => video.path), mergeOutput());
+      const job = await videoToolsService.startMerge(id, sourceDirectory(), videos().map((video) => video.path), mergeOutput(), mergeFrameMode());
       setMergeJobId(job);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Không thể bắt đầu gộp video.';
@@ -329,6 +330,7 @@ export default function ImportPlaceholder() {
           <section class="video-tool-card merge-output-card">
             <div class="video-tool-card-header compact"><div><span class="eyebrow">02 · FILE ĐẦU RA</span><h2>Thư mục lưu video gộp</h2><p>Tên file được tạo tự động theo thời gian; file cũ sẽ không bị ghi đè.</p></div></div>
             <div class="video-tool-directory-row"><div class="video-tool-directory-value" title={mergeOutput()}><FolderOpen size={15} /><span>{mergeOutput() ? directoryLabel(mergeOutput()) : 'Đang lấy thư mục dự án…'}</span></div><button class="button button-quiet" type="button" disabled={taskRunning()} onClick={() => void chooseDirectory('merge')}>Chọn thư mục</button></div>
+            <label class="merge-frame-mode"><span><strong>Tỷ lệ khung hình</strong><small>{mergeFrameMode() === 'source' ? 'Tự động giữ khung hình của video có độ phân giải lớn nhất.' : 'Video được giữ nguyên tỷ lệ, căn giữa trên nền đen nếu không vừa khung.'}</small></span><select class="settings-select" value={mergeFrameMode()} disabled={taskRunning()} onChange={(event) => setMergeFrameMode(event.currentTarget.value as MergeFrameMode)}><option value="source">Tự động theo video</option><option value="portrait">Dọc · 9:16</option><option value="landscape">Ngang · 16:9</option></select></label>
             <div class="merge-output-hint"><span>File mặc định</span><code>merged_{new Date().toISOString().slice(0, 10).replaceAll('-', '')}_HHMMSS.mp4</code></div>
             <div class="merge-action-row"><div><strong>{videos().length >= 2 ? `${videos().length} video · ${formatTime(videos().reduce((total, video) => total + video.duration, 0))}` : 'Cần ít nhất 2 video'}</strong><small>{videos().length >= 2 ? 'Stream tương thích sẽ được ghép không mã hóa lại; video khác định dạng được chuẩn hóa.' : 'Chọn thư mục và sắp thứ tự các video trước khi gộp.'}</small></div><button class="button button-primary" type="button" disabled={videos().length < 2 || !mergeOutput() || taskRunning()} onClick={() => void startMerge()}><Show when={mergeStarting()} fallback={<Merge size={15} />}><LoaderCircle size={15} class="spin" /></Show>{mergeStarting() ? 'Đang gộp…' : 'Gộp video'}</button></div>
             <Show when={mergeStarting() || mergeProgress()?.status === 'completed'}><div class="video-tool-progress-track"><span style={{ width: `${Math.round((mergeProgress()?.progress ?? 0) * 100)}%` }} /></div><div class="video-tool-progress-meta"><span>{mergeProgress()?.message ?? 'Đang chuẩn bị…'}</span><strong>{Math.round((mergeProgress()?.progress ?? 0) * 100)}%</strong></div></Show>

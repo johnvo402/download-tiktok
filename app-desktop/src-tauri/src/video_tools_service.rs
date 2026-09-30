@@ -16,6 +16,15 @@ use uuid::Uuid;
 
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "webm", "m4v", "avi"];
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeFrameMode {
+    #[default]
+    Source,
+    Portrait,
+    Landscape,
+}
+
 #[derive(Clone, Default)]
 pub struct VideoToolsJobs {
     inner: Arc<Mutex<HashMap<String, VideoToolJobEntry>>>,
@@ -563,6 +572,7 @@ pub fn start_video_merge(
     source_directory: String,
     file_paths: Vec<String>,
     output_directory: Option<String>,
+    frame_mode: Option<MergeFrameMode>,
 ) -> Result<String, String> {
     let _start_guard = jobs.start_lock.lock().map_err(|_| "Không thể khóa trạng thái video jobs.".to_string())?;
     ensure_project_job_can_start(jobs, &project_id)?;
@@ -573,6 +583,7 @@ pub fn start_video_merge(
     if videos.len() < 2 { return Err("Chọn ít nhất hai video hợp lệ để gộp.".into()); }
     let total_duration = videos.iter().map(|video| video.duration).sum::<f64>();
     if !total_duration.is_finite() || total_duration <= 0.0 { return Err("Tổng thời lượng video không hợp lệ.".into()); }
+    let frame_mode = frame_mode.unwrap_or_default();
 
     let job_id = Uuid::new_v4().to_string();
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -585,7 +596,7 @@ pub fn start_video_merge(
     let job_for_thread = job_id.clone();
     let project_for_thread = project_id.clone();
     thread::Builder::new().name(format!("video-merge-{}", &job_id[..8])).spawn(move || {
-        let result = run_merge_job(&app_for_thread, &store, &project_for_thread, &job_for_thread, &source_root, &destination, &videos, total_duration, &cancelled);
+        let result = run_merge_job(&app_for_thread, &store, &project_for_thread, &job_for_thread, &source_root, &destination, &videos, total_duration, frame_mode, &cancelled);
         match result {
             Ok(output) => emit_video_tool_event(&app_for_thread, VideoToolEvent {
                 project_id: project_for_thread.clone(), job_id: job_for_thread.clone(), status: "completed".into(), progress: 1.0,
@@ -761,6 +772,7 @@ fn run_merge_job(
     output_directory: &Path,
     videos: &[MergeVideoInfo],
     total_duration: f64,
+    frame_mode: MergeFrameMode,
     cancelled: &AtomicBool,
 ) -> Result<PathBuf, String> {
     if cancelled.load(Ordering::SeqCst) { return Err("cancelled".into()); }
@@ -780,16 +792,18 @@ fn run_merge_job(
     let filter_script = output_directory.join(format!(".avl-merge-{job_id}.filter.txt"));
     let result = (|| {
         if cancelled.load(Ordering::SeqCst) { return Err("cancelled".into()); }
-        let copy_compatible = is_stream_copy_compatible(&inputs);
+        let (target_width, target_height) = merge_canvas_size(&inputs, frame_mode)?;
+        let copy_compatible = is_stream_copy_compatible(&inputs)
+            && (frame_mode == MergeFrameMode::Source || inputs.iter().all(|video| video.width == target_width && video.height == target_height));
         if copy_compatible {
             write_concat_manifest(&manifest, &inputs)?;
         } else {
-            let graph = build_transcode_filtergraph(&inputs)?;
+            let graph = build_transcode_filtergraph(&inputs, target_width, target_height)?;
             write_private_file(&filter_script, graph.as_bytes())?;
         }
         emit_video_tool_event(app, VideoToolEvent {
             project_id: project_id.into(), job_id: job_id.into(), status: "running".into(), progress: 0.0,
-            message: if copy_compatible { "Các video tương thích; đang ghép bằng stream copy để giữ nguyên chất lượng.".into() } else { "Định dạng khác nhau; đang chuẩn hóa và ghép bằng H.264/AAC chất lượng cao.".into() },
+            message: if copy_compatible { "Các video tương thích; đang ghép bằng stream copy để giữ nguyên chất lượng.".into() } else if frame_mode == MergeFrameMode::Source { "Định dạng khác nhau; đang chuẩn hóa khung hình và ghép bằng H.264/AAC chất lượng cao.".into() } else { "Đang căn giữa video trên nền đen theo tỷ lệ đã chọn rồi ghép bằng H.264/AAC.".into() },
             stage: Some(if copy_compatible { "copy" } else { "transcode" }.into()), details: None, output: None,
         });
         run_ffmpeg_merge(app, project_id, job_id, &inputs, &manifest, &filter_script, &temporary, total_duration, copy_compatible, cancelled)?;
@@ -850,11 +864,27 @@ fn write_concat_manifest(path: &Path, videos: &[MergeVideoInfo]) -> Result<(), S
     write_private_file(path, content.as_bytes())
 }
 
-fn build_transcode_filtergraph(videos: &[MergeVideoInfo]) -> Result<String, String> {
+fn merge_canvas_size(videos: &[MergeVideoInfo], frame_mode: MergeFrameMode) -> Result<(u32, u32), String> {
     let reference = videos.iter().max_by_key(|video| u64::from(video.width) * u64::from(video.height))
         .ok_or_else(|| "Không có video để gộp.".to_string())?;
-    let width = reference.width + reference.width % 2;
-    let height = reference.height + reference.height % 2;
+    let even = |value: u32| value.saturating_add(value % 2).max(2);
+    match frame_mode {
+        MergeFrameMode::Source => Ok((even(reference.width), even(reference.height))),
+        MergeFrameMode::Portrait | MergeFrameMode::Landscape => {
+            let long_edge = videos.iter().map(|video| video.width.max(video.height)).max()
+                .ok_or_else(|| "Không có video để gộp.".to_string())?;
+            let long_edge = long_edge.saturating_add(long_edge % 2).max(2);
+            let short_edge = (((long_edge as f64) * 9.0 / 16.0).round() as u32) & !1;
+            if frame_mode == MergeFrameMode::Portrait { Ok((short_edge.max(2), long_edge)) }
+            else { Ok((long_edge, short_edge.max(2))) }
+        }
+    }
+}
+
+fn build_transcode_filtergraph(videos: &[MergeVideoInfo], width: u32, height: u32) -> Result<String, String> {
+    if width < 2 || height < 2 || width % 2 != 0 || height % 2 != 0 {
+        return Err("Kích thước khung hình gộp không hợp lệ.".into());
+    }
     let with_audio = videos.iter().any(|video| video.has_audio);
     let mut filters = Vec::new();
     for (index, video) in videos.iter().enumerate() {

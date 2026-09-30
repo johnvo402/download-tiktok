@@ -26,6 +26,8 @@ export interface MergeScanResult {
   skipped: SkippedMergeVideo[];
 }
 
+export type MergeFrameMode = 'source' | 'portrait' | 'landscape';
+
 export interface TikTokDramaInfo {
   title: string;
   tags: string[];
@@ -74,8 +76,8 @@ export const videoToolsService = {
   scanVideos: (sourceDirectory: string) => call<MergeScanResult>('scan_merge_videos', { sourceDirectory }),
   startTikTokDownload: (projectId: string, url: string, outputDirectory: string, cookieFile: string | null, useBrowserCookies: boolean) =>
     call<string>('start_tiktok_drama_download', { projectId, url, outputDirectory, cookieFile, useBrowserCookies }),
-  startMerge: (projectId: string, sourceDirectory: string, filePaths: string[], outputDirectory: string) =>
-    call<string>('start_video_merge', { projectId, sourceDirectory, filePaths, outputDirectory }),
+  startMerge: (projectId: string, sourceDirectory: string, filePaths: string[], outputDirectory: string, frameMode: MergeFrameMode) =>
+    call<string>('start_video_merge', { projectId, sourceDirectory, filePaths, outputDirectory, frameMode }),
   onProgress: (handler: (event: VideoToolProgress) => void) =>
     listen<VideoToolProgress>('video-tool-progress', (event) => handler(event.payload)),
 };
