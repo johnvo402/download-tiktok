@@ -28,7 +28,7 @@ export interface AppSettings {
     device: 'cpu' | 'cuda';
     language: 'auto' | 'en' | 'vi' | 'ja' | 'ko' | 'zh' | 'fr' | 'de' | 'es';
     ocrModel: 'tiny' | 'small' | 'medium';
-    ocrDevice: 'cpu' | 'cuda';
+    ocrDevice: 'auto' | 'cpu' | 'cuda' | 'openvino';
   };
 }
 

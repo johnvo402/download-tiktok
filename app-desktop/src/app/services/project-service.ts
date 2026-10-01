@@ -72,6 +72,6 @@ export const projectService = {
   installAsrModel: (model: string) => call<void>('install_asr_model', { model }),
   installWhisperXAlignment: (language: string) => call<void>('install_whisperx_alignment', { language }),
   removeAsrModel: (model: string) => call<void>('remove_asr_model', { model }),
-  generateTranscript: (projectId: string, options: { engine: 'fasterWhisper' | 'whisperX'; model: string; device: string; language: string; mode: 'speechRecognition' | 'ocr'; ocrFps: 1 | 2 | 4; ocrRegion: TranscriptSettings['ocrRegion']; ocrModel: 'tiny' | 'small' | 'medium'; ocrDevice: 'auto' | 'cpu' | 'cuda' }) => call<string>('generate_transcript', { projectId, options }),
+  generateTranscript: (projectId: string, options: { engine: 'fasterWhisper' | 'whisperX'; model: string; device: string; language: string; mode: 'speechRecognition' | 'ocr'; ocrFps: 1 | 2 | 4; ocrRegion: TranscriptSettings['ocrRegion']; ocrModel: 'tiny' | 'small' | 'medium'; ocrDevice: 'auto' | 'cpu' | 'cuda' | 'openvino' }) => call<string>('generate_transcript', { projectId, options }),
   cancelTranscription: (jobId: string) => call<boolean>('cancel_transcription', { jobId }),
 };

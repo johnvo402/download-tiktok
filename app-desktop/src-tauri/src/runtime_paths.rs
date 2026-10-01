@@ -135,18 +135,42 @@ pub fn ai_worker_dir_for(feature: &str) -> Result<PathBuf, String> {
     worker_dir()
 }
 
+pub fn ocr_worker_dir() -> Result<PathBuf, String> {
+    if crate::optional_runtime::feature_installed("ocr_openvino") {
+        return ai_worker_dir_for("ocr_openvino");
+    }
+    ai_worker_dir()
+}
+
 pub fn worker_command(worker_root: &Path) -> Command {
+    worker_command_scoped(worker_root, false)
+}
+
+pub fn ocr_worker_command(worker_root: &Path) -> Command {
+    worker_command_scoped(worker_root, true)
+}
+
+fn worker_command_scoped(worker_root: &Path, ocr: bool) -> Command {
     if let Some((python, source, profile)) = crate::optional_runtime::active_runtime() {
-        if worker_root == source {
+        let has_other_features = ["acceleration", "whisperx", "bandit", "sttn"]
+            .iter()
+            .any(|feature| crate::optional_runtime::feature_installed(feature));
+        // In development the source path is shared. Installing only Intel OCR
+        // must not redirect speech/TTS to this deliberately lightweight venv.
+        if worker_root == source && (ocr || has_other_features) {
             let mut command = Command::new(python);
-            command.arg("-m").arg("worker")
+            command
+                .arg("-m")
+                .arg("worker")
                 .current_dir(worker_root)
                 .env("PYTHONPATH", worker_root)
                 .env("PYTHONUNBUFFERED", "1")
                 .env("PYTHONDONTWRITEBYTECODE", "1")
                 .env("PYTHONUTF8", "1")
                 .env("PYTHONIOENCODING", "utf-8:backslashreplace");
-            if profile == "cuda" { command.env("JC_AI_GPU_RUNTIME", "1"); }
+            if profile == "cuda" {
+                command.env("JC_AI_GPU_RUNTIME", "1");
+            }
             hide_console(&mut command);
             return command;
         }
@@ -208,7 +232,9 @@ pub fn worker_command(worker_root: &Path) -> Command {
 
 pub fn development_python_command() -> Result<Command, String> {
     if !cfg!(debug_assertions) {
-        return Err("Python package cài đặt trong ứng dụng chỉ khả dụng ở môi trường development.".into());
+        return Err(
+            "Python package cài đặt trong ứng dụng chỉ khả dụng ở môi trường development.".into(),
+        );
     }
     let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let local_python = repository_root

@@ -5,6 +5,10 @@ import { optionalRuntimeService, type OptionalFeature, type OptionalRuntimeStatu
 import Modal from '../../../shared/components/Modal';
 
 const FEATURE_TEXT: Record<OptionalFeature, { title: string; description: string }> = {
+  ocr_openvino: {
+    title: 'Tăng tốc Intel · đọc chữ',
+    description: 'Dùng model OCR hiện có trên GPU Intel.',
+  },
   whisperx: {
     title: 'WhisperX · căn thời gian',
     description: 'Cài bộ xử lý và các model cần cho ngôn ngữ đang chọn trong một lần. Model đã có được dùng lại.',
@@ -123,7 +127,7 @@ export default function OptionalAiRuntimeCard(props: OptionalAiRuntimeCardProps)
   };
   const installed = () => props.available || (status()?.installedFeatures.includes(props.feature) ?? false);
   const modelReady = () => props.modelReady ?? true;
-  const activeProfile = (): RuntimeProfile => selectedProfile() ?? props.preferredProfile ?? status()?.profile ?? 'cpu';
+  const activeProfile = (): RuntimeProfile => selectedProfile() ?? props.preferredProfile ?? (status()?.profile === 'openvino' ? 'cpu' : status()?.profile) ?? 'cpu';
   const icon = () => props.feature === 'whisperx' ? <AudioLines size={18} /> : props.feature === 'bandit' || props.feature === 'sttn' ? <Cpu size={18} /> : <Zap size={18} />;
   return <div class="settings-card optional-runtime-card" classList={{ 'optional-runtime-embedded': !!props.embedded }}>
     <Show when={!props.embedded}><div class="tts-model-status-row">

@@ -19,6 +19,7 @@ import { estimatedModelSize } from '../../transcript/transcript-utils';
 import Modal from '../../../shared/components/Modal';
 import { setAppStartupReady } from '../../../app/project-state';
 import OptionalAiRuntimeCard from './OptionalAiRuntimeCard';
+import IntelOcrRuntimeCard from './IntelOcrRuntimeCard';
 import { optionalRuntimeService } from '../../../app/services/optional-runtime-service';
 
 type SettingsSection = 'General' | 'Translation' | 'Speech Recognition' | 'Voice / TTS' | 'Advanced' | 'About';
@@ -70,6 +71,7 @@ export default function SettingsView() {
   const [installingOcrModel, setInstallingOcrModel] = createSignal(false);
   const [removingOcrModel, setRemovingOcrModel] = createSignal(false);
   const [showOcrModelConfirm, setShowOcrModelConfirm] = createSignal(false);
+  const [showIntelInstall, setShowIntelInstall] = createSignal(false);
   const [showRemoveOcrModelConfirm, setShowRemoveOcrModelConfirm] = createSignal(false);
   const [ocrModelProgress, setOcrModelProgress] = createSignal({
     progress: 0,
@@ -763,7 +765,7 @@ export default function SettingsView() {
             <div class="settings-card ocr-settings-card">
               <div class="ocr-card-heading">
                 <div class="provider-card-icon"><Sparkles size={18} /></div>
-                <div class="ocr-card-title"><span class="provider-eyebrow">ĐỌC CHỮ TRÊN VIDEO</span><h3>Đọc phụ đề trong hình</h3><p>RapidOCR · {settings()!.asr.ocrDevice === 'cuda' ? 'NVIDIA' : 'CPU'}</p></div>
+                <div class="ocr-card-title"><span class="provider-eyebrow">ĐỌC CHỮ TRÊN VIDEO</span><h3>Đọc phụ đề trong hình</h3><p>RapidOCR · {settings()!.asr.ocrDevice === 'auto' ? `Tự động · ${ocrEnvironment()?.resolvedLabel ?? 'Đang kiểm tra…'}` : settings()!.asr.ocrDevice === 'openvino' ? 'Intel GPU' : settings()!.asr.ocrDevice === 'cuda' ? 'NVIDIA' : 'CPU'}</p></div>
                 <span class="ocr-overall-status" classList={{ ready: !!ocrEnvironment()?.ocrInstalled && !!ocrEnvironment()?.runtimeInstalled && !!ocrEnvironment()?.modelCached, loading: ocrEnvironmentLoading() || installingOcrRuntime() || installingOcrModel() || removingOcrModel() }}>
                   <span class="provider-status-dot" />{ocrEnvironmentLoading() ? 'Đang kiểm tra' : removingOcrModel() ? 'Đang gỡ model' : ocrEnvironment()?.modelCached ? 'Sẵn sàng' : ocrEnvironment()?.ocrInstalled && ocrEnvironment()?.runtimeInstalled ? 'Cần model' : 'Chưa cài'}
                 </span>
@@ -773,8 +775,18 @@ export default function SettingsView() {
                 <label class="provider-field"><span>Model OCR</span><select class="settings-select" value={settings()!.asr.ocrModel} onChange={(event) => { const model = event.currentTarget.value as AppSettings['asr']['ocrModel']; updateAsr({ ocrModel: model }); void refreshOcrEnvironment(model); }}>
                   <For each={OCR_MODELS}>{(model) => <option value={model.id}>{model.label} · khoảng {model.estimatedMb} MB</option>}</For>
                 </select></label>
-                <label class="provider-field"><span>Thiết bị</span><select class="settings-select" value={settings()!.asr.ocrDevice} onChange={(event) => { chooseDevice('ocr', event.currentTarget.value as 'cpu' | 'cuda'); if (cudaInstallTarget()) event.currentTarget.value = settings()!.asr.ocrDevice; }}>
+                <label class="provider-field"><span>Thiết bị</span><select class="settings-select" value={settings()!.asr.ocrDevice} onChange={(event) => {
+                  const device = event.currentTarget.value as AppSettings['asr']['ocrDevice'];
+                  if (device === 'auto') updateAsr({ ocrDevice: device });
+                  else if (device === 'openvino') {
+                    if (ocrEnvironment()?.backends?.openvino?.available) updateAsr({ ocrDevice: device });
+                    else setShowIntelInstall(true);
+                  } else chooseDevice('ocr', device);
+                  event.currentTarget.value = settings()!.asr.ocrDevice;
+                }}>
+                  <option value="auto">Tự động · khuyên dùng</option>
                   <option value="cpu">CPU</option><option value="cuda">NVIDIA · CUDA{ocrEnvironment()?.cudaAvailable ? '' : ' · cài khi chọn'}</option>
+                  <option value="openvino">Intel GPU · OpenVINO{ocrEnvironment()?.backends?.openvino?.available ? '' : ' · cài khi chọn'}</option>
                 </select></label>
               </div>
               <Show when={!ocrEnvironmentLoading() && !ocrEnvironment()?.cudaAvailable}>
@@ -782,14 +794,24 @@ export default function SettingsView() {
               </Show>
 
               <div class="ocr-component-grid" aria-label="Thành phần OCR">
-                <div class="ocr-component"><span>BỘ ĐỌC CHỮ</span><strong>RapidOCR</strong><small>{ocrEnvironment()?.runtimeInstalled ? ocrEnvironment()?.cudaAvailable ? 'Có thể dùng CPU hoặc NVIDIA' : 'Đã sẵn sàng trên CPU' : 'Cần cài thành phần bổ sung'}</small></div>
+                <div class="ocr-component"><span>BỘ ĐỌC CHỮ</span><strong>RapidOCR</strong><small>{ocrEnvironment()?.runtimeInstalled ? `Tự động ưu tiên: ${ocrEnvironment()?.resolvedLabel ?? 'CPU'}` : 'Cần cài thành phần bổ sung'}</small></div>
                 <div class="ocr-component"><span>MODEL ĐANG CHỌN</span><strong>{OCR_MODELS.find((model) => model.id === settings()!.asr.ocrModel)?.label}</strong><small>{OCR_MODELS.find((model) => model.id === settings()!.asr.ocrModel)?.hint}</small></div>
                 <div class="ocr-component"><span>DUNG LƯỢNG MODEL</span><strong>{ocrEnvironment()?.modelCached ? formatBytes(ocrEnvironment()!.modelBytes) : `Khoảng ${formatBytes(ocrEnvironment()?.estimatedDownloadBytes ?? 7 * 1024 * 1024)}`}</strong><small>{ocrEnvironment()?.modelCached ? 'Đã có trong Models' : 'Tải một lần, dùng offline'}</small></div>
               </div>
 
               <p class="ocr-card-help">Dùng cho phụ đề nằm sẵn trong hình. Chọn chế độ đọc chữ trong Cài đặt dự án, rồi kéo chọn vùng phụ đề trên video. Tốc độ đọc được chọn riêng cho từng dự án.</p>
               <Show when={settings()!.asr.ocrDevice === 'cuda' && !ocrEnvironment()?.cudaAvailable}><p class="asr-config-warning" role="alert">Tăng tốc NVIDIA chưa sẵn sàng. Chọn lại NVIDIA trong mục Thiết bị để cài, hoặc dùng CPU.</p></Show>
-              <Show when={settings()!.asr.ocrDevice === 'cuda' && !!ocrEnvironment()?.runtimeError}><p class="asr-config-warning" role="alert">{ocrEnvironment()?.runtimeError}</p></Show>
+              <Show when={settings()!.asr.ocrDevice === 'openvino' && !ocrEnvironment()?.backends?.openvino?.available}><p class="asr-config-warning" role="alert">{ocrEnvironment()?.backends?.openvino?.message ?? 'Tăng tốc Intel chưa sẵn sàng. Cài tăng tốc hoặc chọn Tự động/CPU.'}</p></Show>
+              <IntelOcrRuntimeCard environment={ocrEnvironment()} confirm={showIntelInstall()} onConfirmChange={setShowIntelInstall}
+                onInstalled={async () => {
+                  const environment = await projectService.getOcrEnvironment(settings()!.asr.ocrModel);
+                  setOcrEnvironment(environment);
+                  await refreshStorage();
+                  if (environment.backends?.openvino?.available) {
+                    updateAsr({ ocrDevice: 'openvino' });
+                    await saveSettings();
+                  }
+                }} />
 
               <Show when={!ocrEnvironmentLoading() && ocrEnvironment()?.workerInstalled && (!ocrEnvironment()?.ocrInstalled || !ocrEnvironment()?.runtimeInstalled)}>
                 <div class="ocr-install-callout">

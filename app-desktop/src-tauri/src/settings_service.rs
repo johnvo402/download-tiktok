@@ -147,7 +147,7 @@ fn default_asr_language() -> String {
     "auto".to_string()
 }
 fn default_ocr_model() -> String { "tiny".to_string() }
-fn default_ocr_device() -> String { "cpu".to_string() }
+fn default_ocr_device() -> String { "auto".to_string() }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -404,7 +404,7 @@ fn migrate_legacy_tts_voice(settings: &mut AppSettings) -> bool {
 
 fn migrate_automatic_devices(settings: &mut AppSettings) -> bool {
     let mut changed = false;
-    for device in [&mut settings.asr.device, &mut settings.asr.ocr_device, &mut settings.tts.device] {
+    for device in [&mut settings.asr.device, &mut settings.tts.device] {
         if device == "auto" {
             *device = "cpu".to_string();
             changed = true;
@@ -470,8 +470,8 @@ pub fn validate_asr_settings(settings: &AsrSettings) -> Result<(), String> {
     if !["tiny", "small", "medium"].contains(&settings.ocr_model.as_str()) {
         return Err("Model OCR phải là PP-OCRv6 Tiny, Small hoặc Medium.".to_string());
     }
-    if !["auto", "cpu", "cuda"].contains(&settings.ocr_device.as_str()) {
-        return Err("Thiết bị OCR phải là Auto, CPU hoặc CUDA.".to_string());
+    if !["auto", "cpu", "cuda", "openvino"].contains(&settings.ocr_device.as_str()) {
+        return Err("Thiết bị OCR phải là Tự động, CPU, NVIDIA hoặc Intel GPU.".to_string());
     }
     Ok(())
 }
@@ -645,6 +645,16 @@ fn credential_configured(provider: TranslationProviderId) -> Result<bool, String
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn ocr_auto_survives_settings_migration_and_intel_is_accepted() {
+        let mut settings = AppSettings::default();
+        settings.asr.ocr_device = "auto".into();
+        super::migrate_automatic_devices(&mut settings);
+        assert_eq!(settings.asr.ocr_device, "auto");
+        settings.asr.ocr_device = "openvino".into();
+        assert!(super::validate_asr_settings(&settings.asr).is_ok());
+    }
 
     #[test]
     fn settings_round_trip_contains_no_credential_fields() {

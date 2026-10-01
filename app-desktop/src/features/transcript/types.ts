@@ -122,7 +122,11 @@ export interface OcrEnvironment {
   modelBytes: number;
   estimatedDownloadBytes: number;
   cudaAvailable: boolean;
-  activeDevice: 'cpu' | 'cuda';
+  activeDevice: 'cpu' | 'cuda' | 'openvino';
+  backends?: Record<string, { backend: string; available: boolean; device: string | null; label: string;
+    message: string | null; installed: boolean; version: string | null }>;
+  recommendedBackend?: 'cpu' | 'cuda' | 'openvino';
+  resolvedLabel?: string;
   onnxRuntimeVersion?: string | null;
   onnxRuntimeDevice?: string | null;
   executionProviders?: string[];

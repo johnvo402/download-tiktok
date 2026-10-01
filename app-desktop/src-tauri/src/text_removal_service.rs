@@ -422,7 +422,7 @@ where
         progress(0.01 + 0.06 * region_index as f64 / regions.len() as f64,
             format!("Đang quét RapidOCR ở {scan_fps} khung/giây · vùng {}/{}", region_index + 1, regions.len()));
         extract_frames(source, start, end, rect, scan_fps, &scan_frames_dir, state)?;
-        let worker = crate::runtime_paths::ai_worker_dir_for("sttn")?;
+        let worker = crate::runtime_paths::ocr_worker_dir()?;
         let scan_request = serde_json::json!({
             "operation": "text_removal_scan",
             "framesDir": scan_frames_dir,
@@ -572,16 +572,16 @@ pub fn start_preview(
     } else {
         None
     };
-    if needs_ocr && ocr_device == "cuda" && !ocr_environment.as_ref().is_some_and(|value| value.cuda_available) {
-        return Err("RapidOCR chưa khởi tạo được CUDA. Mở Cài đặt → Nhận dạng lời thoại và kiểm tra lại thiết bị NVIDIA.".into());
+    if needs_ocr && matches!(ocr_device, "cuda" | "openvino")
+        && !ocr_environment.as_ref().is_some_and(|value| value.backend_available(ocr_device)) {
+        return Err("Thiết bị đọc chữ chưa sẵn sàng. Mở Cài đặt → Nhận dạng lời thoại để kiểm tra hoặc chọn Tự động/CPU.".into());
     }
     let runtime = crate::optional_runtime::status();
     let runtime_feature = "sttn";
-    let ocr_uses_cuda = matches!(ocr_device, "cuda" | "auto")
-        && ocr_environment.as_ref().is_some_and(|value| value.cuda_available);
+    let ocr_uses_gpu = ocr_environment.as_ref().is_some_and(|value| value.uses_gpu(ocr_device));
     let full_region_uses_cuda = runtime.profile.as_deref() == Some("cuda")
         && runtime.installed_features.iter().any(|feature| feature == runtime_feature);
-    let uses_cuda = ocr_uses_cuda || full_region_uses_cuda;
+    let uses_gpu = ocr_uses_gpu || full_region_uses_cuda;
     let window_length = duration.min(3.0);
     let start = (current_time - window_length * 0.45).clamp(0.0, (duration - window_length).max(0.0));
     let end = (start + window_length).min(duration);
@@ -597,7 +597,7 @@ pub fn start_preview(
         project_id.clone(),
         project.name.clone(),
         "text_removal_preview",
-        if uses_cuda { &["gpu", "ffmpeg", "python", "disk"] } else { &["cpu", "ffmpeg", "python", "disk"] },
+        if uses_gpu { &["gpu", "ffmpeg", "python", "disk"] } else { &["cpu", "ffmpeg", "python", "disk"] },
         state.clone(),
     )?;
     let worker_jobs = jobs.clone();
@@ -918,7 +918,10 @@ where
         request.get("ocrDevice").and_then(|value| value.as_str()).unwrap_or("auto"),
         request.get("ocrModel").and_then(|value| value.as_str()).unwrap_or("unknown"),
     );
-    let mut child = crate::runtime_paths::worker_command(worker)
+    let mut command = if request.get("operation").and_then(|value| value.as_str()) == Some("text_removal_scan") {
+        crate::runtime_paths::ocr_worker_command(worker)
+    } else { crate::runtime_paths::worker_command(worker) };
+    let mut child = command
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
         .spawn().map_err(|error| format!("Không thể khởi chạy xử lý AI xóa chữ: {error}"))?;
     let mut input = serde_json::to_vec(request).map_err(|error| error.to_string())?;

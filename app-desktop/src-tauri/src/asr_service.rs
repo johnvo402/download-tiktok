@@ -119,6 +119,33 @@ pub struct OcrEnvironment {
     pub onnx_runtime_device: Option<String>,
     pub execution_providers: Vec<String>,
     pub runtime_error: Option<String>,
+    #[serde(default)]
+    pub backends: std::collections::BTreeMap<String, OcrBackendCapability>,
+    #[serde(default)]
+    pub recommended_backend: String,
+    #[serde(default)]
+    pub resolved_label: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OcrBackendCapability {
+    pub backend: String,
+    pub available: bool,
+    pub device: Option<String>,
+    pub label: String,
+    pub message: Option<String>,
+    pub installed: bool,
+    pub version: Option<String>,
+}
+
+impl OcrEnvironment {
+    pub fn backend_available(&self, backend: &str) -> bool {
+        self.backends.get(backend).is_some_and(|capability| capability.available)
+    }
+    pub fn uses_gpu(&self, requested: &str) -> bool {
+        matches!(requested, "cuda" | "openvino")
+            || requested == "auto" && matches!(self.recommended_backend.as_str(), "cuda" | "openvino")
+    }
 }
 
 fn default_asr_engine() -> String {
@@ -264,6 +291,9 @@ pub fn get_ocr_environment(app: AppHandle, model: String) -> Result<OcrEnvironme
         onnx_runtime_device: runtime_device.map(str::to_string),
         execution_providers: providers,
         runtime_error: response.get("runtimeError").and_then(|value| value.as_str()).map(str::to_string),
+        backends: response.get("backends").cloned().and_then(|value| serde_json::from_value(value).ok()).unwrap_or_default(),
+        recommended_backend: response.get("recommendedBackend").and_then(|value| value.as_str()).unwrap_or("cpu").into(),
+        resolved_label: response.get("resolvedLabel").and_then(|value| value.as_str()).unwrap_or("CPU").into(),
     })
 }
 
@@ -596,6 +626,7 @@ pub fn generate_transcript(
     }
     let cache_dir = asr_cache_dir(&app)?;
     let cuda_available;
+    let mut ocr_gpu = false;
     if options.mode == "ocr" {
         let environment = inspect_worker(&worker, &serde_json::json!({
             "operation": "ocr_inspect",
@@ -623,9 +654,16 @@ pub fn generate_transcript(
         if !environment.get("modelCached").and_then(|value| value.as_bool()).unwrap_or(false) {
             return Err(format!("Mô hình đọc chữ {} chưa được cài. Mở Cài đặt → Nhận dạng lời thoại để tải.", options.ocr_model));
         }
-        if options.ocr_device == "cuda" && !environment.get("cudaAvailable").and_then(|value| value.as_bool()).unwrap_or(false) {
-            return Err("Tăng tốc NVIDIA chưa sẵn sàng. Chọn Tự động hoặc CPU, hoặc cài bản NVIDIA trong Cài đặt.".into());
+        let requested = options.ocr_device.as_str();
+        if matches!(requested, "cuda" | "openvino")
+            && !environment["backends"][requested]["available"].as_bool().unwrap_or(false) {
+            return Err(environment["backends"][requested]["message"].as_str()
+                .unwrap_or("Thiết bị đọc chữ chưa sẵn sàng. Chọn Tự động hoặc CPU.").into());
         }
+        let resolved = if requested == "auto" {
+            environment["recommendedBackend"].as_str().unwrap_or("cpu")
+        } else { requested };
+        ocr_gpu = matches!(resolved, "cuda" | "openvino");
     } else {
         let legacy_cache_dir = legacy_asr_cache_dir(&app)?;
         let alignment_language = if options.engine == "whisperX" { Some(options.language.clone()) } else { None };
@@ -676,7 +714,7 @@ pub fn generate_transcript(
     drop(entries);
     drop(deleting);
     let use_gpu = if options.mode == "ocr" {
-        options.ocr_device == "cuda" || options.ocr_device == "auto" && cuda_available
+        ocr_gpu
     } else {
         options.device == "cuda" || options.device == "auto" && cuda_available
     };
@@ -1073,7 +1111,7 @@ fn run_worker_request(
             request.get("device").and_then(|value| value.as_str()).unwrap_or("auto"),
             request.get("fps").and_then(|value| value.as_f64()).unwrap_or(0.0));
     }
-    let mut child = python_command(worker)
+    let mut child = worker_request_command(worker, request)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1223,7 +1261,7 @@ fn stderr_tail(stderr: &str, limit: usize) -> String {
 }
 
 fn inspect_worker(worker: &Path, request: &serde_json::Value) -> Result<serde_json::Value, String> {
-    let mut child = python_command(worker)
+    let mut child = worker_request_command(worker, request)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1262,7 +1300,7 @@ fn inspect_worker(worker: &Path, request: &serde_json::Value) -> Result<serde_js
 }
 
 fn run_install_worker(worker: &Path, request: &serde_json::Value) -> Result<(), String> {
-    let mut child = python_command(worker)
+    let mut child = worker_request_command(worker, request)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1319,7 +1357,7 @@ fn run_ocr_install_worker(
     worker: &Path,
     request: &serde_json::Value,
 ) -> Result<(), String> {
-    let mut child = python_command(worker)
+    let mut child = worker_request_command(worker, request)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1411,8 +1449,12 @@ fn remember_protocol_noise(lines: &mut Vec<String>, value: &str) {
     lines.push(concise);
 }
 
-fn python_command(worker: &Path) -> Command {
-    crate::runtime_paths::worker_command(worker)
+fn worker_request_command(worker: &Path, request: &serde_json::Value) -> Command {
+    if request.get("operation").and_then(|value| value.as_str()).is_some_and(|value| value.starts_with("ocr_")) {
+        crate::runtime_paths::ocr_worker_command(worker)
+    } else {
+        crate::runtime_paths::worker_command(worker)
+    }
 }
 
 fn worker_root(_app: &AppHandle) -> Result<PathBuf, String> {
@@ -1424,7 +1466,7 @@ fn worker_root(_app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn ocr_worker_root(_app: &AppHandle) -> Result<PathBuf, String> {
-    crate::runtime_paths::ai_worker_dir()
+    crate::runtime_paths::ocr_worker_dir()
 }
 
 fn wait_killable(
@@ -1528,8 +1570,8 @@ fn validate_ocr_options(model: &str, device: &str) -> Result<(), String> {
     if !["tiny", "small", "medium"].contains(&model) {
         return Err("Model OCR phải là tiny, small hoặc medium.".into());
     }
-    if !["auto", "cpu", "cuda"].contains(&device) {
-        return Err("Thiết bị OCR phải là Auto, CPU hoặc CUDA.".into());
+    if !["auto", "cpu", "cuda", "openvino"].contains(&device) {
+        return Err("Thiết bị OCR phải là Tự động, CPU, NVIDIA hoặc Intel GPU.".into());
     }
     Ok(())
 }

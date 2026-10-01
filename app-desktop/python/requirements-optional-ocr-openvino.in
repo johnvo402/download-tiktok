@@ -1,0 +1,5 @@
+# Lightweight Intel OCR pack. No speech, Torch, CUDA or model weights.
+openvino==2026.4.0
+openvino-telemetry==2025.2.0
+rapidocr==3.9.2
+numpy>=1.26,<2.6

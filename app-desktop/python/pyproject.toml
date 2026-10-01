@@ -34,6 +34,8 @@ ocr = ["rapidocr==3.9.2", "onnxruntime==1.30.0"]
 # Optional NVIDIA CUDA provider for development machines. Default release builds
 # remain CPU-first; CUDA release packaging needs a separately validated worker.
 ocr-cuda = ["rapidocr==3.9.2", "onnxruntime-gpu==1.26.0"]
+# Intel OCR shares ONNX weights; no CUDA or Torch dependency.
+ocr-openvino = ["rapidocr==3.9.2", "onnxruntime==1.30.0", "openvino==2026.4.0", "openvino-telemetry==2025.2.0"]
 # Optional, large runtime for cinematic dialogue/music/effects separation.
 # Install CPU PyTorch first with scripts/setup-dialogue-dev.ps1.
 dialogue = [

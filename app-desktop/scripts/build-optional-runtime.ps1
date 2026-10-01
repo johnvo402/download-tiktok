@@ -38,6 +38,11 @@ foreach ($requirementsName in @("requirements-optional-whisperx.in", "requiremen
         throw "$requirementsName must pin huggingface-hub==0.36.2."
     }
 }
+$IntelRequirements = Get-Content -LiteralPath (Join-Path $Source "requirements-optional-ocr-openvino.in") -Raw
+if ($IntelRequirements -notmatch '(?m)^openvino==2026\.4\.0\s*$' -or
+    $IntelRequirements -match '(?m)^(torch|torchaudio|whisperx|transformers|onnxruntime-gpu)[=><@]') {
+    throw "Intel OCR must use pinned OpenVINO and must not install the heavy speech/CUDA packages."
+}
 $WorkerRoot = Join-Path $Root "python\worker"
 Get-ChildItem -LiteralPath $WorkerRoot -Filter "*.py" -File -Recurse | ForEach-Object {
     $relative = $_.FullName.Substring($WorkerRoot.Length + 1)

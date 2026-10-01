@@ -10,6 +10,8 @@ from threading import Lock
 from pathlib import Path
 from typing import Any, Callable
 
+from .backends import AUTO_PRIORITY, resolve_ocr_backend, runtime_capabilities
+
 LOGGER = logging.getLogger(__name__)
 MODEL_DIR = "rapidocr"
 DEFAULT_MODEL = "tiny"
@@ -205,17 +207,8 @@ def _runtime_installed() -> bool:
 
 
 def _resolved_device(device: str | None) -> tuple[str, bool]:
-    selected = device or "auto"
-    if selected not in ("auto", "cpu", "cuda"):
-        raise ValueError("Thiết bị OCR phải là auto, cpu hoặc cuda.")
-    available, cuda_error = _cuda_runtime_probe()
-    if selected == "cuda" and not available:
-        detail = f" Chi tiết: {cuda_error}" if cuda_error else ""
-        raise RuntimeError(
-            "Tăng tốc NVIDIA chưa khởi tạo được cho đọc chữ. Kiểm tra driver và thành phần CUDA trong Cài đặt."
-            f"{detail}"
-        )
-    return ("cuda" if selected == "cuda" or (selected == "auto" and available) else "cpu", available)
+    capability = resolve_ocr_backend(device)
+    return capability.backend, capability.backend == "cuda"
 
 
 def inspect_ocr(cache_dir: str, model: str = DEFAULT_MODEL) -> dict[str, Any]:
@@ -228,7 +221,9 @@ def inspect_ocr(cache_dir: str, model: str = DEFAULT_MODEL) -> dict[str, Any]:
     root = _model_root(cache_dir, selected_model)
     cached, model_bytes = _model_cached(root, selected_model)
     runtime = _runtime_diagnostics()
-    cuda_available = bool(runtime["cudaAvailable"])
+    capabilities = runtime_capabilities()
+    recommended = resolve_ocr_backend("auto", capabilities) if any(c.available for c in capabilities.values()) else None
+    cuda_available = capabilities["cuda"].available
     LOGGER.info(
         "RapidOCR environment: model=%s, runtime=%s, device=%s, providers=%s, cudaReady=%s",
         selected_model,
@@ -248,12 +243,64 @@ def inspect_ocr(cache_dir: str, model: str = DEFAULT_MODEL) -> dict[str, Any]:
         "modelBytes": model_bytes if cached else 0,
         "estimatedDownloadBytes": config["estimatedBytes"],
         "cudaAvailable": cuda_available,
-        "activeDevice": "cuda" if cuda_available else "cpu",
+        "activeDevice": recommended.backend if recommended else "cpu",
+        "backends": {key: cap.payload() for key, cap in capabilities.items()},
+        "recommendedBackend": recommended.backend if recommended else "cpu",
+        "resolvedLabel": recommended.label if recommended else "Chưa sẵn sàng",
         "onnxRuntimeVersion": runtime["onnxRuntimeVersion"],
         "onnxRuntimeDevice": runtime["onnxRuntimeDevice"],
         "executionProviders": runtime["executionProviders"],
         "runtimeError": runtime.get("runtimeError"),
     }
+
+
+class _AutoOcrEngine:
+    """Auto alone may recover from real-model initialization/inference failure."""
+    def __init__(self, engine: Any, backend: str, fallback: Callable[[str], Any]):
+        self.engine = engine
+        self.resolved_backend = backend
+        self.fallback = fallback
+        self.verified = False
+        self.ocr_auto_fallback = False
+        self.lock = Lock()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.engine, name)
+
+    def __call__(self, image: Any, **kwargs: Any) -> Any:
+        with self.lock:
+            while True:
+                try:
+                    result = self.engine(image, **kwargs)
+                    if not self.verified:
+                        verify_engine_device(self.engine, self.resolved_backend, "auto-initialization")
+                        self.verified = True
+                    return result
+                except Exception:
+                    if self.resolved_backend == "cpu":
+                        raise
+                    LOGGER.exception("OCR Auto backend failed: %s", self.resolved_backend)
+                    candidates = AUTO_PRIORITY[AUTO_PRIORITY.index(self.resolved_backend) + 1:]
+                    for candidate in candidates:
+                        try:
+                            replacement = self.fallback(candidate)
+                        except Exception:
+                            LOGGER.info("OCR Auto fallback unavailable: %s", candidate, exc_info=True)
+                            continue
+                        self.engine = replacement
+                        self.resolved_backend = candidate
+                        self.ocr_auto_fallback = True
+                        self.verified = False
+                        LOGGER.warning("OCR Auto switched to backend=%s", candidate)
+                        break
+                    else:
+                        raise RuntimeError("Không có thiết bị đọc chữ sẵn sàng. Kiểm tra Cài đặt rồi thử lại.")
+
+
+def _auto_wrap(engine: Any, requested: str, backend: str, cache_dir: str, model: str) -> Any:
+    if requested == "auto" and backend != "cpu":
+        return _AutoOcrEngine(engine, backend, lambda candidate: _create_engine(cache_dir, model, candidate))
+    return engine
 
 
 def _create_engine(cache_dir: str, model: str = DEFAULT_MODEL, device: str = "auto"):
@@ -264,7 +311,8 @@ def _create_engine(cache_dir: str, model: str = DEFAULT_MODEL, device: str = "au
     selected_model, config = _profile(model)
     if not _runtime_installed():
         raise RuntimeError("Bộ đọc chữ chưa đầy đủ. Hãy cập nhật hoặc cài lại JC AI.")
-    active_device, _ = _resolved_device(device)
+    capability = resolve_ocr_backend(device)
+    active_device = capability.backend
     runtime = _runtime_diagnostics()
     LOGGER.info(
         "RapidOCR engine requested: device=%s, resolved=%s, model=%s, runtime=%s, providers=%s",
@@ -278,7 +326,7 @@ def _create_engine(cache_dir: str, model: str = DEFAULT_MODEL, device: str = "au
     root.mkdir(parents=True, exist_ok=True)
     # RapidOCR 3.x supports separate PP-OCRv6 Tiny, Small, and Medium profiles.
     # Auto uses CUDA only when the packaged ONNX Runtime exposes its provider.
-    return RapidOCR(params={
+    params = {
         "Global.model_root_dir": str(root),
         "EngineConfig.onnxruntime.use_cuda": active_device == "cuda",
         # RapidOCR 3.9 validates these settings as enum members rather than
@@ -287,7 +335,37 @@ def _create_engine(cache_dir: str, model: str = DEFAULT_MODEL, device: str = "au
         "Det.model_type": getattr(ModelType, config["enum"]),
         "Rec.ocr_version": OCRVersion.PPOCRV6,
         "Rec.model_type": getattr(ModelType, config["enum"]),
-    })
+    }
+    if active_device == "openvino":
+        if not _model_cached(root, selected_model)[0]:
+            raise RuntimeError("Model OCR chưa được cài. Cài model trong Cài đặt trước khi đọc chữ.")
+        try:
+            from .openvino_engine import RapidOCROpenVinoBackend
+            engine = RapidOCROpenVinoBackend(params, _model_files(root), config["requiredFiles"], capability.device,
+                                              Path(cache_dir).parent / "runtimes" / "advanced" / "compiled-ocr")
+            return _auto_wrap(engine, device, active_device, cache_dir, selected_model)
+        except Exception as error:
+            LOGGER.exception("OpenVINO model initialization failed: model=%s device=%s", selected_model, capability.device)
+            if device == "auto":
+                LOGGER.warning("OCR Auto falling back to CPU after OpenVINO model failure")
+                fallback = RapidOCR(params=params)
+                fallback.ocr_auto_fallback = True
+                return fallback
+            raise RuntimeError("Không thể khởi tạo model đọc chữ trên GPU Intel. Kiểm tra driver hoặc chọn Tự động/CPU.") from error
+    try:
+        engine = RapidOCR(params=params)
+    except Exception as error:
+        LOGGER.exception("OCR initialization failed: backend=%s model=%s", active_device, selected_model)
+        if device == "auto" and active_device == "cuda":
+            for candidate in AUTO_PRIORITY[AUTO_PRIORITY.index("cuda") + 1:]:
+                try:
+                    fallback = _create_engine(cache_dir, selected_model, candidate)
+                    LOGGER.warning("OCR Auto initialization switched to %s", candidate)
+                    return _auto_wrap(fallback, "auto", candidate, cache_dir, selected_model)
+                except Exception:
+                    LOGGER.info("OCR fallback unavailable: %s", candidate, exc_info=True)
+        raise RuntimeError("Không thể khởi tạo bộ đọc chữ. Kiểm tra thiết bị và model trong Cài đặt.") from error
+    return _auto_wrap(engine, device, active_device, cache_dir, selected_model)
 
 
 def _engine_session_providers(engine: Any) -> dict[str, list[str]]:
@@ -307,6 +385,20 @@ def _engine_session_providers(engine: Any) -> dict[str, list[str]]:
 
 
 def verify_engine_device(engine: Any, resolved_device: str, operation: str = "transcription") -> dict[str, list[str]]:
+    if getattr(engine, "backend", None) == "openvino":
+        sessions = {label: list(getattr(engine, name).session.devices)
+                    for name, label in (("text_det", "det"), ("text_cls", "cls"), ("text_rec", "rec"))}
+        if len(sessions) != 3 or any(not devices or any(not d.startswith("GPU") for d in devices) for devices in sessions.values()):
+            raise RuntimeError("Không xác minh được model đọc chữ chạy trên GPU Intel.")
+        LOGGER.info("RapidOCR %s OpenVINO actual execution devices: %s", operation, sessions)
+        return sessions
+    # Auto can fall back when a real model operator is unsupported.
+    if resolved_device == "openvino" and not getattr(engine, "ocr_auto_fallback", False):
+        raise RuntimeError("Không xác minh được RapidOCR chạy trên GPU Intel; đã dừng để tránh dùng CPU ngoài ý muốn.")
+    if resolved_device == "openvino":
+        LOGGER.info("RapidOCR %s: Auto model fallback to ORT CPU", operation)
+    if getattr(engine, "ocr_auto_fallback", False):
+        resolved_device = "cpu"
     sessions = _engine_session_providers(engine)
     LOGGER.info("RapidOCR %s session providers: %s", operation, sessions or "not exposed")
     if resolved_device == "cuda":
@@ -470,6 +562,8 @@ def transcribe_frames(request: dict[str, Any], emit: Callable[[dict[str, object]
         raise RuntimeError("FFmpeg không trích xuất được frame trong vùng OCR đã chọn.")
     requested_device = str(request.get("device", "auto"))
     resolved_device, _ = _resolved_device(requested_device)
+    emit({"type": "progress", "stage": "ocr-model", "progress": 0.0,
+          "message": "Đang khởi tạo model đọc chữ" + (" trên GPU Intel…" if resolved_device == "openvino" else "…")})
     engine = _create_engine(
         str(request["cacheDir"]),
         str(request.get("model", DEFAULT_MODEL)),
@@ -519,7 +613,7 @@ def transcribe_frames(request: dict[str, Any], emit: Callable[[dict[str, object]
     elapsed = time.perf_counter() - started
     LOGGER.info(
         "RapidOCR transcript complete: device=%s, model=%s, frames=%d, detectedFrames=%d, segments=%d, elapsed=%.2fs, avg=%.1fms/frame",
-        resolved_device,
+        getattr(engine, "resolved_backend", resolved_device),
         request.get("model", DEFAULT_MODEL),
         total,
         detected_frames,

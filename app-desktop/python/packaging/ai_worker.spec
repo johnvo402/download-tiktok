@@ -40,6 +40,7 @@ hiddenimports += [
     "worker.asr.service",
     "worker.tts.service",
     "worker.ocr.service",
+    "worker.ocr.backends",
     "worker.text_removal.service",
     "worker.tts.providers",
     "worker.dialogue.service",
@@ -62,6 +63,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        "openvino", "openvino_telemetry",
         "torch", "torchvision", "torchaudio", "transformers", "tensorflow",
         "gradio", "gradio_client", "fastapi", "uvicorn", "librosa",
         "numba", "llvmlite", "scipy", "pandas",

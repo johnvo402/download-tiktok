@@ -56,3 +56,15 @@ Third-party notices for Rust crates and npm packages are available from the
 package lockfiles and their upstream package metadata. Release owners should
 generate and review the complete license inventory for the exact shipped
 installer before distribution.
+
+## Optional Intel OCR acceleration
+
+The separately installed Intel OCR pack pins official OpenVINO 2026.4.0 and
+OpenVINO Telemetry 2025.2.0 (Apache-2.0). It is excluded from the default frozen
+worker and uses the same RapidOCR 3.9.2 ONNX weights/dictionary as CPU and CUDA.
+The adapter reuses RapidOCR/Paddle detection, classification, recognition and
+postprocessing classes (Apache-2.0); upstream packages are not modified.
+Preserve upstream wheel LICENSE/NOTICE files in the optional runtime.
+
+- [OpenVINO source and licenses](https://github.com/openvinotoolkit/openvino)
+- [RapidOCR source and license](https://github.com/RapidAI/RapidOCR)
