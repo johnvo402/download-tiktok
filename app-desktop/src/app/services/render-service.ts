@@ -1,10 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import type { ExportCapabilities, VideoCodec, VideoEncoder } from './video-encoding';
+export type { ExportCapabilities } from './video-encoding';
 
 export interface ExportOptions {
   quality: 'fast' | 'balanced' | 'high';
-  videoCodec: 'h264' | 'hevc';
-  encoder?: 'cpu' | 'nvidia';
+  videoCodec: VideoCodec;
+  encoder?: VideoEncoder;
   videoBitrateKbps?: number | null;
   applyBlur: boolean;
   applyLogos: boolean;
@@ -30,6 +32,8 @@ export interface SubtitleLayoutWarning {
 }
 
 export interface ExportValidation {
+  resolvedEncoder: VideoEncoder;
+  resolvedEncoderLabel: string;
   valid: boolean;
   width: number;
   height: number;
@@ -42,13 +46,6 @@ export interface ExportValidation {
   warnings: SubtitleLayoutWarning[];
   dubbingSegments: number;
   expectedAudio: boolean;
-}
-
-export interface ExportCapabilities {
-  nvidiaEncoderAvailable: boolean;
-  nvidiaMessage: string;
-  nvidiaHevcEncoderAvailable: boolean;
-  nvidiaHevcMessage: string;
 }
 
 export interface ExportHistoryEntry {
@@ -77,7 +74,7 @@ export interface ExportJobEvent {
 }
 
 export const renderService = {
-  capabilities: () => invoke<ExportCapabilities>('get_export_capabilities'),
+  capabilities: (refresh = false) => invoke<ExportCapabilities>('get_export_capabilities', { refresh }),
   validate: (projectId: string, options: ExportOptions) => invoke<ExportValidation>('validate_export', { projectId, options }),
   start: (projectId: string, options: ExportOptions) => invoke<string>('start_export', { projectId, options }),
   cancel: (jobId: string) => invoke<boolean>('cancel_export', { jobId }),

@@ -355,10 +355,10 @@ pub async fn validate_export(
 }
 
 #[tauri::command]
-pub async fn get_export_capabilities() -> Result<render_service::ExportCapabilities, String> {
-    tauri::async_runtime::spawn_blocking(render_service::export_capabilities)
+pub async fn get_export_capabilities(refresh: Option<bool>) -> Result<crate::hardware_acceleration::ExportCapabilities, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::hardware_acceleration::capabilities(refresh.unwrap_or(false)))
         .await
-        .map_err(|error| format!("Không thể kiểm tra encoder export: {error}"))
+        .map_err(|error| format!("Không thể kiểm tra encoder export: {error}"))?
 }
 
 #[tauri::command]
@@ -515,8 +515,8 @@ pub async fn start_video_merge(
     file_paths: Vec<String>,
     output_directory: Option<String>,
     frame_mode: Option<video_tools_service::MergeFrameMode>,
-    video_codec: Option<video_tools_service::MergeVideoCodec>,
-    encoder: Option<video_tools_service::MergeEncoder>,
+    video_codec: Option<crate::hardware_acceleration::VideoCodec>,
+    encoder: Option<crate::hardware_acceleration::VideoEncoder>,
     logos: Option<Vec<video_tools_service::MergeLogoSettings>>,
     texts: Option<Vec<video_tools_service::MergeTextSettings>>,
 ) -> Result<String, String> {

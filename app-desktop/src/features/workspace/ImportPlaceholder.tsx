@@ -9,9 +9,8 @@ import {
 import { currentProject, setNotice } from '../../app/project-state';
 import { jobService } from '../../app/services/job-service';
 import { projectService } from '../../app/services/project-service';
-import { renderService } from '../../app/services/render-service';
+import VideoEncoderSelect from '../../shared/components/VideoEncoderSelect';
 import { videoToolsService, type MergeEncoder, type MergeFrameMode, type MergeLogoSettings, type MergeTextSettings, type MergeVideoCodec, type MergeVideoInfo, type TikTokCookieInfo, type TikTokDramaInfo, type VideoToolProgress } from '../../app/services/video-tools-service';
-import type { ExportCapabilities } from '../../app/services/render-service';
 import { mergeVisualProject } from '../overlays/overlay-state';
 
 type Tab = 'tiktok' | 'merge';
@@ -46,8 +45,7 @@ export default function ImportPlaceholder() {
   const [mergeOutput, setMergeOutput] = createSignal('');
   const [mergeFrameMode, setMergeFrameMode] = createSignal<MergeFrameMode>('source');
   const [mergeVideoCodec, setMergeVideoCodec] = createSignal<MergeVideoCodec>('h264');
-  const [mergeEncoder, setMergeEncoder] = createSignal<MergeEncoder>('cpu');
-  const [exportCapabilities, setExportCapabilities] = createSignal<ExportCapabilities>();
+  const [mergeEncoder, setMergeEncoder] = createSignal<MergeEncoder>('auto');
   const [mergeVideoPreviewUrl, setMergeVideoPreviewUrl] = createSignal('');
   const [mergeLogoEnabled, setMergeLogoEnabled] = createSignal(false);
   const [mergeLogoId, setMergeLogoId] = createSignal('');
@@ -91,12 +89,6 @@ export default function ImportPlaceholder() {
   let unlisten: (() => void) | undefined;
   let folderGeneration = 0;
   const projectId = () => currentProject()?.id;
-  const selectedMergeGpuAvailable = () => mergeVideoCodec() === 'hevc'
-    ? exportCapabilities()?.nvidiaHevcEncoderAvailable ?? false
-    : exportCapabilities()?.nvidiaEncoderAvailable ?? false;
-  const selectedMergeGpuMessage = () => mergeVideoCodec() === 'hevc'
-    ? exportCapabilities()?.nvidiaHevcMessage ?? 'Đang kiểm tra HEVC NVENC…'
-    : exportCapabilities()?.nvidiaMessage ?? 'Đang kiểm tra H.264 NVENC…';
   const mergeCanvasAspect = createMemo(() => {
     if (mergeFrameMode() === 'portrait') return 9 / 16;
     if (mergeFrameMode() === 'landscape') return 16 / 9;
@@ -146,12 +138,6 @@ export default function ImportPlaceholder() {
   });
 
   onMount(() => {
-    void renderService.capabilities().then(setExportCapabilities).catch(() => setExportCapabilities({
-      nvidiaEncoderAvailable: false,
-      nvidiaMessage: 'Không kiểm tra được H.264 NVENC. Có thể tiếp tục bằng CPU.',
-      nvidiaHevcEncoderAvailable: false,
-      nvidiaHevcMessage: 'Không kiểm tra được HEVC NVENC. Có thể tiếp tục bằng CPU.',
-    }));
     void videoToolsService.onProgress((event) => {
       if (event.projectId !== projectId()) return;
       if (cookieLoginStarting() && (!cookieLoginJobId() || cookieLoginJobId() === event.jobId)) {
@@ -544,8 +530,8 @@ export default function ImportPlaceholder() {
             <div class="video-tool-directory-row"><div class="video-tool-directory-value" title={mergeOutput()}><FolderOpen size={15} /><span>{mergeOutput() ? directoryLabel(mergeOutput()) : 'Đang lấy thư mục dự án…'}</span></div><button class="button button-quiet" type="button" disabled={taskRunning()} onClick={() => void chooseDirectory('merge')}>Chọn thư mục</button></div>
             <label class="merge-frame-mode"><span><strong>Tỷ lệ khung hình</strong><small>{mergeFrameMode() === 'source' ? 'Tự động giữ khung hình của video có độ phân giải lớn nhất.' : 'Video được giữ nguyên tỷ lệ, căn giữa trên nền đen nếu không vừa khung.'}</small></span><select class="settings-select" value={mergeFrameMode()} disabled={taskRunning()} onChange={(event) => setMergeFrameMode(event.currentTarget.value as MergeFrameMode)}><option value="source">Tự động theo video</option><option value="portrait">Dọc · 9:16</option><option value="landscape">Ngang · 16:9</option></select></label>
             <div class="merge-encoding-options">
-              <label class="merge-frame-mode"><span><strong>Codec video</strong><small>HEVC thường tạo file nhỏ hơn ở chất lượng tương đương.</small></span><select class="settings-select" value={mergeVideoCodec()} disabled={taskRunning()} onChange={(event) => { const codec = event.currentTarget.value as MergeVideoCodec; setMergeVideoCodec(codec); if (mergeEncoder() === 'nvidia' && !(codec === 'hevc' ? exportCapabilities()?.nvidiaHevcEncoderAvailable : exportCapabilities()?.nvidiaEncoderAvailable)) setMergeEncoder('cpu'); }}><option value="h264">H.264 · tương thích rộng</option><option value="hevc">HEVC / H.265 · file gọn hơn</option></select></label>
-              <label class="merge-frame-mode"><span><strong>Mã hóa bằng</strong><small>{mergeEncoder() === 'nvidia' ? selectedMergeGpuMessage() : 'CPU hoạt động trên mọi máy.'}</small></span><select class="settings-select" value={mergeEncoder()} disabled={taskRunning()} onChange={(event) => setMergeEncoder(event.currentTarget.value as MergeEncoder)}><option value="cpu">CPU</option><option value="nvidia" disabled={!selectedMergeGpuAvailable()}>GPU NVIDIA · NVENC</option></select></label>
+              <label class="merge-frame-mode"><span><strong>Codec video</strong><small>HEVC thường tạo file nhỏ hơn ở chất lượng tương đương.</small></span><select class="settings-select" value={mergeVideoCodec()} disabled={taskRunning()} onChange={(event) => setMergeVideoCodec(event.currentTarget.value as MergeVideoCodec)}><option value="h264">H.264 · tương thích rộng</option><option value="hevc">HEVC / H.265 · file gọn hơn</option></select></label>
+              <VideoEncoderSelect codec={mergeVideoCodec()} value={mergeEncoder()} disabled={taskRunning()} onChange={setMergeEncoder} />
             </div>
             <small class="merge-encoding-note">CPU/GPU chỉ dùng khi cần mã hóa lại. Video cùng codec, cùng thông số và không có logo/chữ hoặc đổi tỷ lệ sẽ được nối trực tiếp, giữ nguyên chất lượng.</small>
             <section class="merge-logo-section" aria-label="Logo video gộp">

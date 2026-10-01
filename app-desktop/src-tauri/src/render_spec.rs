@@ -1,6 +1,7 @@
 use crate::project_service::{BlurEffect, BlurRegion, BlurRegionRole, Project, ProjectLogo, ProjectTextOverlay, SubtitleSettings, TextRemovalMode};
 use crate::transcript_service::Transcript;
 use serde::{Deserialize, Serialize};
+use crate::hardware_acceleration::{VideoCodec, VideoEncoder};
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -61,10 +62,10 @@ pub struct TextOverlayRenderSpec {
 pub struct ExportOptions {
     #[serde(default = "default_quality")]
     pub quality: String,
-    #[serde(default = "default_video_codec")]
-    pub video_codec: String,
-    #[serde(default = "default_encoder")]
-    pub encoder: String,
+    #[serde(default)]
+    pub video_codec: VideoCodec,
+    #[serde(default)]
+    pub encoder: VideoEncoder,
     #[serde(default)]
     pub video_bitrate_kbps: Option<u32>,
     #[serde(default = "default_true")]
@@ -100,12 +101,6 @@ pub struct ExportOptions {
 fn default_quality() -> String {
     "balanced".to_string()
 }
-fn default_encoder() -> String {
-    "cpu".to_string()
-}
-fn default_video_codec() -> String {
-    "h264".to_string()
-}
 fn default_true() -> bool {
     true
 }
@@ -124,8 +119,8 @@ impl Default for ExportOptions {
     fn default() -> Self {
         Self {
             quality: default_quality(),
-            video_codec: default_video_codec(),
-            encoder: default_encoder(),
+            video_codec: VideoCodec::default(),
+            encoder: VideoEncoder::default(),
             video_bitrate_kbps: None,
             apply_blur: true,
             apply_logos: true,
@@ -233,7 +228,8 @@ pub struct RenderAudioConfig {
 #[serde(rename_all = "camelCase")]
 pub struct RenderOutputConfig {
     pub container: String,
-    pub video_codec: String,
+    pub video_codec: VideoCodec,
+    pub encoder: VideoEncoder,
     pub audio_codec: String,
     pub pixel_format: String,
 }
@@ -323,12 +319,6 @@ pub fn build_render_specification(
     if !["balanced", "high", "fast"].contains(&options.quality.as_str()) {
         return Err("Chất lượng export không hợp lệ.".into());
     }
-    if !["cpu", "nvidia"].contains(&options.encoder.as_str()) {
-        return Err("Bộ mã hóa video không hợp lệ.".into());
-    }
-    if !["h264", "hevc"].contains(&options.video_codec.as_str()) {
-        return Err("Codec video phải là H.264 hoặc HEVC.".into());
-    }
     if options.video_bitrate_kbps.is_some_and(|bitrate| !(500..=50_000).contains(&bitrate)) {
         return Err("Bitrate video phải nằm trong khoảng 500–50.000 kbps.".into());
     }
@@ -381,12 +371,8 @@ pub fn build_render_specification(
         video_bitrate_kbps: options.video_bitrate_kbps,
         output: RenderOutputConfig {
             container: "mp4".into(),
-            video_codec: match (options.video_codec.as_str(), options.encoder.as_str()) {
-                ("hevc", "nvidia") => "hevc_nvenc",
-                ("hevc", _) => "libx265",
-                (_, "nvidia") => "h264_nvenc",
-                _ => "libx264",
-            }.into(),
+            video_codec: options.video_codec,
+            encoder: options.encoder,
             audio_codec: "aac".into(),
             pixel_format: "yuv420p".into(),
         },

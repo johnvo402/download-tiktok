@@ -1,3 +1,4 @@
+use crate::hardware_acceleration::{self, EncodingProfile, VideoEncoder};
 use crate::project_service::{BlurEffect, BlurRegionRole, Project, ProjectStore};
 use crate::render_spec::{self, ExportOptions, RenderSpecification};
 use crate::transcript_service::{self, Transcript, TranscriptTtsStatus};
@@ -67,6 +68,8 @@ pub struct ExportJobEvent {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportValidation {
+    pub resolved_encoder: VideoEncoder,
+    pub resolved_encoder_label: String,
     pub valid: bool,
     pub width: u32,
     pub height: u32,
@@ -79,67 +82,6 @@ pub struct ExportValidation {
     pub warnings: Vec<render_spec::SubtitleLayoutWarning>,
     pub dubbing_segments: usize,
     pub expected_audio: bool,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExportCapabilities {
-    pub nvidia_encoder_available: bool,
-    pub nvidia_message: String,
-    pub nvidia_hevc_encoder_available: bool,
-    pub nvidia_hevc_message: String,
-}
-
-pub fn export_capabilities() -> ExportCapabilities {
-    let h264 = probe_nvenc_encoder("h264_nvenc");
-    let hevc = probe_nvenc_encoder("hevc_nvenc");
-    ExportCapabilities {
-        nvidia_encoder_available: h264.is_ok(),
-        nvidia_message: h264.err().unwrap_or_else(|| "NVIDIA NVENC sẵn sàng.".into()),
-        nvidia_hevc_encoder_available: hevc.is_ok(),
-        nvidia_hevc_message: hevc.err().unwrap_or_else(|| "NVIDIA NVENC HEVC sẵn sàng.".into()),
-    }
-}
-
-pub(crate) fn probe_nvidia_video_encoder(codec: &str) -> Result<(), String> {
-    let encoder = match codec {
-        "h264" => "h264_nvenc",
-        "hevc" => "hevc_nvenc",
-        _ => return Err("Codec NVENC không hợp lệ; hỗ trợ H.264 và HEVC.".into()),
-    };
-    probe_nvenc_encoder(encoder)
-}
-
-fn probe_nvenc_encoder(encoder: &str) -> Result<(), String> {
-    let mut command = crate::runtime_paths::ffmpeg_command()
-        .map_err(|error| format!("Không kiểm tra được NVIDIA NVENC: {error}"))?;
-    command.args([
-        "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
-        // NVENC rejects very small test frames on some driver/GPU combinations.
-        // Use a modest, ordinary size and the same pixel format as export.
-        "color=c=black:s=256x256:r=1:d=1", "-frames:v", "1", "-pix_fmt", "yuv420p", "-c:v", encoder,
-        "-f", "null", "-",
-    ]);
-    hide_console_window(&mut command);
-    let result = command
-        .output()
-        .map_err(|error| format!("Không chạy được kiểm tra NVIDIA NVENC: {error}"))?;
-    if result.status.success() {
-        return Ok(());
-    }
-    // FFmpeg's final lines only say that no packets were written. Keep the
-    // beginning of stderr so useful causes such as "Cannot load nvcuda.dll"
-    // or "InitializeEncoder failed" are shown to the user.
-    let details = String::from_utf8_lossy(&result.stderr)
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .take(6)
-        .map(str::trim)
-        .collect::<Vec<_>>()
-        .join(" ");
-    Err(format!(
-        "FFmpeg không khởi tạo được {encoder}. Kiểm tra driver NVIDIA hoặc chọn mã hóa CPU. {details}"
-    ))
 }
 
 pub fn has_active_project_job(jobs: &RenderJobs, project_id: &str) -> bool {
@@ -159,9 +101,6 @@ pub fn validate_export(
     options: &ExportOptions,
 ) -> Result<ExportValidation, String> {
     validate_export_options(options)?;
-    if options.encoder == "nvidia" {
-        probe_nvidia_video_encoder(&options.video_codec)?;
-    }
     resolve_export_directory(store, project_id, options.output_directory.as_deref())?;
     let (project, _transcript, spec, dubbing_count, expected_audio) =
         prepare(store, project_id, options)?;
@@ -181,6 +120,8 @@ pub fn validate_export(
         .unwrap_or(0);
     let _ = project;
     Ok(ExportValidation {
+        resolved_encoder: spec.output.encoder,
+        resolved_encoder_label: spec.output.encoder.label().into(),
         valid: spec.subtitle.warnings.is_empty(),
         width: spec.width,
         height: spec.height,
@@ -203,9 +144,6 @@ pub fn start_export(
     project_id: String,
     options: ExportOptions,
 ) -> Result<String, String> {
-    if options.encoder == "nvidia" {
-        probe_nvidia_video_encoder(&options.video_codec)?;
-    }
     let _guard = jobs
         .start_lock
         .lock()
@@ -246,7 +184,7 @@ pub fn start_export(
         project_id.clone(),
         project.name.clone(),
         "export",
-        if options.encoder == "nvidia" { &["gpu", "cpu", "ffmpeg", "disk"] } else { &["cpu", "ffmpeg", "disk"] },
+        if spec.output.encoder.hardware() { &["gpu", "cpu", "ffmpeg", "disk"] } else { &["cpu", "ffmpeg", "disk"] },
         serde_json::to_value(&options).ok(),
     );
     let state = Arc::new(AtomicU8::new(JOB_RUNNING));
@@ -489,7 +427,7 @@ fn prepare(
         video_checksum: project.source.checksum_sha256.clone(),
         segments: Vec::new(),
     });
-    let spec = render_spec::build_render_specification(&project, &transcript, duration, options)?;
+    let mut spec = render_spec::build_render_specification(&project, &transcript, duration, options)?;
     if !options.apply_blur
         && project
             .blur_regions
@@ -520,17 +458,13 @@ fn prepare(
     if source_meta.len() == 0 {
         return Err("Video nguồn rỗng.".into());
     }
+    // Resolve only after project/media validation; the specification passed to FFmpeg is concrete.
+    spec.output.encoder = hardware_acceleration::resolve(options.video_codec, options.encoder)?;
     Ok((project, transcript, spec, dub_paths.len(), expected_audio))
 }
 
 fn validate_export_options(options: &ExportOptions) -> Result<(), String> {
     validate_output_file_name(&options.output_file_name)?;
-    if !["cpu", "nvidia"].contains(&options.encoder.as_str()) {
-        return Err("Bộ mã hóa video không hợp lệ.".into());
-    }
-    if !["h264", "hevc"].contains(&options.video_codec.as_str()) {
-        return Err("Codec video phải là H.264 hoặc HEVC.".into());
-    }
     if options
         .video_bitrate_kbps
         .is_some_and(|bitrate| !(500..=50_000).contains(&bitrate))
@@ -708,7 +642,7 @@ fn run_export_inner(
     state: &Arc<AtomicU8>,
     started: Instant,
 ) -> Result<(String, f64), String> {
-    let (project, transcript, spec, _, _expected_audio) = prepare(store, project_id, options)?;
+    let (project, transcript, mut spec, _, _expected_audio) = prepare(store, project_id, options)?;
     if !spec.subtitle.warnings.is_empty() {
         let ids = spec
             .subtitle
@@ -776,115 +710,125 @@ fn run_export_inner(
         .tempfile_in(&export_dir)
         .map_err(|error| format!("Không thể tạo tệp render tạm trong thư mục đích: {error}"))?;
     let staging_path = staging_file.into_temp_path();
-    let mut command = build_ffmpeg_command(
-        crate::runtime_paths::ffmpeg_command()?,
-        &source_path,
-        &dub_items,
-        &logo_paths,
-        &ai_patches,
-        dialogue_stem.as_deref(),
-        &filter_path,
-        &staging_path,
-        &spec,
-        audio_expected,
-    );
-    if state.load(Ordering::SeqCst) == JOB_CANCELLED {
-        return Err("Đã hủy export.".into());
-    }
-    let mut child = command.spawn().map_err(|error| {
-        format!("Không thể chạy FFmpeg. Kiểm tra cài đặt FFmpeg và PATH: {error}")
-    })?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or("Không đọc được tiến trình FFmpeg.")?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or("Không đọc được thông báo lỗi từ FFmpeg.")?;
-    let (tx, rx) = mpsc::channel::<String>();
-    thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().flatten() {
-            if tx.send(line).is_err() {
-                break;
-            }
-        }
-    });
-    let stderr_tail = Arc::new(Mutex::new(VecDeque::<String>::new()));
-    let stderr_tail_reader = stderr_tail.clone();
-    let stderr_reader = thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().flatten() {
-            if let Ok(mut tail) = stderr_tail_reader.lock() {
-                tail.push_back(line);
-                while tail.len() > 16 {
-                    tail.pop_front();
-                }
-            }
-        }
-    });
-    let mut out_seconds: f64 = 0.0;
-    let mut last_emit = Instant::now();
-    let mut speed: Option<f64> = None;
-    loop {
+    let candidates = hardware_acceleration::fallback_candidates(options.video_codec, options.encoder, spec.output.encoder)?;
+    for (attempt, backend) in candidates.iter().copied().enumerate() {
+        spec.output.encoder = backend;
+        let mut command = build_ffmpeg_command(
+            crate::runtime_paths::ffmpeg_command()?,
+            &source_path,
+            &dub_items,
+            &logo_paths,
+            &ai_patches,
+            dialogue_stem.as_deref(),
+            &filter_path,
+            &staging_path,
+            &spec,
+            audio_expected,
+        )?;
         if state.load(Ordering::SeqCst) == JOB_CANCELLED {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = stderr_reader.join();
-            let _ = fs::remove_file(&staging_path);
             return Err("Đã hủy export.".into());
         }
-        while let Ok(line) = rx.try_recv() {
-            if let Some((key, value)) = line.split_once('=') {
-                if key == "out_time_ms" {
-                    out_seconds = value.parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
-                }
-                if key == "speed" {
-                    speed = value.trim_end_matches('x').parse().ok();
-                }
-                if key == "progress" && last_emit.elapsed() >= Duration::from_millis(250) {
-                    let encode_percent = (out_seconds / source_duration).clamp(0.0, 0.995);
-                    let percent = if ai_patches.is_empty() { encode_percent } else { 0.15 + encode_percent * 0.845 };
-                    emit_event(
-                        app,
-                        event(
-                            project_id,
-                            job_id,
-                            "running",
-                            percent,
-                            started.elapsed().as_secs_f64(),
-                            source_duration,
-                            speed,
-                            None,
-                            "Đang mã hóa video…".into(),
-                            spec.subtitle.warnings.clone(),
-                        ),
-                    );
-                    last_emit = Instant::now();
+        let mut child = command.spawn().map_err(|error| {
+            format!("Không thể chạy FFmpeg. Kiểm tra cài đặt FFmpeg và PATH: {error}")
+        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or("Không đọc được tiến trình FFmpeg.")?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or("Không đọc được thông báo lỗi từ FFmpeg.")?;
+        let (tx, rx) = mpsc::channel::<String>();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().flatten() {
+                if tx.send(line).is_err() {
+                    break;
                 }
             }
-        }
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("Không thể theo dõi FFmpeg: {error}"))?
-        {
-            if !status.success() {
+        });
+        let stderr_tail = Arc::new(Mutex::new(VecDeque::<String>::new()));
+        let stderr_tail_reader = stderr_tail.clone();
+        let stderr_reader = thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().flatten() {
+                if let Ok(mut tail) = stderr_tail_reader.lock() {
+                    tail.push_back(line);
+                    while tail.len() > 16 {
+                        tail.pop_front();
+                    }
+                }
+            }
+        });
+        let mut out_seconds: f64 = 0.0;
+        let mut encoded_frames = 0_u64;
+        let mut last_emit = Instant::now();
+        let mut speed: Option<f64> = None;
+        loop {
+            if state.load(Ordering::SeqCst) == JOB_CANCELLED {
+                let _ = child.kill();
+                let _ = child.wait();
                 let _ = stderr_reader.join();
                 let _ = fs::remove_file(&staging_path);
-                let details = stderr_tail
-                    .lock()
-                    .map(|tail| tail.iter().rev().cloned().collect::<Vec<_>>().join(" "))
-                    .unwrap_or_default();
-                let details: String = details.chars().take(900).collect();
-                return Err(if details.is_empty() {
-                    "FFmpeg render thất bại. Kiểm tra codec, vùng blur và tệp media rồi thử lại.".into()
-                } else {
-                    format!("FFmpeg render thất bại: {details}")
-                });
+                return Err("Đã hủy export.".into());
             }
-            let _ = stderr_reader.join();
-            break;
+            while let Ok(line) = rx.try_recv() {
+                if let Some((key, value)) = line.split_once('=') {
+                    if key == "frame" { encoded_frames = value.trim().parse().unwrap_or(encoded_frames); }
+                    if key == "out_time_ms" {
+                        out_seconds = value.parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
+                    }
+                    if key == "speed" {
+                        speed = value.trim_end_matches('x').parse().ok();
+                    }
+                    if key == "progress" && last_emit.elapsed() >= Duration::from_millis(250) {
+                        let encode_percent = (out_seconds / source_duration).clamp(0.0, 0.995);
+                        let percent = if ai_patches.is_empty() { encode_percent } else { 0.15 + encode_percent * 0.845 };
+                        emit_event(
+                            app,
+                            event(
+                                project_id,
+                                job_id,
+                                "running",
+                                percent,
+                                started.elapsed().as_secs_f64(),
+                                source_duration,
+                                speed,
+                                None,
+                                format!("Đang mã hóa video · {}", spec.output.encoder.label()),
+                                spec.subtitle.warnings.clone(),
+                            ),
+                        );
+                        last_emit = Instant::now();
+                    }
+                }
+            }
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|error| format!("Không thể theo dõi FFmpeg: {error}"))?
+            {
+                if !status.success() {
+                    let _ = stderr_reader.join();
+                    let _ = fs::remove_file(&staging_path);
+                    let details = stderr_tail
+                        .lock()
+                        .map(|tail| tail.iter().rev().cloned().collect::<Vec<_>>().join(" "))
+                        .unwrap_or_default();
+                    if options.encoder == VideoEncoder::Auto && encoded_frames == 0
+                        && attempt + 1 < candidates.len() && hardware_acceleration::is_encoder_initialization_error(&details) {
+                        log::warn!("Auto encode initialization failed on {backend:?}, trying next encoder: {details}");
+                        emit_event(app, event(project_id, job_id, "running", if ai_patches.is_empty() { 0.0 } else { 0.15 }, started.elapsed().as_secs_f64(), source_duration, None, None,
+                            format!("{} không khởi tạo được; đang thử {}…", backend.label(), candidates[attempt + 1].label()), spec.subtitle.warnings.clone()));
+                        break;
+                    }
+                    return Err(hardware_acceleration::encoding_error(options.video_codec, backend, &details));
+                }
+                let _ = stderr_reader.join();
+                break;
+            }
+            thread::sleep(Duration::from_millis(80));
         }
-        thread::sleep(Duration::from_millis(80));
+        // A successful attempt proceeds to output validation; a failed init tries the next candidate.
+        if child.wait().map_err(|error| error.to_string())?.success() { break; }
     }
     if state.load(Ordering::SeqCst) == JOB_CANCELLED {
         let _ = fs::remove_file(&staging_path);
@@ -1225,7 +1169,7 @@ fn build_ffmpeg_command(
     output: &Path,
     spec: &RenderSpecification,
     audio_expected: bool,
-) -> Command {
+) -> Result<Command, String> {
     command
         .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
         .arg(source);
@@ -1254,29 +1198,10 @@ fn build_ffmpeg_command(
     } else {
         command.arg("-an");
     }
-    let (preset, h264_crf) = encoder_settings(&spec.quality);
-    let hevc_crf = hevc_encoder_crf(&spec.quality);
-    let is_nvenc = spec.output.video_codec.ends_with("_nvenc");
-    let is_hevc = spec.output.video_codec.starts_with("hevc_") || spec.output.video_codec == "libx265";
-    let crf = if is_hevc { hevc_crf } else { h264_crf };
-    command.arg("-c:v").arg(&spec.output.video_codec);
-    if let Some(bitrate_kbps) = spec.video_bitrate_kbps {
-        let bitrate = format!("{bitrate_kbps}k");
-        let maxrate = format!("{}k", ((bitrate_kbps as f64) * 1.15).round() as u32);
-        let bufsize = format!("{}k", bitrate_kbps.saturating_mul(2));
-        if is_nvenc {
-            command.args(["-preset", nvenc_preset(&spec.quality), "-rc:v", "vbr"]);
-        } else {
-            command.args(["-preset", preset]);
-        }
-        command.args(["-b:v", &bitrate, "-maxrate", &maxrate, "-bufsize", &bufsize]);
-    } else if is_nvenc {
-        command.args(["-preset", nvenc_preset(&spec.quality), "-rc:v", "vbr", "-cq:v", crf, "-b:v", "0"]);
-    } else {
-        command.args(["-preset", preset, "-crf", crf]);
-    }
-    command.args(["-pix_fmt", &spec.output.pixel_format]);
-    if is_hevc { command.args(["-tag:v", "hvc1"]); }
+    command.args(hardware_acceleration::encoder_arguments(
+        spec.output.video_codec, spec.output.encoder, &spec.quality,
+        spec.video_bitrate_kbps, EncodingProfile::Export,
+    )?);
     command
         .arg("-c:a")
         .arg(&spec.output.audio_codec)
@@ -1294,24 +1219,9 @@ fn build_ffmpeg_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     hide_console_window(&mut command);
-    command
+    Ok(command)
 }
 
-fn encoder_settings(quality: &str) -> (&'static str, &'static str) {
-    match quality {
-        "fast" => ("ultrafast", "25"),
-        "high" => ("slow", "18"),
-        _ => ("medium", "23"),
-    }
-}
-
-fn hevc_encoder_crf(quality: &str) -> &'static str {
-    match quality {
-        "fast" => "30",
-        "high" => "23",
-        _ => "27",
-    }
-}
 
 pub(crate) fn register_auxiliary_job(
     app: &AppHandle,
@@ -1366,13 +1276,6 @@ pub(crate) fn finish_auxiliary_job(jobs: &RenderJobs, job_id: &str) {
     }
 }
 
-fn nvenc_preset(quality: &str) -> &'static str {
-    match quality {
-        "fast" => "p2",
-        "high" => "p6",
-        _ => "p5",
-    }
-}
 
 fn hide_console_window(command: &mut Command) {
     #[cfg(windows)]
@@ -1604,9 +1507,9 @@ mod tests {
 
     #[test]
     fn balanced_export_uses_a_size_efficient_h264_profile() {
-        assert_eq!(encoder_settings("balanced"), ("medium", "23"));
-        assert_eq!(encoder_settings("fast"), ("ultrafast", "25"));
-        assert_eq!(encoder_settings("high"), ("slow", "18"));
+        let args = hardware_acceleration::encoder_arguments(crate::hardware_acceleration::VideoCodec::H264, VideoEncoder::Cpu, "balanced", None, EncodingProfile::Export).unwrap();
+        assert!(args.windows(2).any(|pair| pair == ["-preset", "medium"]));
+        assert!(args.windows(2).any(|pair| pair == ["-crf", "23"]));
     }
 
     #[test]
@@ -1700,6 +1603,24 @@ mod tests {
 
     #[test]
     fn ffmpeg_renders_blur_then_region_subtitles_then_logo_and_mixes_delayed_dub() {
+        verify_render(crate::hardware_acceleration::VideoCodec::H264, VideoEncoder::Cpu);
+    }
+
+    #[test]
+    #[ignore = "Requires FFmpeg and performs a full export on each usable backend"]
+    fn real_export_with_effects_on_available_backends() {
+        let caps = hardware_acceleration::capabilities(false).unwrap();
+        for codec in [crate::hardware_acceleration::VideoCodec::H264, crate::hardware_acceleration::VideoCodec::Hevc] {
+            for backend in hardware_acceleration::DEFAULT_PRIORITY {
+                if caps.encoders.iter().any(|item| item.id == *backend && item.supports(codec)) {
+                    verify_render(codec, *backend);
+                    println!("export effects {backend:?}/{codec:?}: blur/subtitle/logo/audio verified");
+                }
+            }
+        }
+    }
+
+    fn verify_render(codec: crate::hardware_acceleration::VideoCodec, backend: VideoEncoder) {
         if Command::new("ffmpeg").arg("-version").output().is_err() {
             eprintln!("Skipping integration render: FFmpeg is not installed");
             return;
@@ -1870,6 +1791,8 @@ mod tests {
         crate::transcript_service::save_transcript(&store, &project.id, transcript.clone())
             .unwrap();
         let options = ExportOptions {
+            encoder: backend,
+            video_codec: codec,
             include_dubbing: true,
             ducking: true,
             ..ExportOptions::default()
@@ -1910,35 +1833,10 @@ mod tests {
         let filter = project_root.join("cache/filtergraph.txt");
         fs::write(&filter, &graph).unwrap();
         let output_path = project_root.join("exports/render-integration.mp4");
-        let rendered = Command::new("ffmpeg")
-            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
-            .arg(&source)
-            .arg("-i")
-            .arg(&dubs[0].0)
-            .args(["-loop", "1", "-i"])
-            .arg(&logos[0])
-            .args(["-filter_complex_script"])
-            .arg(&filter)
-            .args([
-                "-map",
-                "[vout]",
-                "-map",
-                "[aout]",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-crf",
-                "27",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                "-shortest",
-            ])
-            .arg(&output_path)
-            .output()
-            .unwrap();
+        let rendered = build_ffmpeg_command(
+            crate::runtime_paths::ffmpeg_command().unwrap(), &source, &dubs, &logos,
+            &[], None, &filter, &output_path, &spec, expected_audio,
+        ).unwrap().output().unwrap();
         assert!(
             rendered.status.success(),
             "FFmpeg render failed: {}\nGRAPH: {}",
@@ -1953,6 +1851,9 @@ mod tests {
             true,
         )
         .unwrap();
-        assert!(fs::metadata(output_path).unwrap().len() > 2048);
+        assert!(fs::metadata(&output_path).unwrap().len() > 2048);
+        let metadata = crate::runtime_paths::ffprobe_command().unwrap().args(["-v","error","-select_streams","v:0","-show_entries","stream=codec_name","-of","json"]).arg(&output_path).output().unwrap();
+        let json: Value = serde_json::from_slice(&metadata.stdout).unwrap();
+        assert_eq!(json["streams"][0]["codec_name"],codec.name());
     }
 }

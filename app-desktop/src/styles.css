@@ -1360,3 +1360,12 @@ button:disabled { cursor: not-allowed; }
 .optional-runtime-refresh { padding: 0; border: 0; background: none; color: #cce47d; font: inherit; text-decoration: underline; cursor: pointer; }
 .optional-runtime-refresh:focus-visible { outline: 2px solid #cce47d; outline-offset: 2px; }
 @media (max-width: 900px) { .optional-runtime-options { grid-template-columns: 1fr; } }
+
+.video-encoder-control { display: grid; gap: 8px; min-width: 0; margin: 12px 0; }
+.video-encoder-field { display: grid; gap: 8px; font-size: 13px; }
+.video-encoder-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.video-encoder-status small { color: var(--text-muted, #a2a9aa); line-height: 1.5; }
+.video-encoder-status button { flex: none; padding: 7px; }
+.video-encoder-details { color: var(--text-muted, #a2a9aa); font-size: 12px; line-height: 1.5; }
+.video-encoder-details summary { cursor: pointer; }
+.video-encoder-details small { display: block; margin-top: 6px; }

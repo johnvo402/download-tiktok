@@ -7,6 +7,23 @@ $BaseUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$ReleaseTag"
 $Archive = Join-Path $Root ".release-cache\$AssetName"
 $Extract = Join-Path $Root ".release-cache\ffmpeg-extract"
 $Target = Join-Path $Root "src-tauri\resources\ffmpeg"
+$RequiredEncoders = @("libx264", "libx265", "h264_nvenc", "hevc_nvenc", "h264_qsv", "hevc_qsv", "h264_amf", "hevc_amf", "aac")
+$RequiredFilters = @("ass", "boxblur", "gblur")
+$Features = $RequiredEncoders + @("ass/libass", "boxblur", "gblur")
+$License = "GPL-3.0-or-later (GPL build; libx264/libx265, NVENC, QSV and AMF encoders enabled)"
+function Test-BundledFFmpeg {
+    # Build presence differs from actual hardware usability, which the app probes at runtime.
+    $encoders = & (Join-Path $Target "ffmpeg.exe") -hide_banner -encoders 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { throw "Cannot read bundled FFmpeg encoders." }
+    $filters = & (Join-Path $Target "ffmpeg.exe") -hide_banner -filters 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { throw "Cannot read bundled FFmpeg filters." }
+    foreach ($name in $RequiredEncoders) {
+        if ($encoders -notmatch ("(?m)^\s*[A-Z.]{6}\s+" + [regex]::Escape($name) + "\s")) { throw "FFmpeg build lacks required encoder: $name" }
+    }
+    foreach ($name in $RequiredFilters) {
+        if ($filters -notmatch ("(?m)^\s*[A-Z.]{2,3}\s+" + [regex]::Escape($name) + "\s")) { throw "FFmpeg build lacks required filter: $name" }
+    }
+}
 function Remove-WorkspacePath([string]$Path) {
     $absolute = [IO.Path]::GetFullPath($Path)
     $rootPrefix = $Root.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
@@ -19,7 +36,14 @@ function Remove-WorkspacePath([string]$Path) {
     if (Test-Path -LiteralPath $absolute) { Remove-Item -LiteralPath $absolute -Recurse -Force }
 }
 if ((Test-Path (Join-Path $Target "ffmpeg.exe")) -and (Test-Path (Join-Path $Target "ffprobe.exe")) -and -not $Force -and -not $DownloadOnly) {
-    Write-Host "Using existing bundled FFmpeg binaries. Pass -Force to replace them."
+    Test-BundledFFmpeg
+    $metadataPath = Join-Path $Target "ffmpeg-build.json"
+    if (-not (Test-Path -LiteralPath $metadataPath)) { throw "Bundled FFmpeg provenance is missing. Pass -Force to restore it." }
+    $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+    $metadata.features = $Features
+    $metadata.license = $License
+    $metadata | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $metadataPath -Encoding utf8
+    Write-Host "Verified existing bundled FFmpeg encoders and filters. Pass -Force to replace the binaries."
     return
 }
 New-Item -ItemType Directory -Path (Split-Path $Archive) -Force | Out-Null
@@ -45,21 +69,17 @@ Copy-Item -LiteralPath $ffmpeg.FullName -Destination (Join-Path $Target "ffmpeg.
 Copy-Item -LiteralPath $ffprobe.FullName -Destination (Join-Path $Target "ffprobe.exe") -Force
 Get-ChildItem -LiteralPath $ffmpeg.DirectoryName -Filter "*.dll" -File | Copy-Item -Destination $Target -Force
 $version = (& (Join-Path $Target "ffmpeg.exe") -version | Select-Object -First 1)
-$encoders = & (Join-Path $Target "ffmpeg.exe") -hide_banner -encoders 2>&1 | Out-String
-$filters = & (Join-Path $Target "ffmpeg.exe") -hide_banner -filters 2>&1 | Out-String
-if ($LASTEXITCODE -ne 0 -or $encoders -notmatch 'libx264' -or $encoders -notmatch 'libx265' -or $encoders -notmatch 'h264_nvenc' -or $encoders -notmatch 'hevc_nvenc' -or $encoders -notmatch '\baac\b' -or $filters -notmatch '\bass\b' -or $filters -notmatch '\bboxblur\b') {
-    throw "Pinned FFmpeg build lacks a renderer-required H.264/HEVC CPU/GPU encoder or filter."
-}
+Test-BundledFFmpeg
 $manifest = [ordered]@{
     source = "BtbN/FFmpeg-Builds"
     releaseTag = $ReleaseTag
     asset = $AssetName
     sha256 = $actualHash
     ffmpegVersion = $version
-    license = "GPL-3.0-or-later (GPL build; libx264/libx265 and NVENC encoders enabled)"
+    license = $License
     sourceUrl = "https://github.com/BtbN/FFmpeg-Builds/tree/$ReleaseTag"
     ffmpegSourceUrl = "https://ffmpeg.org/download.html"
-    features = @("libx264", "libx265", "h264_nvenc", "hevc_nvenc", "aac", "ass/libass", "boxblur", "gblur")
+    features = $Features
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Target "ffmpeg-build.json") -Encoding utf8
 Write-Host "Bundled verified $version ($actualHash)"

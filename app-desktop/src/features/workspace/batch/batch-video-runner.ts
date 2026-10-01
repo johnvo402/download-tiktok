@@ -128,7 +128,7 @@ export class BatchVideoRunner {
         const options: ExportOptions = {
           quality: 'balanced',
           videoCodec: 'h264',
-          encoder: 'cpu',
+          encoder: 'auto',
           applyBlur: true,
           applyLogos: true,
           burnSubtitles: project.subtitle.enabled,

@@ -1,3 +1,4 @@
+use crate::hardware_acceleration::{self, EncodingProfile, VideoCodec, VideoEncoder};
 use crate::project_service::ProjectStore;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -23,24 +24,6 @@ pub enum MergeFrameMode {
     Source,
     Portrait,
     Landscape,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum MergeVideoCodec {
-    #[default]
-    #[serde(rename = "h264")]
-    H264,
-    #[serde(rename = "hevc")]
-    Hevc,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum MergeEncoder {
-    #[default]
-    Cpu,
-    Nvidia,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -601,8 +584,8 @@ pub fn start_video_merge(
     file_paths: Vec<String>,
     output_directory: Option<String>,
     frame_mode: Option<MergeFrameMode>,
-    video_codec: Option<MergeVideoCodec>,
-    encoder: Option<MergeEncoder>,
+    video_codec: Option<VideoCodec>,
+    encoder: Option<VideoEncoder>,
     logo_settings: Vec<MergeLogoSettings>,
     text_settings: Vec<MergeTextSettings>,
 ) -> Result<String, String> {
@@ -624,7 +607,7 @@ pub fn start_video_merge(
     let job_id = Uuid::new_v4().to_string();
     let cancelled = Arc::new(AtomicBool::new(false));
     insert_job(jobs, &job_id, &project_id, cancelled.clone())?;
-    let resources: &[&str] = if encoder == MergeEncoder::Nvidia { &["cpu", "gpu", "ffmpeg", "disk"] } else { &["cpu", "ffmpeg", "disk"] };
+    let resources: &[&str] = if encoder != VideoEncoder::Cpu { &["cpu", "gpu", "ffmpeg", "disk"] } else { &["cpu", "ffmpeg", "disk"] };
     crate::job_service::register_job(&app, job_id.clone(), project_id.clone(), project.name, "video_merge", resources, None);
     emit_video_tool_event(&app, VideoToolEvent { project_id: project_id.clone(), job_id: job_id.clone(), status: "queued".into(), progress: 0.0, message: "Đang chuẩn bị gộp video…".into(), stage: Some("queued".into()), details: None, output: None });
 
@@ -885,8 +868,8 @@ fn run_merge_job(
     texts: &[MergeTextSettings],
     total_duration: f64,
     frame_mode: MergeFrameMode,
-    video_codec: MergeVideoCodec,
-    encoder: MergeEncoder,
+    video_codec: VideoCodec,
+    encoder: VideoEncoder,
     cancelled: &AtomicBool,
 ) -> Result<PathBuf, String> {
     if cancelled.load(Ordering::SeqCst) { return Err("cancelled".into()); }
@@ -909,9 +892,7 @@ fn run_merge_job(
     let result = (|| {
         if cancelled.load(Ordering::SeqCst) { return Err("cancelled".into()); }
         let (target_width, target_height) = merge_canvas_size(&inputs, frame_mode)?;
-        let copy_compatible = logos.is_empty() && texts.is_empty() && is_stream_copy_compatible(&inputs)
-            && merge_codec_matches(&inputs[0].video_codec, video_codec)
-            && (frame_mode == MergeFrameMode::Source || inputs.iter().all(|video| video.width == target_width && video.height == target_height));
+        let copy_compatible = can_stream_copy(&inputs, !logos.is_empty() || !texts.is_empty(), frame_mode, video_codec, target_width, target_height);
         if copy_compatible {
             write_concat_manifest(&manifest, &inputs)?;
         } else {
@@ -930,11 +911,10 @@ fn run_merge_job(
         let graph = build_transcode_filtergraph(&inputs, logos, target_width, target_height, ass_path)?;
         write_private_file(&filter_script, graph.as_bytes())?;
         }
-        if !copy_compatible && encoder == MergeEncoder::Nvidia {
-            crate::render_service::probe_nvidia_video_encoder(merge_codec_name(video_codec))?;
-        }
-        let codec_label = match video_codec { MergeVideoCodec::H264 => "H.264", MergeVideoCodec::Hevc => "HEVC" };
-        let encoder_label = match encoder { MergeEncoder::Cpu => "CPU", MergeEncoder::Nvidia => "NVIDIA GPU · NVENC" };
+        // Stream copy does not require a GPU, even when a manual hardware backend was requested.
+        let resolved = if copy_compatible { VideoEncoder::Cpu } else { hardware_acceleration::resolve(video_codec, encoder)? };
+        let codec_label = video_codec.label();
+        let encoder_label = resolved.label();
         let message = if copy_compatible {
             "Các video tương thích; đang ghép bằng stream copy để giữ nguyên chất lượng.".to_string()
         } else {
@@ -950,7 +930,20 @@ fn run_merge_job(
             message,
             stage: Some(if copy_compatible { "copy" } else { "transcode" }.into()), details: None, output: None,
         });
-        run_ffmpeg_merge(app, project_id, job_id, &inputs, logos, &manifest, &filter_script, &temporary, total_duration, copy_compatible, video_codec, encoder, cancelled)?;
+        let candidates = if copy_compatible { vec![resolved] } else { hardware_acceleration::fallback_candidates(video_codec, encoder, resolved)? };
+        for (attempt, backend) in candidates.iter().copied().enumerate() {
+            match run_ffmpeg_merge(app, project_id, job_id, &inputs, logos, &manifest, &filter_script, &temporary, total_duration, copy_compatible, video_codec, backend, cancelled) {
+                Ok(()) => break,
+                Err(details) if !copy_compatible && encoder == VideoEncoder::Auto && attempt + 1 < candidates.len()
+                    && !details.starts_with("Encode failed after frames were produced:") && hardware_acceleration::is_encoder_initialization_error(&details) => {
+                    log::warn!("Auto merge init failed on {backend:?}: {details}");
+                    emit_video_tool_event(app, VideoToolEvent { project_id: project_id.into(), job_id: job_id.into(), status: "running".into(), progress: 0.0,
+                        message: format!("Đang chuyển sang {}…", candidates[attempt + 1].label()), stage: Some("transcode".into()), details: None, output: None });
+                }
+                Err(details) if details == "cancelled" => return Err(details),
+                Err(details) => return Err(hardware_acceleration::encoding_error(video_codec, backend, &details)),
+            }
+        }
         if cancelled.load(Ordering::SeqCst) { return Err("cancelled".into()); }
         let (duration, has_video, has_audio, output_codec) = probe_merge_output(&temporary)?;
         if !has_video { return Err("File gộp không có video stream hợp lệ.".into()); }
@@ -985,6 +978,12 @@ fn next_merge_output(directory: &Path) -> Result<PathBuf, String> {
         }
     }
     Err("Không tạo được tên file gộp duy nhất.".into())
+}
+
+fn can_stream_copy(videos: &[MergeVideoInfo], has_effects: bool, frame_mode: MergeFrameMode, codec: VideoCodec, width: u32, height: u32) -> bool {
+    !has_effects && is_stream_copy_compatible(videos)
+        && videos.first().is_some_and(|video| merge_codec_matches(&video.video_codec, codec))
+        && (frame_mode == MergeFrameMode::Source || videos.iter().all(|video| video.width == width && video.height == height))
 }
 
 fn is_stream_copy_compatible(videos: &[MergeVideoInfo]) -> bool {
@@ -1077,16 +1076,14 @@ fn build_transcode_filtergraph(videos: &[MergeVideoInfo], logos: &[PreparedMerge
     Ok(filters.join(";\n"))
 }
 
-fn merge_codec_matches(source_codec: &str, requested: MergeVideoCodec) -> bool {
+fn merge_codec_matches(source_codec: &str, requested: VideoCodec) -> bool {
     match requested {
-        MergeVideoCodec::H264 => source_codec.eq_ignore_ascii_case("h264"),
-        MergeVideoCodec::Hevc => source_codec.eq_ignore_ascii_case("hevc"),
+        VideoCodec::H264 => source_codec.eq_ignore_ascii_case("h264"),
+        VideoCodec::Hevc => source_codec.eq_ignore_ascii_case("hevc"),
     }
 }
 
-fn merge_codec_name(codec: MergeVideoCodec) -> &'static str {
-    match codec { MergeVideoCodec::H264 => "h264", MergeVideoCodec::Hevc => "hevc" }
-}
+
 
 fn merge_logo_pixels(settings: &MergeLogoSettings, width: u32, height: u32) -> (u32, u32, u32, u32) {
     let pixel_width = (settings.width * f64::from(width)).round().clamp(2.0, f64::from(width)) as u32;
@@ -1094,6 +1091,32 @@ fn merge_logo_pixels(settings: &MergeLogoSettings, width: u32, height: u32) -> (
     let x = (settings.x * f64::from(width)).round().clamp(0.0, f64::from(width.saturating_sub(pixel_width))) as u32;
     let y = (settings.y * f64::from(height)).round().clamp(0.0, f64::from(height.saturating_sub(pixel_height))) as u32;
     (x, y, pixel_width, pixel_height)
+}
+
+fn build_merge_command(
+    videos: &[MergeVideoInfo], logos: &[PreparedMergeLogo], manifest: &Path,
+    filter_script: &Path, temporary_output: &Path, stream_copy: bool,
+    video_codec: VideoCodec, encoder: VideoEncoder,
+) -> Result<Command, String> {
+    let mut command = crate::runtime_paths::ffmpeg_command()?;
+    command.args(["-hide_banner", "-loglevel", "error", "-nostdin", "-nostats", "-y", "-progress", "pipe:1"]);
+    if stream_copy {
+        command.args(["-f", "concat", "-safe", "0", "-i"]).arg(manifest)
+            .args(["-map", "0:v:0"]);
+        if videos[0].has_audio { command.args(["-map", "0:a:0"]); }
+        command.args(["-c", "copy", "-movflags", "+faststart"]);
+    } else {
+        for video in videos { command.arg("-i").arg(&video.path); }
+        for logo in logos { command.args(["-loop", "1", "-framerate", "30", "-i"]).arg(&logo.path); }
+        command.args(["-filter_complex_script"]).arg(filter_script).args(["-map", "[outv]"]);
+        if videos.iter().any(|video| video.has_audio) { command.args(["-map", "[outa]"]); }
+        command.args(hardware_acceleration::encoder_arguments(video_codec, encoder, "balanced", None, EncodingProfile::Merge)?);
+        if videos.iter().any(|video| video.has_audio) { command.args(["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]); }
+        else { command.arg("-an"); }
+        command.args(["-max_muxing_queue_size", "2048", "-movflags", "+faststart"]);
+    }
+    command.arg(temporary_output).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    Ok(command)
 }
 
 fn run_ffmpeg_merge(
@@ -1107,35 +1130,11 @@ fn run_ffmpeg_merge(
     temporary_output: &Path,
     total_duration: f64,
     stream_copy: bool,
-    video_codec: MergeVideoCodec,
-    encoder: MergeEncoder,
+    video_codec: VideoCodec,
+    encoder: VideoEncoder,
     cancelled: &AtomicBool,
 ) -> Result<(), String> {
-    let mut command = crate::runtime_paths::ffmpeg_command()?;
-    command.args(["-hide_banner", "-loglevel", "error", "-nostdin", "-nostats", "-y", "-progress", "pipe:1"]);
-    if stream_copy {
-        command.args(["-f", "concat", "-safe", "0", "-i"]).arg(manifest)
-            .args(["-map", "0:v:0"]);
-        if videos[0].has_audio { command.args(["-map", "0:a:0"]); }
-        command.args(["-c", "copy", "-movflags", "+faststart"]);
-    } else {
-        for video in videos { command.arg("-i").arg(&video.path); }
-        for logo in logos { command.args(["-loop", "1", "-framerate", "30", "-i"]).arg(&logo.path); }
-        command.args(["-filter_complex_script"]).arg(filter_script).args(["-map", "[outv]"]);
-        if videos.iter().any(|video| video.has_audio) { command.args(["-map", "[outa]"]); }
-        let (video_encoder, preset, quality_args): (&str, &str, &[&str]) = match (video_codec, encoder) {
-            (MergeVideoCodec::H264, MergeEncoder::Cpu) => ("libx264", "veryfast", &["-crf", "19"]),
-            (MergeVideoCodec::Hevc, MergeEncoder::Cpu) => ("libx265", "fast", &["-crf", "27"]),
-            (MergeVideoCodec::H264, MergeEncoder::Nvidia) => ("h264_nvenc", "p5", &["-rc:v", "vbr", "-cq:v", "21", "-b:v", "0"]),
-            (MergeVideoCodec::Hevc, MergeEncoder::Nvidia) => ("hevc_nvenc", "p5", &["-rc:v", "vbr", "-cq:v", "25", "-b:v", "0"]),
-        };
-        command.args(["-c:v", video_encoder, "-preset", preset]).args(quality_args).args(["-pix_fmt", "yuv420p"]);
-        if video_codec == MergeVideoCodec::Hevc { command.args(["-tag:v", "hvc1"]); }
-        if videos.iter().any(|video| video.has_audio) { command.args(["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]); }
-        else { command.arg("-an"); }
-        command.args(["-max_muxing_queue_size", "2048", "-movflags", "+faststart"]);
-    }
-    command.arg(temporary_output).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut command = build_merge_command(videos, logos, manifest, filter_script, temporary_output, stream_copy, video_codec, encoder)?;
     let mut child = command.spawn().map_err(|error| format!("Không thể khởi chạy FFmpeg để gộp video: {error}"))?;
     let stdout = child.stdout.take().ok_or_else(|| "Không mở được tiến trình FFmpeg.".to_string())?;
     let stderr = child.stderr.take().ok_or_else(|| "Không đọc được lỗi FFmpeg.".to_string())?;
@@ -1143,7 +1142,7 @@ fn run_ffmpeg_merge(
     thread::spawn(move || for line in BufReader::new(stdout).lines().flatten() { if tx.send(line).is_err() { break; } });
     let stderr_tail = Arc::new(Mutex::new(VecDeque::<String>::new()));
     let stderr_tail_thread = stderr_tail.clone();
-    thread::spawn(move || {
+    let stderr_reader = thread::spawn(move || {
         let mut reader = BufReader::new(stderr);
         let mut line = String::new();
         loop {
@@ -1161,9 +1160,11 @@ fn run_ffmpeg_merge(
     });
 
     let mut out_time_seconds = 0.0_f64;
+    let mut encoded_frames = 0_u64;
     loop {
         if cancelled.load(Ordering::SeqCst) {
             kill_process_tree(&mut child);
+            let _ = stderr_reader.join();
             let _ = fs::remove_file(temporary_output);
             return Err("cancelled".into());
         }
@@ -1171,6 +1172,7 @@ fn run_ffmpeg_merge(
             Ok(line) => {
                 if let Some((key, value)) = line.split_once('=') {
                     match key {
+                        "frame" => { encoded_frames = value.trim().parse().unwrap_or(encoded_frames); },
                         "out_time_us" | "out_time_ms" => if let Ok(microseconds) = value.parse::<f64>() { out_time_seconds = microseconds / 1_000_000.0; },
                         "out_time" => if let Some(seconds) = parse_ffmpeg_timestamp(value) { out_time_seconds = seconds; },
                         "progress" => {
@@ -1178,7 +1180,7 @@ fn run_ffmpeg_merge(
                                 else { (out_time_seconds / total_duration).clamp(0.0, 0.99) };
                             emit_video_tool_event(app, VideoToolEvent {
                                 project_id: project_id.into(), job_id: job_id.into(), status: "running".into(), progress,
-                                message: format!("Đang ghép video · {}/{} · {:.0}%", format_time(out_time_seconds), format_time(total_duration), progress * 100.0),
+                                message: format!("Đang ghép video · {} · {}/{} · {:.0}%", if stream_copy { "Sao chép stream" } else { encoder.label() }, format_time(out_time_seconds), format_time(total_duration), progress * 100.0),
                                 stage: Some("render".into()), details: None, output: None,
                             });
                         }
@@ -1188,9 +1190,10 @@ fn run_ffmpeg_merge(
             }
             Err(mpsc::RecvTimeoutError::Disconnected | mpsc::RecvTimeoutError::Timeout) => {
                 if let Some(status) = child.try_wait().map_err(|error| format!("Không kiểm tra được FFmpeg: {error}"))? {
+                    let _ = stderr_reader.join();
                     if !status.success() {
                         let details = stderr_tail.lock().map(|tail| tail.iter().rev().cloned().collect::<Vec<_>>().join(" ")).unwrap_or_default();
-                        return Err(if details.is_empty() { "FFmpeg không thể gộp danh sách video đã chọn.".into() } else { format!("FFmpeg không thể gộp video: {}", details.chars().take(900).collect::<String>()) });
+                        return Err(if encoded_frames > 0 { format!("Encode failed after frames were produced: {details}") } else { details });
                     }
                     return Ok(());
                 }
@@ -1227,4 +1230,82 @@ fn probe_merge_output(path: &Path) -> Result<(f64, bool, bool, String), String> 
     let video = streams.iter().find(|stream| stream["codec_type"] == "video");
     let video_codec = video.and_then(|stream| stream["codec_name"].as_str()).unwrap_or_default().to_string();
     Ok((duration, video.is_some(), streams.iter().any(|stream| stream["codec_type"] == "audio"), video_codec))
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::*;
+
+    fn fixture() -> MergeVideoInfo {
+        MergeVideoInfo {
+            path: "test.mp4".into(), file_name: "test.mp4".into(), size_bytes: 1024,
+            duration: 1.0, width: 256, height: 256, fps: Some(24.0), video_codec: "h264".into(),
+            audio_codec: Some("aac".into()), audio_channels: Some(2), sample_rate: Some(48000),
+            pixel_format: Some("yuv420p".into()), other_stream_count: 0, has_audio: true,
+            stream_signature: vec![
+                StreamSignature { codec_type: "video".into(), codec_name: "h264".into(), width: Some(256), height: Some(256), pixel_format: Some("yuv420p".into()), profile: Some("High".into()), level: Some(31), frame_rate: Some("24/1".into()), sample_rate: None, channels: None, channel_layout: None },
+                StreamSignature { codec_type: "audio".into(), codec_name: "aac".into(), width: None, height: None, pixel_format: None, profile: None, level: None, frame_rate: None, sample_rate: Some("48000".into()), channels: Some(2), channel_layout: Some("stereo".into()) },
+            ],
+        }
+    }
+
+    #[test]
+    fn copy_compatible_inputs_ignore_requested_hardware() {
+        let videos = vec![fixture(), fixture()];
+        assert!(can_stream_copy(&videos, false, MergeFrameMode::Source, VideoCodec::H264, 256, 256));
+        for backend in [VideoEncoder::Auto, VideoEncoder::Cpu, VideoEncoder::Nvidia, VideoEncoder::Intel, VideoEncoder::Amd] {
+            // Building copy commands must never probe hardware or generate encoder arguments.
+            let command = build_merge_command(&videos, &[], Path::new("concat.txt"), Path::new("filters.txt"), Path::new("out.mp4"), true, VideoCodec::H264, backend).unwrap();
+            let args = command.get_args().map(|value| value.to_string_lossy().into_owned()).collect::<Vec<_>>();
+            assert!(args.windows(2).any(|pair| pair == ["-c", "copy"]));
+            assert!(!args.contains(&"-c:v".into()));
+        }
+    }
+    #[test]
+    fn effects_codec_and_resolution_require_transcoding() {
+        let videos = vec![fixture(), fixture()];
+        assert!(!can_stream_copy(&videos, true, MergeFrameMode::Source, VideoCodec::H264, 256, 256));
+        assert!(!can_stream_copy(&videos, false, MergeFrameMode::Source, VideoCodec::Hevc, 256, 256));
+        assert!(!can_stream_copy(&videos, false, MergeFrameMode::Portrait, VideoCodec::H264, 144, 256));
+        assert!(!can_stream_copy(&[], false, MergeFrameMode::Source, VideoCodec::H264, 256, 256));
+    }
+    #[test]
+    fn merge_uses_shared_arguments_for_all_backends() {
+        for backend in hardware_acceleration::DEFAULT_PRIORITY { for codec in [VideoCodec::H264, VideoCodec::Hevc] {
+            let command = build_merge_command(&[fixture(),fixture()], &[], Path::new("concat.txt"), Path::new("filters.txt"), Path::new("out.mp4"), false, codec, *backend).unwrap();
+            let args = command.get_args().map(|value| value.to_string_lossy().into_owned()).collect::<Vec<_>>();
+            assert!(args.windows(2).any(|pair| pair == ["-c:v", hardware_acceleration::ffmpeg_encoder(codec,*backend).unwrap()]));
+            assert!(args.windows(2).any(|pair| pair == ["-c:a","aac"]));
+        } }
+    }
+    #[test]
+    #[ignore = "Requires FFmpeg; encodes and merges real temporary fixtures"]
+    fn real_merge_copy_and_transcode_keep_codec_audio_and_duration() {
+        let temp = tempfile::Builder::new().prefix("jc-ai-gộp-").tempdir().unwrap();
+        let source = temp.path().join("nguồn.mp4");
+        let generated = crate::runtime_paths::ffmpeg_command().unwrap().args(["-hide_banner","-loglevel","error","-f","lavfi","-i","color=c=red:s=256x256:r=24:d=0.5","-f","lavfi","-i","sine=frequency=440:sample_rate=48000:duration=0.5","-c:v","libx264","-pix_fmt","yuv420p","-c:a","aac","-ac","2","-shortest"]).arg(&source).output().unwrap();
+        assert!(generated.status.success(),"{}",String::from_utf8_lossy(&generated.stderr));
+        let video = probe_merge_video(&source).unwrap();
+        let videos = vec![video.clone(),video];
+        let manifest = temp.path().join("concat.txt");
+        write_concat_manifest(&manifest,&videos).unwrap();
+        let filter = temp.path().join("graph.txt");
+        fs::write(&filter,build_transcode_filtergraph(&videos,&[],256,256,None).unwrap()).unwrap();
+        let caps = hardware_acceleration::capabilities(false).unwrap();
+        for codec in [VideoCodec::H264,VideoCodec::Hevc] {
+            for backend in hardware_acceleration::DEFAULT_PRIORITY {
+                if !caps.encoders.iter().any(|item| item.id == *backend && item.supports(codec)) { continue; }
+                let output = temp.path().join(format!("{backend:?}-{codec:?}.mp4"));
+                let result = build_merge_command(&videos,&[],&manifest,&filter,&output,false,codec,*backend).unwrap().output().unwrap();
+                assert!(result.status.success(),"{backend:?}/{codec:?}: {}",String::from_utf8_lossy(&result.stderr));
+                let (duration,video,audio,name) = probe_merge_output(&output).unwrap();
+                assert!(video && audio); assert!((duration-1.0).abs()<0.15); assert_eq!(name,codec.name());
+                println!("merge {backend:?}/{codec:?}: codec/audio/duration verified");
+            }
+        }
+        let output = temp.path().join("copy.mp4");
+        let result = build_merge_command(&videos,&[],&manifest,&filter,&output,true,VideoCodec::H264,VideoEncoder::Intel).unwrap().output().unwrap();
+        assert!(result.status.success(),"{}",String::from_utf8_lossy(&result.stderr));
+        assert!((probe_merge_output(&output).unwrap().0-1.0).abs()<0.15);
+    }
 }

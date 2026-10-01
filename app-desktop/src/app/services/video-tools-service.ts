@@ -1,5 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import type { VideoCodec, VideoEncoder } from './video-encoding';
 
 export interface MergeVideoInfo {
   path: string;
@@ -27,8 +28,8 @@ export interface MergeScanResult {
 }
 
 export type MergeFrameMode = 'source' | 'portrait' | 'landscape';
-export type MergeVideoCodec = 'h264' | 'hevc';
-export type MergeEncoder = 'cpu' | 'nvidia';
+export type MergeVideoCodec = VideoCodec;
+export type MergeEncoder = VideoEncoder;
 
 export interface MergeLogoSettings {
   logoId: string;

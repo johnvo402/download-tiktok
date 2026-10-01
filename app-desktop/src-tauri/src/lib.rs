@@ -2,6 +2,7 @@ mod asr_service;
 mod batch_service;
 mod commands;
 mod diagnostics_service;
+pub mod hardware_acceleration;
 mod dialogue_service;
 mod job_service;
 mod log_service;
