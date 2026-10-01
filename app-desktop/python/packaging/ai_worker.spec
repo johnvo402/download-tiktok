@@ -21,7 +21,6 @@ for package in (
     "pyclipper",
     "colorlog",
     "playwright",
-    "yt_dlp",
     "curl_cffi",
 ):
     package_datas, package_binaries, package_hiddenimports = collect_all(package)

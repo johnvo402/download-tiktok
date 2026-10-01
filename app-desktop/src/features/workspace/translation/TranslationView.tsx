@@ -719,6 +719,15 @@ export default function TranslationView() {
     setActiveWorkspacePanelTab('properties');
   };
 
+  const addTextOverlay = () => {
+    const project = currentProject();
+    if (!project) return;
+    const overlay = { id: crypto.randomUUID(), text: 'Nhập văn bản', x: 0.25, y: 0.4, width: 0.5, height: 0.2, enabled: true, fontFamily: 'Arial', fontSize: 48, fontWeight: 700, color: '#FFFFFF', opacity: 1, alignment: 'center' as const };
+    updateVisualSettings({ textOverlays: [...(project.textOverlays ?? []), overlay] }, true);
+    setSelectedOverlay({ type: 'text', id: overlay.id });
+    setActiveWorkspacePanelTab('properties');
+  };
+
   const hasSubtitleBlurRegion = () => currentProject()?.blurRegions.some((region) => region.role === 'subtitle') ?? false;
 
   const addSubtitleRegion = () => {
@@ -813,6 +822,7 @@ export default function TranslationView() {
           </Show>
           <button class="stage-tool-button" type="button" disabled={!currentProject()?.source.videoPath} title="Kéo để vẽ vùng blur trên video" onClick={addBlurRegion}>{blurRegionPicking() ? 'Đang vẽ…' : '＋ Blur'}</button>
           <button class="stage-tool-button" type="button" disabled={!currentProject()} title="Thêm ảnh logo" onClick={() => void addLogo()}>＋ Logo</button>
+          <button class="stage-tool-button" type="button" disabled={!currentProject()?.source.videoPath} title="Thêm chữ lên video" onClick={addTextOverlay}>＋ Chữ</button>
           <button class="stage-tool-button" type="button" disabled={!currentProject()?.source.videoPath || hasSubtitleBlurRegion()} title={hasSubtitleBlurRegion() ? 'Đang có một vùng Blur/STTN mang vai trò Subtitle Region' : 'Kéo để chọn vùng hiển thị phụ đề trên video'} onClick={addSubtitleRegion}>{subtitleRegionPicking() ? 'Đang chọn vùng…' : '＋ Vùng subtitle'}</button>
           <button class="stage-tool-button" type="button" title="Chỉnh kiểu phụ đề" onClick={selectSubtitleProperties}>Subtitle</button>
           <Show when={currentProject()?.source.videoPath}>

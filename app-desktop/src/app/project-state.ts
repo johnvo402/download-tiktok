@@ -36,6 +36,7 @@ export const [aiRemovalPreview, setAiRemovalPreview] = createSignal<AiRemovalPre
 export type OverlaySelection =
   | { type: 'blur'; id: string }
   | { type: 'logo'; id: string }
+  | { type: 'text'; id: string }
   | { type: 'subtitle' }
   | null;
 

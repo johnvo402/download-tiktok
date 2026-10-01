@@ -2,10 +2,11 @@ import { currentProject, setCurrentProject, setNotice, setProjects } from '../..
 import { projectService } from '../../app/services/project-service';
 import type { Project } from '../projects/types';
 
-type VisualChanges = Partial<Pick<Project, 'subtitle' | 'blurRegions' | 'logos'>>;
+type VisualSettings = Pick<Project, 'subtitle' | 'blurRegions' | 'logos' | 'textOverlays'>;
+type VisualChanges = Partial<VisualSettings>;
 
 const revisions = new Map<string, number>();
-const pending = new Map<string, { revision: number; settings: Pick<Project, 'subtitle' | 'blurRegions' | 'logos'> }>();
+const pending = new Map<string, { revision: number; settings: VisualSettings }>();
 const timers = new Map<string, number>();
 const inFlight = new Map<string, Promise<void>>();
 
@@ -18,7 +19,7 @@ export function updateVisualSettings(changes: VisualChanges, flush = false) {
   const current = currentProject()!;
   pending.set(project.id, {
     revision,
-    settings: { subtitle: current.subtitle, blurRegions: current.blurRegions, logos: current.logos },
+    settings: { subtitle: current.subtitle, blurRegions: current.blurRegions, logos: current.logos, textOverlays: current.textOverlays ?? [] },
   });
   window.clearTimeout(timers.get(project.id));
   timers.set(project.id, window.setTimeout(() => void persistVisualSettings(project.id).catch(() => undefined), flush ? 0 : 350));

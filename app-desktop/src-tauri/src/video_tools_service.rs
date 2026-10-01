@@ -25,6 +25,58 @@ pub enum MergeFrameMode {
     Landscape,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeVideoCodec {
+    #[default]
+    #[serde(rename = "h264")]
+    H264,
+    #[serde(rename = "hevc")]
+    Hevc,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeEncoder {
+    #[default]
+    Cpu,
+    Nvidia,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeLogoSettings {
+    pub logo_id: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub opacity: f64,
+    pub maintain_aspect_ratio: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeTextSettings {
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub opacity: f64,
+    pub font_family: String,
+    pub font_size: u16,
+    pub font_weight: u16,
+    pub color: String,
+    pub alignment: String,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedMergeLogo {
+    path: PathBuf,
+    settings: MergeLogoSettings,
+}
+
 #[derive(Clone, Default)]
 pub struct VideoToolsJobs {
     inner: Arc<Mutex<HashMap<String, VideoToolJobEntry>>>,
@@ -70,16 +122,6 @@ pub struct SkippedMergeVideo {
 pub struct MergeScanResult {
     pub videos: Vec<MergeVideoInfo>,
     pub skipped: Vec<SkippedMergeVideo>,
-}
-
-struct RemoveFileOnDrop(Option<PathBuf>);
-
-impl Drop for RemoveFileOnDrop {
-    fn drop(&mut self) {
-        if let Some(path) = &self.0 {
-            let _ = fs::remove_file(path);
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -520,22 +562,8 @@ pub fn start_tiktok_download(
         None
     };
     let job_id = Uuid::new_v4().to_string();
-    let temporary_cookie_file = if use_browser_cookies {
-        let directory = app.path().app_data_dir()
-            .map_err(|error| format!("Không xác định được thư mục dữ liệu ứng dụng: {error}"))?
-            .join("cache")
-            .join("tiktok-auth");
-        fs::create_dir_all(&directory)
-            .map_err(|error| format!("Không thể chuẩn bị dữ liệu xác thực TikTok tạm: {error}"))?;
-        Some(directory.join(format!("cookies-{job_id}.txt")))
-    } else {
-        None
-    };
     let worker = crate::runtime_paths::worker_dir()?;
-    let ffmpeg_path = crate::runtime_paths::resolve_ffmpeg()
-        .ok()
-        .map(|path| path.to_string_lossy().into_owned());
-    let request = json!({ "operation": "tiktok_drama_download", "url": url, "outputDirectory": destination, "cookieFile": cookie_file, "browserProfileDirectory": browser_profile, "useBrowserCookies": use_browser_cookies, "temporaryCookieFile": temporary_cookie_file, "ffmpegPath": ffmpeg_path });
+    let request = json!({ "operation": "tiktok_drama_download", "url": url, "outputDirectory": destination, "cookieFile": cookie_file, "browserProfileDirectory": browser_profile, "useBrowserCookies": use_browser_cookies });
     let cancelled = Arc::new(AtomicBool::new(false));
     insert_job(jobs, &job_id, &project_id, cancelled.clone())?;
     crate::job_service::register_job(&app, job_id.clone(), project_id.clone(), project.name, "tiktok_download", &["network", "browser", "disk"], None);
@@ -573,10 +601,16 @@ pub fn start_video_merge(
     file_paths: Vec<String>,
     output_directory: Option<String>,
     frame_mode: Option<MergeFrameMode>,
+    video_codec: Option<MergeVideoCodec>,
+    encoder: Option<MergeEncoder>,
+    logo_settings: Vec<MergeLogoSettings>,
+    text_settings: Vec<MergeTextSettings>,
 ) -> Result<String, String> {
     let _start_guard = jobs.start_lock.lock().map_err(|_| "Không thể khóa trạng thái video jobs.".to_string())?;
     ensure_project_job_can_start(jobs, &project_id)?;
     let project = store.get(&project_id)?;
+    let logos = prepare_merge_logos(&store, &project, logo_settings)?;
+    validate_merge_texts(&text_settings)?;
     let source_root = canonical_directory(&source_directory, "Thư mục video nguồn")?;
     let destination = resolve_output_directory(&store, &project_id, output_directory.as_deref(), default_merge_directory)?;
     let videos = validate_merge_inputs(&source_root, &file_paths)?;
@@ -584,11 +618,14 @@ pub fn start_video_merge(
     let total_duration = videos.iter().map(|video| video.duration).sum::<f64>();
     if !total_duration.is_finite() || total_duration <= 0.0 { return Err("Tổng thời lượng video không hợp lệ.".into()); }
     let frame_mode = frame_mode.unwrap_or_default();
+    let video_codec = video_codec.unwrap_or_default();
+    let encoder = encoder.unwrap_or_default();
 
     let job_id = Uuid::new_v4().to_string();
     let cancelled = Arc::new(AtomicBool::new(false));
     insert_job(jobs, &job_id, &project_id, cancelled.clone())?;
-    crate::job_service::register_job(&app, job_id.clone(), project_id.clone(), project.name, "video_merge", &["cpu", "ffmpeg", "disk"], None);
+    let resources: &[&str] = if encoder == MergeEncoder::Nvidia { &["cpu", "gpu", "ffmpeg", "disk"] } else { &["cpu", "ffmpeg", "disk"] };
+    crate::job_service::register_job(&app, job_id.clone(), project_id.clone(), project.name, "video_merge", resources, None);
     emit_video_tool_event(&app, VideoToolEvent { project_id: project_id.clone(), job_id: job_id.clone(), status: "queued".into(), progress: 0.0, message: "Đang chuẩn bị gộp video…".into(), stage: Some("queued".into()), details: None, output: None });
 
     let jobs_for_thread = jobs.clone();
@@ -596,7 +633,7 @@ pub fn start_video_merge(
     let job_for_thread = job_id.clone();
     let project_for_thread = project_id.clone();
     thread::Builder::new().name(format!("video-merge-{}", &job_id[..8])).spawn(move || {
-        let result = run_merge_job(&app_for_thread, &store, &project_for_thread, &job_for_thread, &source_root, &destination, &videos, total_duration, frame_mode, &cancelled);
+        let result = run_merge_job(&app_for_thread, &store, &project_for_thread, &job_for_thread, &source_root, &destination, &videos, &logos, &text_settings, total_duration, frame_mode, video_codec, encoder, &cancelled);
         match result {
             Ok(output) => emit_video_tool_event(&app_for_thread, VideoToolEvent {
                 project_id: project_for_thread.clone(), job_id: job_for_thread.clone(), status: "completed".into(), progress: 1.0,
@@ -626,6 +663,56 @@ fn ensure_project_job_can_start(jobs: &VideoToolsJobs, project_id: &str) -> Resu
     }
     if jobs.has_active_project_job(project_id) {
         return Err("Một tác vụ Kéo video đang chạy trong dự án này. Hãy chờ hoặc hủy tác vụ hiện tại.".into());
+    }
+    Ok(())
+}
+
+fn prepare_merge_logos(
+    store: &ProjectStore,
+    project: &crate::project_service::Project,
+    requested: Vec<MergeLogoSettings>,
+) -> Result<Vec<PreparedMergeLogo>, String> {
+    let mut seen = HashSet::new();
+    requested.into_iter().map(|settings| {
+        let id = Uuid::parse_str(&settings.logo_id)
+            .map_err(|_| "Logo được chọn không hợp lệ.".to_string())?;
+        if !seen.insert(id) {
+            return Err("Không thể thêm cùng một logo nhiều lần.".into());
+        }
+        if ![settings.x, settings.y, settings.width, settings.height, settings.opacity].into_iter().all(f64::is_finite)
+            || settings.x < 0.0 || settings.y < 0.0
+            || settings.width <= 0.0 || settings.height <= 0.0
+            || settings.x + settings.width > 1.0 + 1e-9
+            || settings.y + settings.height > 1.0 + 1e-9
+            || !(0.0..=1.0).contains(&settings.opacity)
+        {
+            return Err("Vị trí, kích thước hoặc độ mờ logo không hợp lệ.".into());
+        }
+        if !project.logos.iter().any(|logo| logo.id == settings.logo_id) {
+            return Err("Không tìm thấy logo đã chọn trong dự án hiện tại.".into());
+        }
+        let path = crate::overlays_service::logo_asset_path(store, &project.id, &settings.logo_id)?;
+        if !path.is_file() {
+            return Err("Tệp logo đã chọn không còn tồn tại trong dự án.".into());
+        }
+        Ok(PreparedMergeLogo { path, settings })
+    }).collect()
+}
+
+fn validate_merge_texts(texts: &[MergeTextSettings]) -> Result<(), String> {
+    if texts.len() > 20 { return Err("Có thể thêm tối đa 20 lớp chữ khi gộp video.".into()); }
+    for text in texts {
+        if text.text.trim().is_empty() || text.text.chars().count() > 4_000
+            || text.text.chars().any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+            || ![text.x, text.y, text.width, text.height, text.opacity].into_iter().all(f64::is_finite)
+            || text.x < 0.0 || text.y < 0.0 || text.width <= 0.0 || text.height <= 0.0
+            || text.x + text.width > 1.0 + 1e-9 || text.y + text.height > 1.0 + 1e-9
+            || !(0.0..=1.0).contains(&text.opacity) || !(8..=240).contains(&text.font_size)
+            || !(100..=900).contains(&text.font_weight) || !["left", "center", "right"].contains(&text.alignment.as_str())
+            || text.color.len() != 7 || !text.color.starts_with('#')
+            || !text.color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
+            || text.font_family.trim().is_empty() || text.font_family.len() > 80
+        { return Err("Thuộc tính lớp chữ khi gộp video không hợp lệ.".into()); }
     }
     Ok(())
 }
@@ -662,11 +749,6 @@ fn run_tiktok_worker(
     project_id: &str,
     cancelled: &AtomicBool,
 ) -> Result<(), String> {
-    let _temporary_cookie_cleanup = RemoveFileOnDrop(
-        request.get("temporaryCookieFile")
-            .and_then(Value::as_str)
-            .map(PathBuf::from),
-    );
     let mut child = crate::runtime_paths::worker_command(worker)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
         .spawn().map_err(|error| format!("Không thể khởi chạy downloader worker: {error}. Hãy kiểm tra Python worker và dependencies TikTok."))?;
@@ -682,6 +764,7 @@ fn run_tiktok_worker(
     loop {
         if cancelled.load(Ordering::SeqCst) {
             kill_process_tree(&mut child);
+            cleanup_tiktok_download_partials(request);
             return Err("cancelled".into());
         }
         match rx.recv_timeout(Duration::from_millis(100)) {
@@ -723,6 +806,33 @@ fn run_tiktok_worker(
     }
     let _ = child.wait();
     Err("Không nhận được kết quả tải video.".into())
+}
+
+fn cleanup_tiktok_download_partials(request: &Value) {
+    let Some(directory) = request.get("outputDirectory").and_then(Value::as_str) else {
+        return;
+    };
+    let Ok(root) = fs::canonicalize(directory) else { return };
+    let Ok(entries) = fs::read_dir(root) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else { continue };
+        if !file_type.is_file() || !is_tiktok_partial_name(&path) {
+            continue;
+        }
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn is_tiktok_partial_name(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|value| value.to_str()) else { return false };
+    let Some(rest) = name.strip_prefix(".EP") else { return false };
+    let Some(rest) = rest.strip_suffix(".partial") else { return false };
+    let Some((episode, token)) = rest.split_once('.') else { return false };
+    episode.len() == 4
+        && episode.bytes().all(|byte| byte.is_ascii_digit())
+        && token.len() == 32
+        && token.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 #[cfg(windows)]
@@ -771,8 +881,12 @@ fn run_merge_job(
     source_root: &Path,
     output_directory: &Path,
     videos: &[MergeVideoInfo],
+    logos: &[PreparedMergeLogo],
+    texts: &[MergeTextSettings],
     total_duration: f64,
     frame_mode: MergeFrameMode,
+    video_codec: MergeVideoCodec,
+    encoder: MergeEncoder,
     cancelled: &AtomicBool,
 ) -> Result<PathBuf, String> {
     if cancelled.load(Ordering::SeqCst) { return Err("cancelled".into()); }
@@ -790,26 +904,57 @@ fn run_merge_job(
     let temporary = output_directory.join(format!(".avl-merge-{job_id}.partial.mp4"));
     let manifest = output_directory.join(format!(".avl-merge-{job_id}.concat.txt"));
     let filter_script = output_directory.join(format!(".avl-merge-{job_id}.filter.txt"));
+    let text_ass_path = output_directory.join(format!(".avl-merge-{job_id}.texts.ass"));
+    let mut wrote_text_ass = false;
     let result = (|| {
         if cancelled.load(Ordering::SeqCst) { return Err("cancelled".into()); }
         let (target_width, target_height) = merge_canvas_size(&inputs, frame_mode)?;
-        let copy_compatible = is_stream_copy_compatible(&inputs)
+        let copy_compatible = logos.is_empty() && texts.is_empty() && is_stream_copy_compatible(&inputs)
+            && merge_codec_matches(&inputs[0].video_codec, video_codec)
             && (frame_mode == MergeFrameMode::Source || inputs.iter().all(|video| video.width == target_width && video.height == target_height));
         if copy_compatible {
             write_concat_manifest(&manifest, &inputs)?;
         } else {
-            let graph = build_transcode_filtergraph(&inputs, target_width, target_height)?;
-            write_private_file(&filter_script, graph.as_bytes())?;
+            let ass_path = if texts.is_empty() { None } else {
+                let specs = texts.iter().enumerate().map(|(index, text)| {
+                    let rect = crate::render_spec::normalized_rect_to_pixels(text.x, text.y, text.width, text.height, target_width, target_height)?;
+                    crate::render_spec::to_ass_color(&text.color, text.opacity)?;
+                    let font_name = text.font_family.chars().filter(|c| !c.is_control() && !matches!(c, ',' | '\\' | '{' | '}')).take(80).collect::<String>().trim().to_string();
+                    Ok(crate::render_spec::TextOverlayRenderSpec { id: format!("merge-text-{index}"), text: text.text.clone(), rect, enabled: true, font_name, font_size: text.font_size, font_weight: text.font_weight, color: text.color.clone(), opacity: text.opacity, alignment: text.alignment.clone() })
+                }).collect::<Result<Vec<_>, String>>()?;
+                let ass = crate::render_spec::generate_static_text_ass(target_width, target_height, total_duration, &specs)?;
+                write_private_file(&text_ass_path, ass.as_bytes())?;
+                wrote_text_ass = true;
+                Some(text_ass_path.as_path())
+            };
+        let graph = build_transcode_filtergraph(&inputs, logos, target_width, target_height, ass_path)?;
+        write_private_file(&filter_script, graph.as_bytes())?;
         }
+        if !copy_compatible && encoder == MergeEncoder::Nvidia {
+            crate::render_service::probe_nvidia_video_encoder(merge_codec_name(video_codec))?;
+        }
+        let codec_label = match video_codec { MergeVideoCodec::H264 => "H.264", MergeVideoCodec::Hevc => "HEVC" };
+        let encoder_label = match encoder { MergeEncoder::Cpu => "CPU", MergeEncoder::Nvidia => "NVIDIA GPU · NVENC" };
+        let message = if copy_compatible {
+            "Các video tương thích; đang ghép bằng stream copy để giữ nguyên chất lượng.".to_string()
+        } else {
+            let action = if !logos.is_empty() && !texts.is_empty() { "Đang ghép video, chèn logo và chữ theo preview" }
+                else if !logos.is_empty() { "Đang ghép video và chèn logo theo preview" }
+                else if !texts.is_empty() { "Đang ghép video và chèn chữ theo preview" }
+                else if frame_mode == MergeFrameMode::Source { "Định dạng khác nhau; đang chuẩn hóa khung hình và ghép" }
+                else { "Đang căn giữa video trên nền đen theo tỷ lệ đã chọn rồi ghép" };
+            format!("{action} · {codec_label} · {encoder_label}.")
+        };
         emit_video_tool_event(app, VideoToolEvent {
             project_id: project_id.into(), job_id: job_id.into(), status: "running".into(), progress: 0.0,
-            message: if copy_compatible { "Các video tương thích; đang ghép bằng stream copy để giữ nguyên chất lượng.".into() } else if frame_mode == MergeFrameMode::Source { "Định dạng khác nhau; đang chuẩn hóa khung hình và ghép bằng H.264/AAC chất lượng cao.".into() } else { "Đang căn giữa video trên nền đen theo tỷ lệ đã chọn rồi ghép bằng H.264/AAC.".into() },
+            message,
             stage: Some(if copy_compatible { "copy" } else { "transcode" }.into()), details: None, output: None,
         });
-        run_ffmpeg_merge(app, project_id, job_id, &inputs, &manifest, &filter_script, &temporary, total_duration, copy_compatible, cancelled)?;
+        run_ffmpeg_merge(app, project_id, job_id, &inputs, logos, &manifest, &filter_script, &temporary, total_duration, copy_compatible, video_codec, encoder, cancelled)?;
         if cancelled.load(Ordering::SeqCst) { return Err("cancelled".into()); }
-        let (duration, has_video, has_audio) = probe_merge_output(&temporary)?;
+        let (duration, has_video, has_audio, output_codec) = probe_merge_output(&temporary)?;
         if !has_video { return Err("File gộp không có video stream hợp lệ.".into()); }
+        if !merge_codec_matches(&output_codec, video_codec) { return Err("Codec video đầu ra không khớp với lựa chọn H.264/HEVC.".into()); }
         if inputs.iter().any(|video| video.has_audio) && !has_audio { return Err("File gộp bị thiếu audio dù video nguồn có tiếng.".into()); }
         let tolerance = 2.0_f64.max(total_duration * 0.02);
         if (duration - total_duration).abs() > tolerance {
@@ -823,6 +968,7 @@ fn run_merge_job(
     })();
     let _ = fs::remove_file(&manifest);
     let _ = fs::remove_file(&filter_script);
+    if wrote_text_ass || result.is_err() { let _ = fs::remove_file(&text_ass_path); }
     if result.is_err() { let _ = fs::remove_file(&temporary); }
     result
 }
@@ -881,7 +1027,7 @@ fn merge_canvas_size(videos: &[MergeVideoInfo], frame_mode: MergeFrameMode) -> R
     }
 }
 
-fn build_transcode_filtergraph(videos: &[MergeVideoInfo], width: u32, height: u32) -> Result<String, String> {
+fn build_transcode_filtergraph(videos: &[MergeVideoInfo], logos: &[PreparedMergeLogo], width: u32, height: u32, text_ass_path: Option<&Path>) -> Result<String, String> {
     if width < 2 || height < 2 || width % 2 != 0 || height % 2 != 0 {
         return Err("Kích thước khung hình gộp không hợp lệ.".into());
     }
@@ -906,9 +1052,48 @@ fn build_transcode_filtergraph(videos: &[MergeVideoInfo], width: u32, height: u3
         concat_inputs.push(format!("[v{index}]"));
         if with_audio { concat_inputs.push(format!("[a{index}]")); }
     }
-    filters.push(format!("{}concat=n={}:v=1:a={}[outv{}]",
-        concat_inputs.concat(), videos.len(), if with_audio { 1 } else { 0 }, if with_audio { "[outa]" } else { "" }));
+    let has_post_processing = !logos.is_empty() || text_ass_path.is_some();
+    let video_concat_label = if has_post_processing { "merge_base" } else { "outv" };
+    filters.push(format!("{}concat=n={}:v=1:a={}[{}]{}",
+        concat_inputs.concat(), videos.len(), if with_audio { 1 } else { 0 }, video_concat_label, if with_audio { "[outa]" } else { "" }));
+    let mut current_video = video_concat_label.to_string();
+    for (index, logo) in logos.iter().enumerate() {
+        let rect = merge_logo_pixels(&logo.settings, width, height);
+        let input_index = videos.len() + index;
+        let layer = format!("merge_logo_layer{index}");
+        let output = if index + 1 == logos.len() && text_ass_path.is_none() { "outv".to_string() } else { format!("merge_logo_composite{index}") };
+        if logo.settings.maintain_aspect_ratio {
+            filters.push(format!("[{input_index}:v:0]format=rgba,scale={}:{}:force_original_aspect_ratio=decrease:flags=lanczos,pad={}:{}:(ow-iw)/2:(oh-ih)/2:color=black@0,colorchannelmixer=aa={:.4}[{layer}]", rect.2, rect.3, rect.2, rect.3, logo.settings.opacity));
+        } else {
+            filters.push(format!("[{input_index}:v:0]format=rgba,scale={}:{}:flags=lanczos,colorchannelmixer=aa={:.4}[{layer}]", rect.2, rect.3, logo.settings.opacity));
+        }
+        filters.push(format!("[{current_video}][{layer}]overlay={}:{}:eof_action=repeat:shortest=1[{output}]", rect.0, rect.1));
+        current_video = output;
+    }
+    if let Some(path) = text_ass_path {
+        let escaped_path = path.to_string_lossy().replace('\\', "/").replace(':', "\\:").replace('\'', "\\'").replace(',', "\\,").replace('[', "\\[").replace(']', "\\]");
+        filters.push(format!("[{current_video}]subtitles=filename='{escaped_path}':original_size={width}x{height}[outv]"));
+    }
     Ok(filters.join(";\n"))
+}
+
+fn merge_codec_matches(source_codec: &str, requested: MergeVideoCodec) -> bool {
+    match requested {
+        MergeVideoCodec::H264 => source_codec.eq_ignore_ascii_case("h264"),
+        MergeVideoCodec::Hevc => source_codec.eq_ignore_ascii_case("hevc"),
+    }
+}
+
+fn merge_codec_name(codec: MergeVideoCodec) -> &'static str {
+    match codec { MergeVideoCodec::H264 => "h264", MergeVideoCodec::Hevc => "hevc" }
+}
+
+fn merge_logo_pixels(settings: &MergeLogoSettings, width: u32, height: u32) -> (u32, u32, u32, u32) {
+    let pixel_width = (settings.width * f64::from(width)).round().clamp(2.0, f64::from(width)) as u32;
+    let pixel_height = (settings.height * f64::from(height)).round().clamp(2.0, f64::from(height)) as u32;
+    let x = (settings.x * f64::from(width)).round().clamp(0.0, f64::from(width.saturating_sub(pixel_width))) as u32;
+    let y = (settings.y * f64::from(height)).round().clamp(0.0, f64::from(height.saturating_sub(pixel_height))) as u32;
+    (x, y, pixel_width, pixel_height)
 }
 
 fn run_ffmpeg_merge(
@@ -916,11 +1101,14 @@ fn run_ffmpeg_merge(
     project_id: &str,
     job_id: &str,
     videos: &[MergeVideoInfo],
+    logos: &[PreparedMergeLogo],
     manifest: &Path,
     filter_script: &Path,
     temporary_output: &Path,
     total_duration: f64,
     stream_copy: bool,
+    video_codec: MergeVideoCodec,
+    encoder: MergeEncoder,
     cancelled: &AtomicBool,
 ) -> Result<(), String> {
     let mut command = crate::runtime_paths::ffmpeg_command()?;
@@ -932,9 +1120,17 @@ fn run_ffmpeg_merge(
         command.args(["-c", "copy", "-movflags", "+faststart"]);
     } else {
         for video in videos { command.arg("-i").arg(&video.path); }
+        for logo in logos { command.args(["-loop", "1", "-framerate", "30", "-i"]).arg(&logo.path); }
         command.args(["-filter_complex_script"]).arg(filter_script).args(["-map", "[outv]"]);
         if videos.iter().any(|video| video.has_audio) { command.args(["-map", "[outa]"]); }
-        command.args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "19", "-pix_fmt", "yuv420p"]);
+        let (video_encoder, preset, quality_args): (&str, &str, &[&str]) = match (video_codec, encoder) {
+            (MergeVideoCodec::H264, MergeEncoder::Cpu) => ("libx264", "veryfast", &["-crf", "19"]),
+            (MergeVideoCodec::Hevc, MergeEncoder::Cpu) => ("libx265", "fast", &["-crf", "27"]),
+            (MergeVideoCodec::H264, MergeEncoder::Nvidia) => ("h264_nvenc", "p5", &["-rc:v", "vbr", "-cq:v", "21", "-b:v", "0"]),
+            (MergeVideoCodec::Hevc, MergeEncoder::Nvidia) => ("hevc_nvenc", "p5", &["-rc:v", "vbr", "-cq:v", "25", "-b:v", "0"]),
+        };
+        command.args(["-c:v", video_encoder, "-preset", preset]).args(quality_args).args(["-pix_fmt", "yuv420p"]);
+        if video_codec == MergeVideoCodec::Hevc { command.args(["-tag:v", "hvc1"]); }
         if videos.iter().any(|video| video.has_audio) { command.args(["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]); }
         else { command.arg("-an"); }
         command.args(["-max_muxing_queue_size", "2048", "-movflags", "+faststart"]);
@@ -1016,17 +1212,19 @@ fn format_time(seconds: f64) -> String {
     format!("{:02}:{:02}:{:02}", whole / 3600, (whole / 60) % 60, whole % 60)
 }
 
-fn probe_merge_output(path: &Path) -> Result<(f64, bool, bool), String> {
+fn probe_merge_output(path: &Path) -> Result<(f64, bool, bool, String), String> {
     if !path.is_file() || fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0) < 128 {
         return Err("FFmpeg không tạo được file đầu ra hợp lệ.".into());
     }
     let output = crate::runtime_paths::ffprobe_command()?
-        .args(["-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json"])
+        .args(["-v", "error", "-show_entries", "format=duration:stream=codec_type,codec_name", "-of", "json"])
         .arg(path).output().map_err(|error| format!("Không chạy được FFprobe để kiểm tra video gộp: {error}"))?;
     if !output.status.success() { return Err("FFprobe không xác minh được file video gộp.".into()); }
     let value: Value = serde_json::from_slice(&output.stdout).map_err(|error| format!("Metadata video gộp không hợp lệ: {error}"))?;
     let duration = value["format"]["duration"].as_str().and_then(|value| value.parse::<f64>().ok())
         .filter(|value| value.is_finite() && *value > 0.0).ok_or_else(|| "Video gộp không có thời lượng hợp lệ.".to_string())?;
     let streams = value["streams"].as_array().ok_or_else(|| "Video gộp không có stream hợp lệ.".to_string())?;
-    Ok((duration, streams.iter().any(|stream| stream["codec_type"] == "video"), streams.iter().any(|stream| stream["codec_type"] == "audio")))
+    let video = streams.iter().find(|stream| stream["codec_type"] == "video");
+    let video_codec = video.and_then(|stream| stream["codec_name"].as_str()).unwrap_or_default().to_string();
+    Ok((duration, video.is_some(), streams.iter().any(|stream| stream["codec_type"] == "audio"), video_codec))
 }

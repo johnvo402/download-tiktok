@@ -30,7 +30,7 @@ export default function ExportDialog(props: { onClose: () => void }) {
     return Math.max(500, Math.min(50_000, Math.round(((source.fileSize * 8 / source.duration / 1000 - audioReserve) / 100)) * 100));
   };
   const [outputFileName, setOutputFileName] = createSignal(initialExportName);
-  const [options, setOptions] = createSignal<ExportOptions>({ quality: 'balanced', encoder: 'cpu', videoBitrateKbps: sourceBitrateKbps(), applyBlur: true, applyLogos: true, burnSubtitles: project()?.subtitle.enabled ?? true, enableSubtitleBlurOverride: false, includeOriginalAudio: !(project()?.dubbing.muteOriginal ?? false), includeDubbing: project()?.dubbing.enabled ?? false, ducking: project()?.dubbing.duckingEnabled ?? false, outputDirectory: null, outputFileName: initialExportName, originalVolume: project()?.dubbing.originalVolume ?? 1, dubbedVolume: project()?.dubbing.dubbedVolume ?? 1, duckingAmount: project()?.dubbing.duckingAmount ?? 0.75, dialogueReduction: false, dialogueReductionAmount: project()?.dubbing.dialogueReductionAmount ?? 0.65 });
+  const [options, setOptions] = createSignal<ExportOptions>({ quality: 'balanced', videoCodec: 'h264', encoder: 'cpu', videoBitrateKbps: sourceBitrateKbps(), applyBlur: true, applyLogos: true, burnSubtitles: project()?.subtitle.enabled ?? true, enableSubtitleBlurOverride: false, includeOriginalAudio: !(project()?.dubbing.muteOriginal ?? false), includeDubbing: project()?.dubbing.enabled ?? false, ducking: project()?.dubbing.duckingEnabled ?? false, outputDirectory: null, outputFileName: initialExportName, originalVolume: project()?.dubbing.originalVolume ?? 1, dubbedVolume: project()?.dubbing.dubbedVolume ?? 1, duckingAmount: project()?.dubbing.duckingAmount ?? 0.75, dialogueReduction: false, dialogueReductionAmount: project()?.dubbing.dialogueReductionAmount ?? 0.65 });
   const [capabilities, setCapabilities] = createSignal<ExportCapabilities>();
   const [dialogueEnvironment, setDialogueEnvironment] = createSignal<DialogueEnvironment>();
   const [validation, setValidation] = createSignal<ExportValidation>();
@@ -43,6 +43,12 @@ export default function ExportDialog(props: { onClose: () => void }) {
   const [canceling, setCanceling] = createSignal(false);
   const effectiveExportDirectory = () => options().outputDirectory || exportDirectory();
   const dialogueReductionReady = () => !!dialogueEnvironment()?.runtimeInstalled && !!dialogueEnvironment()?.modelCached;
+  const selectedGpuAvailable = () => options().videoCodec === 'hevc'
+    ? capabilities()?.nvidiaHevcEncoderAvailable ?? false
+    : capabilities()?.nvidiaEncoderAvailable ?? false;
+  const selectedGpuMessage = () => options().videoCodec === 'hevc'
+    ? capabilities()?.nvidiaHevcMessage ?? 'Đang kiểm tra HEVC NVENC…'
+    : capabilities()?.nvidiaMessage ?? 'Đang kiểm tra H.264 NVENC…';
   const estimatedOutputMiB = () => {
     const bitrate = options().videoBitrateKbps;
     const seconds = project()?.source.duration;
@@ -87,7 +93,7 @@ export default function ExportDialog(props: { onClose: () => void }) {
   };
 
   onMount(() => {
-    void renderService.capabilities().then(setCapabilities).catch(() => setCapabilities({ nvidiaEncoderAvailable: false, nvidiaMessage: 'Không kiểm tra được NVIDIA NVENC. Có thể tiếp tục bằng CPU.' }));
+    void renderService.capabilities().then(setCapabilities).catch(() => setCapabilities({ nvidiaEncoderAvailable: false, nvidiaMessage: 'Không kiểm tra được H.264 NVENC. Có thể tiếp tục bằng CPU.', nvidiaHevcEncoderAvailable: false, nvidiaHevcMessage: 'Không kiểm tra được HEVC NVENC. Có thể tiếp tục bằng CPU.' }));
     void dialogueService.environment().then((environment) => {
       setDialogueEnvironment(environment);
       setOptions((value) => ({ ...value, dialogueReduction: environment.runtimeInstalled && environment.modelCached && !!project()?.dubbing.dialogueReductionEnabled }));
@@ -181,8 +187,9 @@ export default function ExportDialog(props: { onClose: () => void }) {
         <Show when={options().ducking && options().includeOriginalAudio && options().includeDubbing}><label class="export-option"><span>Mức giảm khi voice hoạt động <small>{Math.round(options().duckingAmount * 100)}%</small></span><input type="range" min="0" max="1" step="0.01" value={options().duckingAmount} onInput={(event) => setOptions((value) => ({ ...value, duckingAmount: Number(event.currentTarget.value) }))} /></label></Show>
         <label class="export-option" title={dialogueReductionReady() ? 'Tách và giảm riêng giọng nói của nhân vật.' : 'Cài bộ xử lý và mô hình BandIt v2 trong Cài đặt → Nhận dạng lời thoại.'} style={{ opacity: dialogueReductionReady() ? 1 : 0.48 }}><span>Giảm thoại gốc <small>{dialogueReductionReady() ? 'BandIt v2' : 'Chưa cài mô hình'}</small></span><input type="checkbox" disabled={!dialogueReductionReady() || !options().includeOriginalAudio} checked={dialogueReductionReady() && options().dialogueReduction} onChange={(event) => setOptions((value) => ({ ...value, dialogueReduction: event.currentTarget.checked }))} /></label>
         <Show when={dialogueReductionReady() && options().dialogueReduction}><label class="export-option"><span>Mức giảm thoại <small>{Math.round(options().dialogueReductionAmount * 100)}%</small></span><input type="range" min="0" max="1" step="0.01" value={options().dialogueReductionAmount} onInput={(event) => setOptions((value) => ({ ...value, dialogueReductionAmount: Number(event.currentTarget.value) }))} /></label></Show>
-        <label class="export-quality"><span>Bộ mã hóa video</span><select class="settings-select" value={options().encoder ?? 'cpu'} onChange={(event) => setOptions((value) => ({ ...value, encoder: event.currentTarget.value as ExportOptions['encoder'] }))}><option value="cpu">CPU · tương thích mọi máy</option><option value="nvidia" disabled={!capabilities()?.nvidiaEncoderAvailable}>NVIDIA GPU · NVENC</option></select></label>
-        <small class="export-encoder-note" role="status">{options().encoder === 'nvidia' ? 'Mã hóa bằng GPU NVIDIA, giảm tải CPU.' : capabilities()?.nvidiaMessage ?? 'Đang kiểm tra khả năng mã hóa GPU…'}</small>
+        <label class="export-quality"><span>Codec video</span><select class="settings-select" value={options().videoCodec} onChange={(event) => { const videoCodec = event.currentTarget.value as ExportOptions['videoCodec']; setOptions((value) => ({ ...value, videoCodec, encoder: value.encoder === 'nvidia' && !(videoCodec === 'hevc' ? capabilities()?.nvidiaHevcEncoderAvailable : capabilities()?.nvidiaEncoderAvailable) ? 'cpu' : value.encoder })); }}><option value="h264">H.264 · tương thích rộng</option><option value="hevc">HEVC / H.265 · file gọn hơn</option></select></label>
+        <label class="export-quality"><span>Mã hóa bằng</span><select class="settings-select" value={options().encoder ?? 'cpu'} onChange={(event) => setOptions((value) => ({ ...value, encoder: event.currentTarget.value as ExportOptions['encoder'] }))}><option value="cpu">CPU</option><option value="nvidia" disabled={!selectedGpuAvailable()}>GPU NVIDIA · NVENC</option></select></label>
+        <small class="export-encoder-note" role="status">{options().encoder === 'nvidia' ? `Đang dùng ${options().videoCodec === 'hevc' ? 'HEVC' : 'H.264'} NVENC trên GPU NVIDIA.` : selectedGpuMessage()}</small>
         <label class="export-quality"><span>Chất lượng encode</span><select class="settings-select" value={options().quality} onChange={(event) => setOptions((value) => ({ ...value, quality: event.currentTarget.value as ExportOptions['quality'] }))}><option value="fast">Nhanh · ít nén hơn</option><option value="balanced">Cân bằng</option><option value="high">Chất lượng cao</option></select></label>
         <div class="export-bitrate-row"><label for="export-video-bitrate">Bitrate video</label><div><input id="export-video-bitrate" type="number" min="500" max="50000" step="100" value={options().videoBitrateKbps ?? ''} aria-describedby="export-bitrate-help" onInput={(event) => { const raw = event.currentTarget.value; const value = raw === '' ? null : Number(raw); setOptions((previous) => ({ ...previous, videoBitrateKbps: value !== null && Number.isFinite(value) ? value : null })); }} /><span>kbps</span></div></div>
         <small id="export-bitrate-help" class="export-encoder-note">Giới hạn bitrate giúp giữ dung lượng gần video nguồn. Để dùng chế độ chất lượng tự động, xóa giá trị.</small>

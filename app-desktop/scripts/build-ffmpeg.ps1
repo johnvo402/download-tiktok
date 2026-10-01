@@ -47,8 +47,8 @@ Get-ChildItem -LiteralPath $ffmpeg.DirectoryName -Filter "*.dll" -File | Copy-It
 $version = (& (Join-Path $Target "ffmpeg.exe") -version | Select-Object -First 1)
 $encoders = & (Join-Path $Target "ffmpeg.exe") -hide_banner -encoders 2>&1 | Out-String
 $filters = & (Join-Path $Target "ffmpeg.exe") -hide_banner -filters 2>&1 | Out-String
-if ($LASTEXITCODE -ne 0 -or $encoders -notmatch 'libx264' -or $encoders -notmatch '\baac\b' -or $filters -notmatch '\bass\b' -or $filters -notmatch '\bboxblur\b') {
-    throw "Pinned FFmpeg build lacks a renderer-required encoder or filter."
+if ($LASTEXITCODE -ne 0 -or $encoders -notmatch 'libx264' -or $encoders -notmatch 'libx265' -or $encoders -notmatch 'h264_nvenc' -or $encoders -notmatch 'hevc_nvenc' -or $encoders -notmatch '\baac\b' -or $filters -notmatch '\bass\b' -or $filters -notmatch '\bboxblur\b') {
+    throw "Pinned FFmpeg build lacks a renderer-required H.264/HEVC CPU/GPU encoder or filter."
 }
 $manifest = [ordered]@{
     source = "BtbN/FFmpeg-Builds"
@@ -56,10 +56,10 @@ $manifest = [ordered]@{
     asset = $AssetName
     sha256 = $actualHash
     ffmpegVersion = $version
-    license = "GPL-3.0-or-later (GPL build; libx264 enabled)"
+    license = "GPL-3.0-or-later (GPL build; libx264/libx265 and NVENC encoders enabled)"
     sourceUrl = "https://github.com/BtbN/FFmpeg-Builds/tree/$ReleaseTag"
     ffmpegSourceUrl = "https://ffmpeg.org/download.html"
-    features = @("libx264", "aac", "ass/libass", "boxblur", "gblur")
+    features = @("libx264", "libx265", "h264_nvenc", "hevc_nvenc", "aac", "ass/libass", "boxblur", "gblur")
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Target "ffmpeg-build.json") -Encoding utf8
 Write-Host "Bundled verified $version ($actualHash)"

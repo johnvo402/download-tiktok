@@ -1,20 +1,21 @@
 from __future__ import annotations
 
-import logging
-import os
 from pathlib import Path
-import re
-import shutil
-import subprocess
-import sys
+from time import monotonic
 from typing import Any, Callable
 from urllib.parse import urlparse
 
 from .config import BROWSER_LOCALE
 from .cookies import load_netscape_cookies
-from .urls import get_video_id, is_video_url, normalize_url
-
-log = logging.getLogger(__name__)
+from .direct_media import (
+    BrowserMediaObserver,
+    VideoCandidate,
+    browser_video_element_candidates,
+    download_video_candidate,
+    embedded_video_candidates,
+    rank_candidates,
+)
+from .urls import get_video_id, normalize_url
 
 
 def _development_cookie_file() -> Path | None:
@@ -33,13 +34,6 @@ def _development_cookie_file() -> Path | None:
         except OSError:
             continue
     return None
-
-
-def _safe_downloader_error(value: object) -> str:
-    message = str(value).strip()
-    message = re.sub(r"https?://\S+", "[video URL]", message)
-    message = re.sub(r"[\r\n\t]+", " ", message)
-    return message[:360]
 
 
 def _validated_url(value: str) -> str:
@@ -94,7 +88,7 @@ def download_drama(request: dict[str, Any], emit: Callable[[dict[str, Any]], Non
     emit({"type": "progress", "job": "tiktok_download", "progress": 0.02, "stage": "browser", "message": f"Đang mở TikTok để đọc thông tin series…{cookie_note}"})
     browser = None
     context = None
-    temporary_cookie_file: Path | None = None
+    media_observer: BrowserMediaObserver | None = None
     with sync_playwright() as playwright:
         try:
             if use_browser_cookies:
@@ -115,10 +109,6 @@ def download_drama(request: dict[str, Any], emit: Callable[[dict[str, Any]], Non
                     for cookie in browser_cookies
                 ):
                     raise RuntimeError("Phiên TikTok đã hết hạn. Hãy kết nối lại bằng trình duyệt rồi thử lại.")
-                temporary_cookie_file = _write_temporary_cookie_file(
-                    browser_cookies, request.get("temporaryCookieFile")
-                )
-                cookie_file = temporary_cookie_file
             else:
                 browser = playwright.chromium.launch(headless=True, channel="chrome")
                 context = browser.new_context(locale=BROWSER_LOCALE)
@@ -126,6 +116,7 @@ def download_drama(request: dict[str, Any], emit: Callable[[dict[str, Any]], Non
                     context.add_cookies(cookies)
 
             page = context.new_page()
+            media_observer = BrowserMediaObserver(page)
             navigator = TikTokNavigator(page)
             navigator.open(url)
             info = navigator.get_drama_info()
@@ -165,34 +156,50 @@ def download_drama(request: dict[str, Any], emit: Callable[[dict[str, Any]], Non
 
             previous_video_id: str | None = None
             episode_count = len(episode_numbers)
+            download_cookies = context.cookies()
             for index, episode in enumerate(episode_numbers):
+                previous_sources = {
+                    candidate.url for candidate in browser_video_element_candidates(navigator.page)
+                }
+                media_observer.start_episode()
                 if not navigator.select_episode(episode):
                     raise RuntimeError(f"Không thể chọn tập {episode} trên TikTok.")
-                video_url = navigator.get_current_video_url()
-                if not video_url:
-                    raise RuntimeError(f"Không lấy được liên kết video của tập {episode}.")
-                current_video_id = get_video_id(video_url)
+                current_video_id, candidates = _wait_for_episode_media(
+                    navigator,
+                    media_observer,
+                    episode,
+                    previous_video_id,
+                    previous_sources,
+                    lambda message: emit({
+                        "type": "progress",
+                        "job": "tiktok_download",
+                        "progress": min(0.98, 0.12 + 0.86 * index / episode_count),
+                        "stage": "discover_media",
+                        "episode": episode,
+                        "episodeIndex": index + 1,
+                        "episodeCount": episode_count,
+                        "message": message,
+                    }),
+                )
                 if previous_video_id and current_video_id == previous_video_id:
                     raise RuntimeError(f"Video ID không đổi sau khi chọn tập {episode}; đã dừng để tránh tải nhầm tập.")
 
                 base = 0.12 + 0.86 * index / episode_count
                 span = 0.86 / episode_count
-                emit({"type": "progress", "job": "tiktok_download", "progress": base, "stage": "download", "episode": episode, "episodeIndex": index + 1, "episodeCount": episode_count, "message": f"Đang tải tập {episode:04d} ({index + 1}/{episode_count})…"})
-                _download_episode(
-                    video_url,
+                _download_episode_direct(
+                    candidates,
+                    download_cookies,
                     episode,
-                    cookie_file,
-                    str(request["ffmpegPath"]) if request.get("ffmpegPath") else None,
                     series_dir,
-                    lambda fraction: emit({
+                    lambda done, total: emit({
                         "type": "progress",
                         "job": "tiktok_download",
-                        "progress": min(0.98, base + span * fraction),
+                        "progress": min(0.98, base + span * (done / total if total else 0.05)),
                         "stage": "download",
                         "episode": episode,
                         "episodeIndex": index + 1,
                         "episodeCount": episode_count,
-                        "message": f"Đang tải tập {episode:04d} · {round(fraction * 100)}%",
+                        "message": _download_progress_message(episode, done, total),
                     }),
                 )
                 previous_video_id = current_video_id
@@ -202,17 +209,14 @@ def download_drama(request: dict[str, Any], emit: Callable[[dict[str, Any]], Non
                 key=lambda path: path.name.casefold(),
             )
         finally:
+            if media_observer is not None:
+                media_observer.close()
             try:
                 if context is not None:
                     context.close()
             finally:
                 if browser is not None:
                     browser.close()
-                if temporary_cookie_file is not None:
-                    try:
-                        temporary_cookie_file.unlink(missing_ok=True)
-                    except OSError:
-                        log.warning("Could not remove temporary TikTok authentication file")
 
     emit({
         "type": "completed",
@@ -225,182 +229,77 @@ def download_drama(request: dict[str, Any], emit: Callable[[dict[str, Any]], Non
     })
 
 
-def _write_temporary_cookie_file(cookies: list[dict[str, Any]], requested_path: object) -> Path:
-    """Create a short-lived Netscape file for yt-dlp without exposing cookies to the UI."""
-    lines = ["# Netscape HTTP Cookie File"]
-    for cookie in cookies:
-        domain = str(cookie.get("domain", "")).strip()
-        if not domain or not (domain == "tiktok.com" or domain.endswith(".tiktok.com")):
-            continue
-        name = str(cookie.get("name", ""))
-        value = str(cookie.get("value", ""))
-        cookie_path = str(cookie.get("path", "/")) or "/"
-        if not name or any(char in value + name + domain + cookie_path for char in "\t\r\n"):
-            continue
-        http_only = bool(cookie.get("httpOnly"))
-        if http_only:
-            domain = f"#HttpOnly_{domain}"
-        expires = cookie.get("expires")
-        try:
-            expiry = str(max(0, int(expires))) if expires else "0"
-        except (TypeError, ValueError, OverflowError):
-            expiry = "0"
-        include_subdomains = "TRUE" if domain.startswith(".") or domain.startswith("#HttpOnly_.") else "FALSE"
-        secure = "TRUE" if cookie.get("secure") else "FALSE"
-        lines.append("\t".join((domain, include_subdomains, cookie_path, secure, expiry, name, value)))
-    if len(lines) == 1:
-        raise RuntimeError("Không có cookie TikTok nào để xác thực. Hãy đăng nhập lại.")
-
-    if not isinstance(requested_path, str) or not requested_path:
-        raise RuntimeError("Không chuẩn bị được file xác thực TikTok tạm thời.")
-    path = Path(requested_path).expanduser()
-    if not path.is_absolute() or not path.parent.is_dir() or path.exists() or path.is_symlink():
-        raise RuntimeError("Đường dẫn cookie tạm thời không hợp lệ.")
-    try:
-        with path.open("x", encoding="utf-8", newline="\n") as handle:
-            handle.write("\n".join(lines) + "\n")
-        if os.name != "nt":
-            path.chmod(0o600)
-    except Exception:
-        path.unlink(missing_ok=True)
-        raise
-    return path
-
-
-def _download_episode(
-    url: str,
+def _wait_for_episode_media(
+    navigator: Any,
+    observer: BrowserMediaObserver,
     episode: int,
-    cookie_file: Path | None,
-    ffmpeg_path: str | None,
+    previous_video_id: str | None,
+    previous_sources: set[str],
+    on_wait: Callable[[str], None],
+) -> tuple[str, list[VideoCandidate]]:
+    deadline = monotonic() + 45
+    last_notice = 0.0
+    next_embedded_check = 0.0
+    embedded_video_id: str | None = None
+    embedded: list[VideoCandidate] = []
+    while monotonic() < deadline:
+        video_url = navigator.get_current_video_url()
+        current_video_id = get_video_id(video_url or "")
+        if navigator.get_active_episode() != episode:
+            raise RuntimeError(f"TikTok đã chuyển khỏi tập {episode} trong khi chờ nguồn video.")
+
+        now = monotonic()
+        if current_video_id != embedded_video_id:
+            embedded_video_id = current_video_id
+            embedded = []
+            next_embedded_check = 0.0
+        if current_video_id and now >= next_embedded_check:
+            embedded = embedded_video_candidates(navigator.page, current_video_id)
+            next_embedded_check = now + 2.5
+
+        candidates = rank_candidates(
+            [
+                *(
+                    candidate
+                    for candidate in browser_video_element_candidates(navigator.page, current_video_id)
+                    if not previous_video_id or candidate.url not in previous_sources
+                ),
+                *embedded,
+                *observer.candidates(current_video_id),
+            ]
+        )
+        if current_video_id and current_video_id != previous_video_id and candidates:
+            return current_video_id, candidates
+
+        if now - last_notice >= 3:
+            on_wait(f"Đang chờ TikTok tải nguồn trực tiếp của tập {episode}…")
+            last_notice = now
+        navigator.page.wait_for_timeout(350)
+
+    raise RuntimeError(
+        f"Không tìm thấy luồng MP4/WebM trực tiếp của tập {episode}. "
+        "Tập này có thể chỉ phát bằng HLS/blob hoặc TikTok chưa tải xong; hãy thử lại sau."
+    )
+
+
+def _download_episode_direct(
+    candidates: list[VideoCandidate],
+    cookies: list[dict[str, Any]],
+    episode: int,
     output_dir: Path,
-    on_progress: Callable[[float], None],
-) -> None:
-    try:
-        import yt_dlp
-    except ImportError as error:
-        raise RuntimeError("Chức năng tải video chưa sẵn sàng. Hãy cập nhật hoặc cài lại JC AI.") from error
+    on_progress: Callable[[int, int | None], None],
+) -> Path:
+    last_error = "không có nguồn video hợp lệ"
+    for candidate in candidates[:12]:
+        try:
+            return download_video_candidate(candidate, cookies, episode, output_dir, on_progress)
+        except Exception as error:
+            last_error = str(error).replace("\r", " ").replace("\n", " ")[:240]
+    raise RuntimeError(f"Không tải được tập {episode}: {last_error}")
 
-    # The standalone downloader uses yt-dlp's CLI. Keep the desktop worker on
-    # that same code path: some extractor/postprocessor failures raised through
-    # YoutubeDL(options) are otherwise surfaced as an unhelpful bare AssertionError.
-    # A packaged worker dispatches this private mode from worker_launcher.py.
-    cli_args = [
-        "--impersonate", "chrome",
-        "--no-playlist",
-        "--no-overwrites",
-        "--retries", "3",
-        "--fragment-retries", "3",
-        "--extractor-retries", "2",
-        "--socket-timeout", "30",
-        "--newline",
-        "--progress-template",
-        "download:__AVL_PROGRESS__%(progress.downloaded_bytes)s|%(progress.total_bytes_estimate)s|%(progress.total_bytes)s",
-        "-o", str(output_dir / f"EP{episode:04d}.%(ext)s"),
-    ]
-    if cookie_file:
-        cli_args.extend(["--cookies", str(cookie_file)])
 
-    # Tauri's development resolver may pass the bare command name "ffmpeg".
-    # yt-dlp interprets --ffmpeg-location as a filesystem path, so resolve PATH
-    # commands first and omit the option when the executable is unavailable.
-    resolved_ffmpeg = None
-    if ffmpeg_path:
-        ffmpeg_candidate = Path(ffmpeg_path).expanduser()
-        if ffmpeg_candidate.exists():
-            resolved_ffmpeg = str(ffmpeg_candidate.resolve())
-        else:
-            resolved_ffmpeg = shutil.which(ffmpeg_path)
-    if resolved_ffmpeg:
-        cli_args.extend(["--ffmpeg-location", resolved_ffmpeg])
-
-    cli_args.append(url)
-    if getattr(sys, "frozen", False):
-        command = [sys.executable, "--yt-dlp-cli", *cli_args]
-    else:
-        command = [sys.executable, "-m", "yt_dlp", *cli_args]
-
-    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    startup_info = None
-    if os.name == "nt":
-        startup_info = subprocess.STARTUPINFO()
-        startup_info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startup_info.wShowWindow = subprocess.SW_HIDE
-
-    last_error: str | None = None
-    return_code: int | None = None
-    child_environment = os.environ.copy()
-    child_environment["PYTHONUTF8"] = "1"
-    child_environment["PYTHONIOENCODING"] = "utf-8:backslashreplace"
-    # CLI and standalone downloader both consume the Netscape export, not the
-    # browser's transient in-memory cookies.
-    try:
-        process = subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-            env=child_environment,
-            creationflags=creation_flags,
-            startupinfo=startup_info,
-        )
-        if process.stdout is None:
-            process.kill()
-            process.wait()
-            raise RuntimeError("Không mở được output của yt-dlp.")
-        for line in process.stdout:
-            progress_match = re.search(
-                r"__AVL_PROGRESS__([^|]*)\|([^|]*)\|([^\s|]*)", line
-            )
-            if progress_match:
-                downloaded_raw, estimate_raw, total_raw = progress_match.groups()
-                try:
-                    downloaded = float(downloaded_raw)
-                    total = None
-                    for candidate in (total_raw, estimate_raw):
-                        try:
-                            parsed = float(candidate)
-                        except (TypeError, ValueError):
-                            continue
-                        if parsed > 0:
-                            total = parsed
-                            break
-                    if total is not None:
-                        on_progress(max(0.0, min(1.0, downloaded / total)))
-                except (TypeError, ValueError):
-                    pass
-                continue
-            if "[error]" in line.lower() or "error:" in line.lower():
-                last_error = _safe_downloader_error(line)
-        return_code = process.wait()
-    except RuntimeError:
-        raise
-    except OSError as error:
-        detail = _safe_downloader_error(error)
-        auth_hint = (
-            ""
-            if cookie_file
-            else " Nếu series yêu cầu đăng nhập, hãy chọn file cookies Netscape còn hiệu lực."
-        )
-        raise RuntimeError(f"Không khởi chạy được yt-dlp cho tập {episode}: {detail}{auth_hint}") from None
-
-    downloaded_files = [
-        path
-        for path in output_dir.glob(f"EP{episode:04d}.*")
-        if path.is_file() and path.suffix.lower() not in {".part", ".ytdl"} and path.stat().st_size > 0
-    ]
-    if return_code != 0 or not downloaded_files:
-        detail = last_error or (
-            f"yt-dlp CLI kết thúc với mã {return_code}."
-            if return_code
-            else "yt-dlp không tạo được file video hợp lệ."
-        )
-        auth_hint = (
-            ""
-            if cookie_file
-            else " Nếu series yêu cầu đăng nhập, hãy chọn file cookies Netscape còn hiệu lực."
-        )
-        raise RuntimeError(f"Không tải được tập {episode}: {detail}{auth_hint}")
+def _download_progress_message(episode: int, downloaded: int, total: int | None) -> str:
+    downloaded_mb = downloaded / (1024 * 1024)
+    if total and total > 0:
+        return f"Đang tải tập {episode:04d} · {downloaded_mb:.1f}/{total / (1024 * 1024):.1f} MB"
+    return f"Đang tải tập {episode:04d} · đã nhận {downloaded_mb:.1f} MB"

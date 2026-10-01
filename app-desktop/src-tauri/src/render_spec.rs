@@ -1,4 +1,4 @@
-use crate::project_service::{BlurEffect, BlurRegion, BlurRegionRole, Project, ProjectLogo, SubtitleSettings, TextRemovalMode};
+use crate::project_service::{BlurEffect, BlurRegion, BlurRegionRole, Project, ProjectLogo, ProjectTextOverlay, SubtitleSettings, TextRemovalMode};
 use crate::transcript_service::Transcript;
 use serde::{Deserialize, Serialize};
 
@@ -41,11 +41,28 @@ pub struct LogoRenderSpec {
     pub end_ms: Option<u64>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextOverlayRenderSpec {
+    pub id: String,
+    pub text: String,
+    pub rect: PixelRect,
+    pub enabled: bool,
+    pub font_name: String,
+    pub font_size: u16,
+    pub font_weight: u16,
+    pub color: String,
+    pub opacity: f64,
+    pub alignment: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportOptions {
     #[serde(default = "default_quality")]
     pub quality: String,
+    #[serde(default = "default_video_codec")]
+    pub video_codec: String,
     #[serde(default = "default_encoder")]
     pub encoder: String,
     #[serde(default)]
@@ -86,6 +103,9 @@ fn default_quality() -> String {
 fn default_encoder() -> String {
     "cpu".to_string()
 }
+fn default_video_codec() -> String {
+    "h264".to_string()
+}
 fn default_true() -> bool {
     true
 }
@@ -104,6 +124,7 @@ impl Default for ExportOptions {
     fn default() -> Self {
         Self {
             quality: default_quality(),
+            video_codec: default_video_codec(),
             encoder: default_encoder(),
             video_bitrate_kbps: None,
             apply_blur: true,
@@ -187,6 +208,7 @@ pub struct RenderSpecification {
     pub duration: f64,
     pub blur_regions: Vec<BlurRenderSpec>,
     pub logos: Vec<LogoRenderSpec>,
+    pub text_overlays: Vec<TextOverlayRenderSpec>,
     pub subtitle: SubtitleRenderSpec,
     pub audio: RenderAudioConfig,
     pub quality: String,
@@ -304,6 +326,9 @@ pub fn build_render_specification(
     if !["cpu", "nvidia"].contains(&options.encoder.as_str()) {
         return Err("Bộ mã hóa video không hợp lệ.".into());
     }
+    if !["h264", "hevc"].contains(&options.video_codec.as_str()) {
+        return Err("Codec video phải là H.264 hoặc HEVC.".into());
+    }
     if options.video_bitrate_kbps.is_some_and(|bitrate| !(500..=50_000).contains(&bitrate)) {
         return Err("Bitrate video phải nằm trong khoảng 500–50.000 kbps.".into());
     }
@@ -315,8 +340,10 @@ pub fn build_render_specification(
     let logos = project
         .logos
         .iter()
+        .filter(|logo| !logo.merge_only)
         .map(|logo| logo_spec(logo, width, height))
         .collect::<Result<Vec<_>, _>>()?;
+    let text_overlays = project.text_overlays.iter().map(|overlay| text_overlay_spec(overlay, width, height)).collect::<Result<Vec<_>, _>>()?;
     let subtitle = subtitle_spec(
         &project.subtitle,
         &project.blur_regions,
@@ -337,6 +364,7 @@ pub fn build_render_specification(
         duration,
         blur_regions,
         logos,
+        text_overlays,
         subtitle,
         audio: RenderAudioConfig {
             include_original: options.include_original_audio
@@ -353,10 +381,34 @@ pub fn build_render_specification(
         video_bitrate_kbps: options.video_bitrate_kbps,
         output: RenderOutputConfig {
             container: "mp4".into(),
-            video_codec: if options.encoder == "nvidia" { "h264_nvenc" } else { "libx264" }.into(),
+            video_codec: match (options.video_codec.as_str(), options.encoder.as_str()) {
+                ("hevc", "nvidia") => "hevc_nvenc",
+                ("hevc", _) => "libx265",
+                (_, "nvidia") => "h264_nvenc",
+                _ => "libx264",
+            }.into(),
             audio_codec: "aac".into(),
             pixel_format: "yuv420p".into(),
         },
+    })
+}
+
+fn text_overlay_spec(overlay: &ProjectTextOverlay, width: u32, height: u32) -> Result<TextOverlayRenderSpec, String> {
+    if overlay.text.chars().count() > 4_000 || !(8..=240).contains(&overlay.font_size)
+        || !(100..=900).contains(&overlay.font_weight) || !overlay.opacity.is_finite()
+        || !(0.0..=1.0).contains(&overlay.opacity)
+        || !["left", "center", "right"].contains(&overlay.alignment.as_str())
+    {
+        return Err("Thuộc tính lớp chữ không hợp lệ.".into());
+    }
+    to_ass_color(&overlay.color, overlay.opacity)?;
+    let font_name = safe_font_name(&overlay.font_family);
+    Ok(TextOverlayRenderSpec {
+        id: overlay.id.clone(), text: overlay.text.clone(),
+        rect: normalized_rect_to_pixels(overlay.x, overlay.y, overlay.width, overlay.height, width, height)?,
+        enabled: overlay.enabled, font_name: if font_name.is_empty() { "Arial".into() } else { font_name },
+        font_size: overlay.font_size, font_weight: overlay.font_weight,
+        color: overlay.color.clone(), opacity: overlay.opacity, alignment: overlay.alignment.clone(),
     })
 }
 
@@ -667,11 +719,12 @@ fn safe_font_name(value: &str) -> String {
 }
 
 pub fn generate_ass(spec: &RenderSpecification) -> Result<String, String> {
-    if !spec.subtitle.enabled || spec.subtitle.events.is_empty() {
-        return Err("Không có phụ đề đã dịch để render.".into());
+    let has_text = spec.text_overlays.iter().any(|overlay| overlay.enabled && !overlay.text.trim().is_empty());
+    if (!spec.subtitle.enabled || spec.subtitle.events.is_empty()) && !has_text {
+        return Err("Không có phụ đề hoặc lớp chữ để render.".into());
     }
     let mut ass = format!("[Script Info]\nScriptType: v4.00+\nPlayResX: {}\nPlayResY: {}\nScaledBorderAndShadow: yes\nWrapStyle: 2\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Localized,{},{} ,{}, {},{},&H00000000,{},0,1,{},0,5,0,0,0,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n", spec.width, spec.height, spec.subtitle.font_name, spec.subtitle.configured_font_size, spec.subtitle.primary_colour, spec.subtitle.primary_colour, spec.subtitle.outline_colour, if spec.subtitle.bold { -1 } else { 0 }, spec.subtitle.outline_width);
-    for event in &spec.subtitle.events {
+    for event in spec.subtitle.events.iter().filter(|_| spec.subtitle.enabled) {
         if !event.layout.fits {
             continue;
         }
@@ -694,7 +747,68 @@ pub fn generate_ass(spec: &RenderSpecification) -> Result<String, String> {
             escaped
         ));
     }
+    append_static_text_events(&mut ass, spec.width, spec.height, spec.duration, &spec.text_overlays, 1)?;
     Ok(ass)
+}
+
+pub fn generate_static_text_ass(width: u32, height: u32, duration: f64, overlays: &[TextOverlayRenderSpec]) -> Result<String, String> {
+    let mut ass = format!("[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\nScaledBorderAndShadow: yes\nWrapStyle: 2\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Localized,Arial,48,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,1,0,0,5,0,0,0,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
+    append_static_text_events(&mut ass, width, height, duration, overlays, 0)?;
+    Ok(ass)
+}
+
+fn append_static_text_events(ass: &mut String, _width: u32, _height: u32, duration: f64, overlays: &[TextOverlayRenderSpec], layer: u8) -> Result<(), String> {
+    for overlay in overlays.iter().filter(|overlay| overlay.enabled && !overlay.text.trim().is_empty()) {
+        let rect = overlay.rect;
+        let (anchor, x, y) = match overlay.alignment.as_str() {
+            "left" => (4, rect.x, rect.y + rect.height / 2),
+            "right" => (6, rect.x + rect.width, rect.y + rect.height / 2),
+            _ => (5, rect.x + rect.width / 2, rect.y + rect.height / 2),
+        };
+        let ass_color = to_ass_color(&overlay.color, overlay.opacity)?;
+        let alpha = &ass_color[2..4];
+        let color = format!("&H{}", &ass_color[4..]);
+        let wrapped = wrap_text_for_ass(&overlay.text, rect.width, overlay.font_size);
+        let font_name = safe_font_name(&overlay.font_name);
+        let font_name = if font_name.is_empty() { "Arial" } else { &font_name };
+        let tags = format!("{{\\an{anchor}\\pos({x},{y})\\fs{}\\fn{}\\bold{}\\bord2\\3c&H000000&\\3a&H{alpha}&\\1c{}&\\1a&H{alpha}&\\q2}}", overlay.font_size, font_name, if overlay.font_weight >= 600 { 1 } else { 0 }, color);
+        ass.push_str(&format!("Dialogue: {layer},0:00:00.00,{},Localized,,0,0,0,,{}{}\n", ass_timestamp(duration), tags, escape_ass_text(&wrapped)));
+    }
+    Ok(())
+}
+
+fn wrap_text_for_ass(text: &str, width: u32, font_size: u16) -> String {
+    let max_units = (width as f64 / (font_size.max(1) as f64 * 0.58)).max(1.0);
+    let mut output = Vec::new();
+    for manual_line in text.replace("\r\n", "\n").replace('\r', "\n").split('\n') {
+        let mut line = String::new();
+        let mut units = 0.0;
+        for word in manual_line.split_whitespace() {
+            let word_units = word.chars().map(|character| if is_east_asian_wide(character) { 1.0 } else if character.is_whitespace() { 0.35 } else { 0.58 }).sum::<f64>();
+            let separator = if line.is_empty() { 0.0 } else { 0.6 };
+            if !line.is_empty() && units + separator + word_units > max_units {
+                output.push(std::mem::take(&mut line));
+                units = 0.0;
+            }
+            if word_units > max_units {
+                for character in word.chars() {
+                    let char_units = if is_east_asian_wide(character) { 1.0 } else { 0.58 };
+                    if !line.is_empty() && units + char_units > max_units {
+                        output.push(std::mem::take(&mut line));
+                        units = 0.0;
+                    }
+                    line.push(character);
+                    units += char_units;
+                }
+            } else {
+                if !line.is_empty() { line.push(' '); units += separator; }
+                line.push_str(word);
+                units += word_units;
+            }
+        }
+        output.push(line);
+    }
+    output.join("\n")
 }
 
 fn escape_ass_text(text: &str) -> String {
@@ -797,6 +911,7 @@ mod tests {
                 text_removal_mode: TextRemovalMode::OcrGuided,
             }],
             logos: vec![],
+            text_overlays: vec![],
             transcript_settings: crate::project_service::TranscriptSettings::default(),
         }
     }

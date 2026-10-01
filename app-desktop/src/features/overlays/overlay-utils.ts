@@ -1,4 +1,4 @@
-import type { BlurRegion, ProjectLogo } from '../projects/types';
+import type { BlurRegion, ProjectLogo, ProjectTextOverlay } from '../projects/types';
 
 export interface Rect {
   x: number;
@@ -62,4 +62,8 @@ export function blurRect(region: BlurRegion): Rect {
 
 export function logoRect(logo: ProjectLogo): Rect {
   return { x: logo.x, y: logo.y, width: logo.width, height: logo.height };
+}
+
+export function textOverlayRect(text: ProjectTextOverlay): Rect {
+  return { x: text.x, y: text.y, width: text.width, height: text.height };
 }

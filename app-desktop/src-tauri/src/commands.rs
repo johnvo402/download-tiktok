@@ -471,9 +471,17 @@ pub fn get_video_tool_output_directory(
 
 #[tauri::command]
 pub async fn scan_merge_videos(
+    app: tauri::AppHandle,
     source_directory: String,
 ) -> Result<video_tools_service::MergeScanResult, String> {
-    tauri::async_runtime::spawn_blocking(move || video_tools_service::scan_merge_videos(&source_directory))
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = video_tools_service::scan_merge_videos(&source_directory)?;
+        let scope = app.asset_protocol_scope();
+        for video in &result.videos {
+            scope.allow_file(&video.path).map_err(|error| format!("Không thể mở video trong preview: {error}"))?;
+        }
+        Ok(result)
+    })
         .await
         .map_err(|error| format!("Không thể quét thư mục video: {error}"))?
 }
@@ -507,12 +515,16 @@ pub async fn start_video_merge(
     file_paths: Vec<String>,
     output_directory: Option<String>,
     frame_mode: Option<video_tools_service::MergeFrameMode>,
+    video_codec: Option<video_tools_service::MergeVideoCodec>,
+    encoder: Option<video_tools_service::MergeEncoder>,
+    logos: Option<Vec<video_tools_service::MergeLogoSettings>>,
+    texts: Option<Vec<video_tools_service::MergeTextSettings>>,
 ) -> Result<String, String> {
     let jobs = jobs.inner().clone();
     let root = projects_root(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = PROJECT_JOB_START_LOCK.lock().map_err(|_| "Không thể khóa trạng thái project jobs.".to_string())?;
-        video_tools_service::start_video_merge(app, &jobs, ProjectStore::new(root), project_id, source_directory, file_paths, output_directory, frame_mode)
+        video_tools_service::start_video_merge(app, &jobs, ProjectStore::new(root), project_id, source_directory, file_paths, output_directory, frame_mode, video_codec, encoder, logos.unwrap_or_default(), texts.unwrap_or_default())
     })
     .await
     .map_err(|error| format!("Không thể bắt đầu gộp video: {error}"))?
@@ -703,8 +715,11 @@ pub fn get_logo_asset_path(
     project_id: String,
     logo_id: String,
 ) -> Result<String, String> {
-    overlays_service::logo_asset_path(&store(&app)?, &project_id, &logo_id)
-        .map(|path| path.to_string_lossy().into_owned())
+    let path = overlays_service::logo_asset_path(&store(&app)?, &project_id, &logo_id)?;
+    app.asset_protocol_scope()
+        .allow_file(&path)
+        .map_err(|error| format!("Không thể mở ảnh logo trong preview: {error}"))?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 #[tauri::command]

@@ -72,7 +72,24 @@ export interface Project {
   };
   blurRegions: BlurRegion[];
   logos: ProjectLogo[];
+  textOverlays: ProjectTextOverlay[];
   transcriptSettings: TranscriptSettings;
+}
+
+export interface ProjectTextOverlay {
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  enabled: boolean;
+  fontFamily: string;
+  fontSize: number;
+  fontWeight: number;
+  color: string;
+  opacity: number;
+  alignment: 'left' | 'center' | 'right';
 }
 
 export interface TranscriptSettings {
@@ -157,6 +174,8 @@ export interface ProjectLogo {
   enabled: boolean;
   opacity: number;
   maintainAspectRatio: boolean;
+  /** Image asset used only by the video merge tool, not project render overlays. */
+  mergeOnly: boolean;
 }
 
 export interface ProjectListResponse {

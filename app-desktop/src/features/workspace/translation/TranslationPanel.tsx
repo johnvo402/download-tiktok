@@ -665,6 +665,33 @@ export default function TranslationPanel() {
     const selected = selectedOverlay();
     return selected?.type === 'blur' ? currentProject()?.blurRegions.find((item) => item.id === selected.id) : undefined;
   };
+
+  const selectedTextOverlay = () => {
+    const selected = selectedOverlay();
+    return selected?.type === 'text' ? currentProject()?.textOverlays.find((item) => item.id === selected.id) : undefined;
+  };
+  const updateTextOverlay = (id: string, changes: Partial<NonNullable<ReturnType<typeof currentProject>>['textOverlays'][number]>) => {
+    const project = currentProject();
+    if (!project) return;
+    updateVisualSettings({ textOverlays: project.textOverlays.map((overlay) => {
+      if (overlay.id !== id) return overlay;
+      const next = { ...overlay, ...changes };
+      next.width = Math.max(0.02, Math.min(1, Number.isFinite(next.width) ? next.width : overlay.width));
+      next.height = Math.max(0.02, Math.min(1, Number.isFinite(next.height) ? next.height : overlay.height));
+      next.x = Math.max(0, Math.min(1 - next.width, Number.isFinite(next.x) ? next.x : overlay.x));
+      next.y = Math.max(0, Math.min(1 - next.height, Number.isFinite(next.y) ? next.y : overlay.y));
+      next.fontSize = Math.max(8, Math.min(240, Math.round(next.fontSize)));
+      next.fontWeight = Math.max(100, Math.min(900, Math.round(next.fontWeight)));
+      next.opacity = Math.max(0, Math.min(1, Number.isFinite(next.opacity) ? next.opacity : overlay.opacity));
+      return next;
+    }) });
+  };
+  const removeTextOverlay = (id: string) => {
+    const project = currentProject();
+    if (!project) return;
+    updateVisualSettings({ textOverlays: project.textOverlays.filter((item) => item.id !== id) }, true);
+    setSelectedOverlay(null);
+  };
   const refreshTextRemovalEnvironment = async () => {
     setTextRemovalEnvironmentLoading(true);
     setTextRemovalEnvironmentError('');
@@ -1180,8 +1207,8 @@ export default function TranslationPanel() {
               </Show>
             </div>
             <div class="resource-subsection"><span class="resource-subtitle">LOGOS <button class="inline-add-button" type="button" onClick={() => setActiveWorkspacePanelTab('properties')}><ImagePlus size={12} /> Quản lý</button></span>
-              <Show when={currentProject()?.logos.length} fallback={<div class="media-inline-empty">Chưa có logo. Thêm logo từ thanh công cụ preview.</div>}>
-                <For each={currentProject()?.logos ?? []}>{(logo) => <div class="overlay-resource-row">
+              <Show when={currentProject()?.logos.some((logo) => !logo.mergeOnly)} fallback={<div class="media-inline-empty">Chưa có logo. Thêm logo từ thanh công cụ preview.</div>}>
+                <For each={currentProject()?.logos.filter((logo) => !logo.mergeOnly) ?? []}>{(logo) => <div class="overlay-resource-row">
                   <button class="overlay-resource-select" type="button" onClick={() => { setSelectedOverlay({ type: 'logo', id: logo.id }); setActiveWorkspacePanelTab('properties'); }}><span class="overlay-resource-chip logo-chip"><FileImage size={12} /></span><span><strong>{logo.originalName}</strong><small>{Math.round(logo.opacity * 100)}% opacity</small></span></button>
                   <label class="overlay-resource-toggle" title="Bật/tắt logo"><input aria-label={`Bật logo ${logo.originalName}`} type="checkbox" checked={logo.enabled} onChange={(event) => updateLogoSettings(logo.id, { enabled: event.currentTarget.checked })} /></label>
                 </div>}</For>
@@ -1245,6 +1272,18 @@ export default function TranslationPanel() {
             <label class="property-control-row"><span>Giữ tỷ lệ ảnh</span><input type="checkbox" checked={logo().maintainAspectRatio} onChange={(event) => updateLogoSettings(logo().id, { maintainAspectRatio: event.currentTarget.checked })} /></label>
             <div class="overlay-property-grid"><label>X <input type="number" min="0" max={Math.round((1 - logo().width) * 100)} value={Math.round(logo().x * 100)} onInput={(event) => updateLogoSettings(logo().id, { x: Number(event.currentTarget.value) / 100 })} /></label><label>Y <input type="number" min="0" max={Math.round((1 - logo().height) * 100)} value={Math.round(logo().y * 100)} onInput={(event) => updateLogoSettings(logo().id, { y: Number(event.currentTarget.value) / 100 })} /></label><label>Rộng <input type="number" min="2" max={Math.round((1 - logo().x) * 100)} value={Math.round(logo().width * 100)} onInput={(event) => updateLogoSettings(logo().id, { width: Number(event.currentTarget.value) / 100 })} /></label><label>Cao <input type="number" min="2" max={Math.round((1 - logo().y) * 100)} value={Math.round(logo().height * 100)} onInput={(event) => updateLogoSettings(logo().id, { height: Number(event.currentTarget.value) / 100 })} /></label></div>
             <div class="overlay-property-actions"><button class="button button-quiet" type="button" onClick={() => void replaceSelectedLogo()}><RefreshCw size={13} /> Thay ảnh</button><button class="button button-danger" type="button" onClick={() => void removeSelectedLogo()}><Trash2 size={13} /> Xóa</button></div>
+          </div>}</Show>
+          <Show when={selectedTextOverlay()}>{(overlay) => <div class="property-group overlay-property-group"><div class="property-group-title"><span>CHỮ TRÊN VIDEO</span><span class="property-status" classList={{ 'status-off': !overlay().enabled }}>{overlay().enabled ? 'BẬT' : 'TẮT'}</span></div>
+            <label class="property-control-row"><span>Hiển thị</span><input type="checkbox" checked={overlay().enabled} onChange={(event) => updateTextOverlay(overlay().id, { enabled: event.currentTarget.checked })} /></label>
+            <label class="property-control-row text-overlay-content-field"><span>Nội dung</span><textarea value={overlay().text} rows={4} maxLength={4000} onInput={(event) => updateTextOverlay(overlay().id, { text: event.currentTarget.value })} /></label>
+            <label class="property-control-row"><span>Font family</span><input class="settings-text-input" value={overlay().fontFamily} maxLength={80} onInput={(event) => updateTextOverlay(overlay().id, { fontFamily: event.currentTarget.value })} /></label>
+            <label class="property-control-row"><span>Cỡ chữ <small>{overlay().fontSize}px</small></span><input type="range" min="8" max="240" value={overlay().fontSize} onInput={(event) => updateTextOverlay(overlay().id, { fontSize: Number(event.currentTarget.value) })} /></label>
+            <label class="property-control-row"><span>Độ đậm</span><select class="settings-select" value={overlay().fontWeight} onChange={(event) => updateTextOverlay(overlay().id, { fontWeight: Number(event.currentTarget.value) })}><option value="400">Regular</option><option value="500">Medium</option><option value="600">Semibold</option><option value="700">Bold</option><option value="800">Extra bold</option><option value="900">Black</option></select></label>
+            <label class="property-control-row"><span>Màu chữ</span><input class="subtitle-color-picker" type="color" value={overlay().color} onInput={(event) => updateTextOverlay(overlay().id, { color: event.currentTarget.value.toUpperCase() })} /></label>
+            <label class="property-control-row"><span>Độ mờ <small>{Math.round(overlay().opacity * 100)}%</small></span><input type="range" min="0" max="1" step="0.01" value={overlay().opacity} onInput={(event) => updateTextOverlay(overlay().id, { opacity: Number(event.currentTarget.value) })} /></label>
+            <label class="property-control-row"><span>Căn lề</span><select class="settings-select" value={overlay().alignment} onChange={(event) => updateTextOverlay(overlay().id, { alignment: event.currentTarget.value as 'left' | 'center' | 'right' })}><option value="left">Trái</option><option value="center">Giữa</option><option value="right">Phải</option></select></label>
+            <div class="overlay-property-grid"><label>X <input type="number" min="0" max={Math.round((1 - overlay().width) * 100)} value={Math.round(overlay().x * 100)} onInput={(event) => updateTextOverlay(overlay().id, { x: Number(event.currentTarget.value) / 100 })} /></label><label>Y <input type="number" min="0" max={Math.round((1 - overlay().height) * 100)} value={Math.round(overlay().y * 100)} onInput={(event) => updateTextOverlay(overlay().id, { y: Number(event.currentTarget.value) / 100 })} /></label><label>Rộng <input type="number" min="2" max={Math.round((1 - overlay().x) * 100)} value={Math.round(overlay().width * 100)} onInput={(event) => updateTextOverlay(overlay().id, { width: Number(event.currentTarget.value) / 100 })} /></label><label>Cao <input type="number" min="2" max={Math.round((1 - overlay().y) * 100)} value={Math.round(overlay().height * 100)} onInput={(event) => updateTextOverlay(overlay().id, { height: Number(event.currentTarget.value) / 100 })} /></label></div>
+            <button class="button button-danger overlay-delete-button" type="button" onClick={() => removeTextOverlay(overlay().id)}><Trash2 size={13} /> Xóa lớp chữ</button>
           </div>}</Show>
           <Show when={selectedOverlay()?.type === 'subtitle' || !selectedOverlay()}>
           <div class="property-group"><div class="property-group-title"><span>PHỤ ĐỀ DỊCH</span><span class="property-status" classList={{ 'status-off': !currentProject()?.subtitle.enabled }}>{currentProject()?.subtitle.enabled ? 'BẬT' : 'TẮT'}</span></div>

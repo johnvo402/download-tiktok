@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
-const SCHEMA_VERSION: u32 = 10;
+const SCHEMA_VERSION: u32 = 11;
 const LEGACY_TTS_VOICE: &str = "Ngọc Lan";
 const DEFAULT_TTS_VOICE: &str = "Ngọc Huyền";
 const MAX_NAME_CHARS: usize = 100;
@@ -44,6 +44,8 @@ pub struct Project {
     pub blur_regions: Vec<BlurRegion>,
     #[serde(default)]
     pub logos: Vec<ProjectLogo>,
+    #[serde(default)]
+    pub text_overlays: Vec<ProjectTextOverlay>,
     #[serde(default)]
     pub transcript_settings: TranscriptSettings,
 }
@@ -278,6 +280,7 @@ pub struct ProjectLogo {
     pub enabled: bool,
     pub opacity: f64,
     pub maintain_aspect_ratio: bool,
+    pub merge_only: bool,
 }
 
 impl Default for ProjectLogo {
@@ -293,6 +296,36 @@ impl Default for ProjectLogo {
             enabled: true,
             opacity: 1.0,
             maintain_aspect_ratio: true,
+            merge_only: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProjectTextOverlay {
+    pub id: String,
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub enabled: bool,
+    pub font_family: String,
+    pub font_size: u16,
+    pub font_weight: u16,
+    pub color: String,
+    pub opacity: f64,
+    pub alignment: String,
+}
+
+impl Default for ProjectTextOverlay {
+    fn default() -> Self {
+        Self {
+            id: String::new(), text: "Nhập văn bản".into(), x: 0.25, y: 0.4,
+            width: 0.5, height: 0.2, enabled: true, font_family: "Arial".into(),
+            font_size: 48, font_weight: 700, color: "#FFFFFF".into(), opacity: 1.0,
+            alignment: "center".into(),
         }
     }
 }
@@ -542,6 +575,7 @@ impl ProjectStore {
             dubbing: DubbingSettings::default(),
             blur_regions: Vec::new(),
             logos: Vec::new(),
+            text_overlays: Vec::new(),
             transcript_settings: TranscriptSettings::default(),
         };
 
@@ -1185,7 +1219,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec_pretty(&old).unwrap()).unwrap();
 
         let upgraded = store.get(&project.id).unwrap();
-        assert_eq!(upgraded.schema_version, 10);
+        assert_eq!(upgraded.schema_version, 11);
         assert_eq!(upgraded.id, project.id);
         assert_eq!(upgraded.name, "Legacy project");
         assert_eq!(upgraded.source.video_path, None);
@@ -1194,7 +1228,7 @@ mod tests {
         assert_eq!(upgraded.subtitle.alignment, "center");
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(persisted["schemaVersion"], 10);
+        assert_eq!(persisted["schemaVersion"], 11);
         assert_eq!(
             fs::read_dir(path.parent().unwrap())
                 .unwrap()
@@ -1227,10 +1261,10 @@ mod tests {
         assert_eq!(loaded.blur_regions[0].edge_blend, 0);
         assert_eq!(loaded.blur_regions[0].pixel_noise, 0);
         assert_eq!(loaded.blur_regions[0].text_removal_scan_fps, 2);
-        assert_eq!(loaded.schema_version, 10);
+        assert_eq!(loaded.schema_version, 11);
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(file).unwrap()).unwrap();
-        assert_eq!(persisted["schemaVersion"], 10);
+        assert_eq!(persisted["schemaVersion"], 11);
         assert_eq!(persisted["blurRegions"][0]["role"], "generic");
     }
 

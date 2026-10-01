@@ -27,6 +27,32 @@ export interface MergeScanResult {
 }
 
 export type MergeFrameMode = 'source' | 'portrait' | 'landscape';
+export type MergeVideoCodec = 'h264' | 'hevc';
+export type MergeEncoder = 'cpu' | 'nvidia';
+
+export interface MergeLogoSettings {
+  logoId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  opacity: number;
+  maintainAspectRatio: boolean;
+}
+
+export interface MergeTextSettings {
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  opacity: number;
+  fontFamily: string;
+  fontSize: number;
+  fontWeight: number;
+  color: string;
+  alignment: 'left' | 'center' | 'right';
+}
 
 export interface TikTokDramaInfo {
   title: string;
@@ -76,8 +102,8 @@ export const videoToolsService = {
   scanVideos: (sourceDirectory: string) => call<MergeScanResult>('scan_merge_videos', { sourceDirectory }),
   startTikTokDownload: (projectId: string, url: string, outputDirectory: string, cookieFile: string | null, useBrowserCookies: boolean) =>
     call<string>('start_tiktok_drama_download', { projectId, url, outputDirectory, cookieFile, useBrowserCookies }),
-  startMerge: (projectId: string, sourceDirectory: string, filePaths: string[], outputDirectory: string, frameMode: MergeFrameMode) =>
-    call<string>('start_video_merge', { projectId, sourceDirectory, filePaths, outputDirectory, frameMode }),
+  startMerge: (projectId: string, sourceDirectory: string, filePaths: string[], outputDirectory: string, frameMode: MergeFrameMode, videoCodec: MergeVideoCodec, encoder: MergeEncoder, logos: MergeLogoSettings[] = [], texts: MergeTextSettings[] = []) =>
+    call<string>('start_video_merge', { projectId, sourceDirectory, filePaths, outputDirectory, frameMode, videoCodec, encoder, logos, texts }),
   onProgress: (handler: (event: VideoToolProgress) => void) =>
     listen<VideoToolProgress>('video-tool-progress', (event) => handler(event.payload)),
 };

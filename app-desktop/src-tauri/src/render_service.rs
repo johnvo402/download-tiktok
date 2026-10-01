@@ -86,29 +86,38 @@ pub struct ExportValidation {
 pub struct ExportCapabilities {
     pub nvidia_encoder_available: bool,
     pub nvidia_message: String,
+    pub nvidia_hevc_encoder_available: bool,
+    pub nvidia_hevc_message: String,
 }
 
 pub fn export_capabilities() -> ExportCapabilities {
-    match probe_nvenc() {
-        Ok(()) => ExportCapabilities {
-            nvidia_encoder_available: true,
-            nvidia_message: "NVIDIA NVENC sẵn sàng.".into(),
-        },
-        Err(message) => ExportCapabilities {
-            nvidia_encoder_available: false,
-            nvidia_message: message,
-        },
+    let h264 = probe_nvenc_encoder("h264_nvenc");
+    let hevc = probe_nvenc_encoder("hevc_nvenc");
+    ExportCapabilities {
+        nvidia_encoder_available: h264.is_ok(),
+        nvidia_message: h264.err().unwrap_or_else(|| "NVIDIA NVENC sẵn sàng.".into()),
+        nvidia_hevc_encoder_available: hevc.is_ok(),
+        nvidia_hevc_message: hevc.err().unwrap_or_else(|| "NVIDIA NVENC HEVC sẵn sàng.".into()),
     }
 }
 
-fn probe_nvenc() -> Result<(), String> {
+pub(crate) fn probe_nvidia_video_encoder(codec: &str) -> Result<(), String> {
+    let encoder = match codec {
+        "h264" => "h264_nvenc",
+        "hevc" => "hevc_nvenc",
+        _ => return Err("Codec NVENC không hợp lệ; hỗ trợ H.264 và HEVC.".into()),
+    };
+    probe_nvenc_encoder(encoder)
+}
+
+fn probe_nvenc_encoder(encoder: &str) -> Result<(), String> {
     let mut command = crate::runtime_paths::ffmpeg_command()
         .map_err(|error| format!("Không kiểm tra được NVIDIA NVENC: {error}"))?;
     command.args([
         "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
         // NVENC rejects very small test frames on some driver/GPU combinations.
-        // Use a modest, ordinary H.264 size and the same pixel format as export.
-        "color=c=black:s=256x256:r=1:d=1", "-frames:v", "1", "-pix_fmt", "yuv420p", "-c:v", "h264_nvenc",
+        // Use a modest, ordinary size and the same pixel format as export.
+        "color=c=black:s=256x256:r=1:d=1", "-frames:v", "1", "-pix_fmt", "yuv420p", "-c:v", encoder,
         "-f", "null", "-",
     ]);
     hide_console_window(&mut command);
@@ -129,7 +138,7 @@ fn probe_nvenc() -> Result<(), String> {
         .collect::<Vec<_>>()
         .join(" ");
     Err(format!(
-        "FFmpeg không khởi tạo được NVIDIA NVENC. Kiểm tra driver NVIDIA hoặc chọn mã hóa CPU. {details}"
+        "FFmpeg không khởi tạo được {encoder}. Kiểm tra driver NVIDIA hoặc chọn mã hóa CPU. {details}"
     ))
 }
 
@@ -151,7 +160,7 @@ pub fn validate_export(
 ) -> Result<ExportValidation, String> {
     validate_export_options(options)?;
     if options.encoder == "nvidia" {
-        probe_nvenc()?;
+        probe_nvidia_video_encoder(&options.video_codec)?;
     }
     resolve_export_directory(store, project_id, options.output_directory.as_deref())?;
     let (project, _transcript, spec, dubbing_count, expected_audio) =
@@ -195,7 +204,7 @@ pub fn start_export(
     options: ExportOptions,
 ) -> Result<String, String> {
     if options.encoder == "nvidia" {
-        probe_nvenc()?;
+        probe_nvidia_video_encoder(&options.video_codec)?;
     }
     let _guard = jobs
         .start_lock
@@ -519,6 +528,9 @@ fn validate_export_options(options: &ExportOptions) -> Result<(), String> {
     if !["cpu", "nvidia"].contains(&options.encoder.as_str()) {
         return Err("Bộ mã hóa video không hợp lệ.".into());
     }
+    if !["h264", "hevc"].contains(&options.video_codec.as_str()) {
+        return Err("Codec video phải là H.264 hoặc HEVC.".into());
+    }
     if options
         .video_bitrate_kbps
         .is_some_and(|bitrate| !(500..=50_000).contains(&bitrate))
@@ -715,7 +727,7 @@ fn run_export_inner(
     let export_dir =
         resolve_export_directory(store, project_id, options.output_directory.as_deref())?;
     let ass_path = render_dir.join("translated.ass");
-    if spec.subtitle.enabled {
+    if spec.subtitle.enabled || spec.text_overlays.iter().any(|overlay| overlay.enabled && !overlay.text.trim().is_empty()) {
         fs::write(&ass_path, render_spec::generate_ass(&spec)?)
             .map_err(|error| format!("Không thể tạo phụ đề ASS: {error}"))?;
     }
@@ -1092,7 +1104,7 @@ fn build_video_filtergraph(
         current = output;
         stage += 1;
     }
-    if spec.subtitle.enabled {
+    if spec.subtitle.enabled || spec.text_overlays.iter().any(|overlay| overlay.enabled && !overlay.text.trim().is_empty()) {
         let next = "vsubtitle";
         graph.push_str(&format!(
             "[{current}]subtitles=filename='{}':original_size={}x{}[{next}];",
@@ -1242,24 +1254,30 @@ fn build_ffmpeg_command(
     } else {
         command.arg("-an");
     }
-    let (preset, crf) = encoder_settings(&spec.quality);
+    let (preset, h264_crf) = encoder_settings(&spec.quality);
+    let hevc_crf = hevc_encoder_crf(&spec.quality);
+    let is_nvenc = spec.output.video_codec.ends_with("_nvenc");
+    let is_hevc = spec.output.video_codec.starts_with("hevc_") || spec.output.video_codec == "libx265";
+    let crf = if is_hevc { hevc_crf } else { h264_crf };
     command.arg("-c:v").arg(&spec.output.video_codec);
     if let Some(bitrate_kbps) = spec.video_bitrate_kbps {
         let bitrate = format!("{bitrate_kbps}k");
         let maxrate = format!("{}k", ((bitrate_kbps as f64) * 1.15).round() as u32);
         let bufsize = format!("{}k", bitrate_kbps.saturating_mul(2));
-        if spec.output.video_codec == "h264_nvenc" {
+        if is_nvenc {
             command.args(["-preset", nvenc_preset(&spec.quality), "-rc:v", "vbr"]);
         } else {
             command.args(["-preset", preset]);
         }
         command.args(["-b:v", &bitrate, "-maxrate", &maxrate, "-bufsize", &bufsize]);
-    } else if spec.output.video_codec == "h264_nvenc" {
+    } else if is_nvenc {
         command.args(["-preset", nvenc_preset(&spec.quality), "-rc:v", "vbr", "-cq:v", crf, "-b:v", "0"]);
     } else {
         command.args(["-preset", preset, "-crf", crf]);
     }
-    command.args(["-pix_fmt", &spec.output.pixel_format])
+    command.args(["-pix_fmt", &spec.output.pixel_format]);
+    if is_hevc { command.args(["-tag:v", "hvc1"]); }
+    command
         .arg("-c:a")
         .arg(&spec.output.audio_codec)
         .args([
@@ -1284,6 +1302,14 @@ fn encoder_settings(quality: &str) -> (&'static str, &'static str) {
         "fast" => ("ultrafast", "25"),
         "high" => ("slow", "18"),
         _ => ("medium", "23"),
+    }
+}
+
+fn hevc_encoder_crf(quality: &str) -> &'static str {
+    match quality {
+        "fast" => "30",
+        "high" => "23",
+        _ => "27",
     }
 }
 
@@ -1780,6 +1806,7 @@ mod tests {
             enabled: true,
             opacity: 0.9,
             maintain_aspect_ratio: true,
+            merge_only: false,
         });
         project.dubbing.enabled = true;
         project.dubbing.ducking_enabled = true;

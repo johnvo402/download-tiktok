@@ -39,7 +39,7 @@ export const projectService = {
   saveTranscript: (projectId: string, transcript: Transcript) => call<Project>('save_transcript', { projectId, transcript }),
   updateTranslationLanguages: (projectId: string, sourceLanguage: string, targetLanguage: string) => call<Project>('update_translation_languages', { projectId, sourceLanguage, targetLanguage }),
   updateSubtitleSettings: (projectId: string, subtitle: Project['subtitle']) => call<Project>('update_subtitle_settings', { projectId, subtitle }),
-  saveVisualSettings: (projectId: string, settings: Pick<Project, 'subtitle' | 'blurRegions' | 'logos'>) => call<Project>('save_visual_settings', { projectId, settings }),
+  saveVisualSettings: (projectId: string, settings: Pick<Project, 'subtitle' | 'blurRegions' | 'logos' | 'textOverlays'>) => call<Project>('save_visual_settings', { projectId, settings }),
   importLogo: (projectId: string, sourcePath: string) => call<{
     project: Project;
     logo: Project['logos'][number] | null;

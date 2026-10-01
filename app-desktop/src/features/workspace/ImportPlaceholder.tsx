@@ -1,13 +1,18 @@
-import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
   ArrowDown, ArrowUp, Check, CircleAlert, Clapperboard, Download, FileVideo,
-  FolderOpen, GripVertical, LoaderCircle, Merge, RefreshCw, ShieldCheck,
+  FolderOpen, GripVertical, ImagePlus, LoaderCircle, Merge, RefreshCw, ShieldCheck,
   X,
 } from 'lucide-solid';
 import { currentProject, setNotice } from '../../app/project-state';
 import { jobService } from '../../app/services/job-service';
-import { videoToolsService, type MergeFrameMode, type MergeVideoInfo, type TikTokCookieInfo, type TikTokDramaInfo, type VideoToolProgress } from '../../app/services/video-tools-service';
+import { projectService } from '../../app/services/project-service';
+import { renderService } from '../../app/services/render-service';
+import { videoToolsService, type MergeEncoder, type MergeFrameMode, type MergeLogoSettings, type MergeTextSettings, type MergeVideoCodec, type MergeVideoInfo, type TikTokCookieInfo, type TikTokDramaInfo, type VideoToolProgress } from '../../app/services/video-tools-service';
+import type { ExportCapabilities } from '../../app/services/render-service';
+import { mergeVisualProject } from '../overlays/overlay-state';
 
 type Tab = 'tiktok' | 'merge';
 
@@ -40,6 +45,20 @@ export default function ImportPlaceholder() {
   const [tiktokOutput, setTiktokOutput] = createSignal('');
   const [mergeOutput, setMergeOutput] = createSignal('');
   const [mergeFrameMode, setMergeFrameMode] = createSignal<MergeFrameMode>('source');
+  const [mergeVideoCodec, setMergeVideoCodec] = createSignal<MergeVideoCodec>('h264');
+  const [mergeEncoder, setMergeEncoder] = createSignal<MergeEncoder>('cpu');
+  const [exportCapabilities, setExportCapabilities] = createSignal<ExportCapabilities>();
+  const [mergeVideoPreviewUrl, setMergeVideoPreviewUrl] = createSignal('');
+  const [mergeLogoEnabled, setMergeLogoEnabled] = createSignal(false);
+  const [mergeLogoId, setMergeLogoId] = createSignal('');
+  const [mergeLogo, setMergeLogo] = createSignal<MergeLogoSettings | null>(null);
+  const [mergeLogoUrl, setMergeLogoUrl] = createSignal('');
+  const [mergeLogoImageAspect, setMergeLogoImageAspect] = createSignal(0);
+  const [mergeLogoDragging, setMergeLogoDragging] = createSignal(false);
+  const [mergeLogoError, setMergeLogoError] = createSignal('');
+  const [mergeTextEnabled, setMergeTextEnabled] = createSignal(false);
+  const [mergeText, setMergeText] = createSignal<MergeTextSettings>({ text: 'Nhập văn bản', x: 0.15, y: 0.4, width: 0.7, height: 0.2, opacity: 1, fontFamily: 'Arial', fontSize: 48, fontWeight: 700, color: '#FFFFFF', alignment: 'center' });
+  const [mergeTextDragging, setMergeTextDragging] = createSignal(false);
   const [tiktokUrl, setTiktokUrl] = createSignal('');
   const [cookieFile, setCookieFile] = createSignal('');
   const [cookieInfo, setCookieInfo] = createSignal<TikTokCookieInfo>();
@@ -66,9 +85,45 @@ export default function ImportPlaceholder() {
   const [mergeError, setMergeError] = createSignal('');
   const [draggedPath, setDraggedPath] = createSignal<string>();
 
+  let mergePreviewStage: HTMLDivElement | undefined;
+  let mergeLogoDrag: { pointerId: number; mode: 'move' | 'resize'; startX: number; startY: number; stageWidth: number; stageHeight: number; initial: MergeLogoSettings } | undefined;
+  let mergeTextDrag: { pointerId: number; mode: 'move' | 'resize'; startX: number; startY: number; stageWidth: number; stageHeight: number; initial: MergeTextSettings } | undefined;
   let unlisten: (() => void) | undefined;
   let folderGeneration = 0;
   const projectId = () => currentProject()?.id;
+  const selectedMergeGpuAvailable = () => mergeVideoCodec() === 'hevc'
+    ? exportCapabilities()?.nvidiaHevcEncoderAvailable ?? false
+    : exportCapabilities()?.nvidiaEncoderAvailable ?? false;
+  const selectedMergeGpuMessage = () => mergeVideoCodec() === 'hevc'
+    ? exportCapabilities()?.nvidiaHevcMessage ?? 'Đang kiểm tra HEVC NVENC…'
+    : exportCapabilities()?.nvidiaMessage ?? 'Đang kiểm tra H.264 NVENC…';
+  const mergeCanvasAspect = createMemo(() => {
+    if (mergeFrameMode() === 'portrait') return 9 / 16;
+    if (mergeFrameMode() === 'landscape') return 16 / 9;
+    const reference = videos().reduce<MergeVideoInfo | undefined>((best, video) => !best || video.width * video.height > best.width * best.height ? video : best, undefined);
+    return reference && reference.height > 0 ? reference.width / reference.height : 16 / 9;
+  });
+  const mergeCanvasWidth = createMemo(() => {
+    const reference = videos().reduce<MergeVideoInfo | undefined>((best, video) => !best || video.width * video.height > best.width * best.height ? video : best, undefined);
+    if (!reference) return 1920;
+    if (mergeFrameMode() === 'source') return reference.width + reference.width % 2;
+    const longest = Math.max(...videos().map((video) => Math.max(video.width, video.height)));
+    const longEdge = longest + longest % 2;
+    if (mergeFrameMode() === 'landscape') return longEdge;
+    return Math.max(2, Math.floor(Math.round(longEdge * 9 / 16) / 2) * 2);
+  });
+  createEffect(() => {
+    const path = videos()[0]?.path;
+    setMergeVideoPreviewUrl(path ? convertFileSrc(path) : '');
+  });
+  createEffect(() => {
+    const logo = mergeLogo();
+    const imageAspect = mergeLogoImageAspect();
+    const canvasAspect = mergeCanvasAspect();
+    if (!logo?.maintainAspectRatio || imageAspect <= 0 || canvasAspect <= 0) return;
+    const height = Math.min(1 - logo.y, logo.width * canvasAspect / imageAspect);
+    if (Math.abs(height - logo.height) > 0.001) setMergeLogo({ ...logo, height });
+  });
   const taskRunning = () => tiktokStarting() || cookieLoginStarting() || mergeStarting() || ['queued', 'waiting', 'running'].includes(tiktokProgress()?.status ?? '') || ['queued', 'waiting', 'running'].includes(mergeProgress()?.status ?? '');
 
   createEffect(() => {
@@ -91,6 +146,12 @@ export default function ImportPlaceholder() {
   });
 
   onMount(() => {
+    void renderService.capabilities().then(setExportCapabilities).catch(() => setExportCapabilities({
+      nvidiaEncoderAvailable: false,
+      nvidiaMessage: 'Không kiểm tra được H.264 NVENC. Có thể tiếp tục bằng CPU.',
+      nvidiaHevcEncoderAvailable: false,
+      nvidiaHevcMessage: 'Không kiểm tra được HEVC NVENC. Có thể tiếp tục bằng CPU.',
+    }));
     void videoToolsService.onProgress((event) => {
       if (event.projectId !== projectId()) return;
       if (cookieLoginStarting() && (!cookieLoginJobId() || cookieLoginJobId() === event.jobId)) {
@@ -225,6 +286,155 @@ export default function ImportPlaceholder() {
     } catch (error) { setScanError(error instanceof Error ? error.message : 'Không mở được hộp thoại chọn video.'); }
   };
 
+  const selectMergeLogo = async (logoId: string) => {
+    setMergeLogoId(logoId);
+    setMergeLogoError('');
+    setMergeLogoImageAspect(0);
+    const logo = currentProject()?.logos.find((item) => item.id === logoId);
+    if (!logo) {
+      setMergeLogo(null);
+      setMergeLogoUrl('');
+      setMergeLogoImageAspect(0);
+      return;
+    }
+    setMergeLogo({ logoId, x: logo.x, y: logo.y, width: logo.width, height: logo.height, opacity: logo.opacity, maintainAspectRatio: logo.maintainAspectRatio });
+    setMergeLogoEnabled(true);
+    try {
+      const path = await projectService.getLogoAssetPath(currentProject()!.id, logoId);
+      setMergeLogoUrl(convertFileSrc(path));
+    } catch (error) {
+      setMergeLogoUrl('');
+      setMergeLogoError(error instanceof Error ? error.message : 'Không thể đọc ảnh logo trong preview.');
+    }
+  };
+
+  const addMergeLogo = async () => {
+    const project = currentProject();
+    if (!project || taskRunning()) return;
+    try {
+      const path = await open({ multiple: false, title: 'Chọn ảnh logo', filters: [{ name: 'Ảnh logo', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] });
+      if (typeof path !== 'string') return;
+      const result = await projectService.importLogo(project.id, path);
+      if (result.logo) {
+        mergeVisualProject(result.project);
+        const latestProject = currentProject() ?? result.project;
+        const mergeOnlyProject = await projectService.saveVisualSettings(project.id, {
+          subtitle: latestProject.subtitle,
+          blurRegions: latestProject.blurRegions,
+          logos: latestProject.logos.map((logo) => logo.id === result.logo!.id ? { ...logo, enabled: false, mergeOnly: true } : logo),
+          textOverlays: latestProject.textOverlays ?? [],
+        });
+        mergeVisualProject(mergeOnlyProject);
+        await selectMergeLogo(result.logo.id);
+      }
+      if (result.cleanupWarning) setNotice({ kind: 'info', message: result.cleanupWarning });
+    } catch (error) {
+      setMergeLogoError(error instanceof Error ? error.message : 'Không thể thêm ảnh logo vào dự án.');
+    }
+  };
+
+  const beginMergeLogoPointer = (event: PointerEvent & { currentTarget: HTMLElement }, mode: 'move' | 'resize') => {
+    const logo = mergeLogo();
+    const bounds = mergePreviewStage?.getBoundingClientRect();
+    if (!logo || !bounds || event.button !== 0 || taskRunning()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    mergeLogoDrag = { pointerId: event.pointerId, mode, startX: event.clientX, startY: event.clientY, stageWidth: bounds.width, stageHeight: bounds.height, initial: { ...logo } };
+    setMergeLogoDragging(true);
+  };
+
+  const moveMergeLogoPointer = (event: PointerEvent) => {
+    const drag = mergeLogoDrag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const dx = (event.clientX - drag.startX) / Math.max(drag.stageWidth, 1);
+    const dy = (event.clientY - drag.startY) / Math.max(drag.stageHeight, 1);
+    const start = drag.initial;
+    if (drag.mode === 'move') {
+      setMergeLogo({ ...start, x: Math.min(1 - start.width, Math.max(0, start.x + dx)), y: Math.min(1 - start.height, Math.max(0, start.y + dy)) });
+      return;
+    }
+    let width = Math.min(1 - start.x, Math.max(0.025, start.width + dx));
+    let height = Math.min(1 - start.y, Math.max(0.025, start.height + dy));
+    if (start.maintainAspectRatio) {
+      const normalizedAspect = start.width / Math.max(start.height, 0.001);
+      width = Math.min(width, height * normalizedAspect);
+      height = width / normalizedAspect;
+    }
+    setMergeLogo({ ...start, width, height });
+  };
+
+  const endMergeLogoPointer = (event: PointerEvent) => {
+    if (mergeLogoDrag?.pointerId === event.pointerId) {
+      mergeLogoDrag = undefined;
+      setMergeLogoDragging(false);
+    }
+  };
+
+  const beginMergeTextPointer = (event: PointerEvent & { currentTarget: HTMLElement }, mode: 'move' | 'resize') => {
+    const text = mergeText();
+    const bounds = mergePreviewStage?.getBoundingClientRect();
+    if (!bounds || event.button !== 0 || taskRunning()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    mergeTextDrag = { pointerId: event.pointerId, mode, startX: event.clientX, startY: event.clientY, stageWidth: bounds.width, stageHeight: bounds.height, initial: { ...text } };
+    setMergeTextDragging(true);
+  };
+
+  const moveMergeTextPointer = (event: PointerEvent) => {
+    const drag = mergeTextDrag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const dx = (event.clientX - drag.startX) / Math.max(drag.stageWidth, 1);
+    const dy = (event.clientY - drag.startY) / Math.max(drag.stageHeight, 1);
+    const start = drag.initial;
+    if (drag.mode === 'move') {
+      setMergeText({ ...start, x: Math.min(1 - start.width, Math.max(0, start.x + dx)), y: Math.min(1 - start.height, Math.max(0, start.y + dy)) });
+    } else {
+      setMergeText({ ...start, width: Math.min(1 - start.x, Math.max(0.025, start.width + dx)), height: Math.min(1 - start.y, Math.max(0.025, start.height + dy)) });
+    }
+  };
+
+  const endMergeTextPointer = (event: PointerEvent) => {
+    if (mergeTextDrag?.pointerId === event.pointerId) {
+      mergeTextDrag = undefined;
+      setMergeTextDragging(false);
+    }
+  };
+
+  const nudgeMergeText = (event: KeyboardEvent) => {
+    const text = mergeText();
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+    event.preventDefault();
+    const step = event.shiftKey ? 0.05 : 0.01;
+    setMergeText({
+      ...text,
+      x: Math.min(1 - text.width, Math.max(0, text.x + (event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0))),
+      y: Math.min(1 - text.height, Math.max(0, text.y + (event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0))),
+    });
+  };
+
+  const resizeMergeLogoWidth = (value: number) => {
+    const logo = mergeLogo();
+    if (!logo) return;
+    let width = Math.min(1 - logo.x, Math.max(0.025, value / 100));
+    let height = logo.height;
+    if (logo.maintainAspectRatio) height = Math.min(1 - logo.y, width / Math.max(logo.width / Math.max(logo.height, 0.001), 0.001));
+    setMergeLogo({ ...logo, width, height });
+  };
+
+  const nudgeMergeLogo = (event: KeyboardEvent) => {
+    const logo = mergeLogo();
+    if (!logo || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+    event.preventDefault();
+    const step = event.shiftKey ? 0.05 : 0.01;
+    setMergeLogo({
+      ...logo,
+      x: Math.min(1 - logo.width, Math.max(0, logo.x + (event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0))),
+      y: Math.min(1 - logo.height, Math.max(0, logo.y + (event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0))),
+    });
+  };
+
   const startMerge = async () => {
     const id = projectId();
     if (!id || !sourceDirectory() || videos().length < 2 || !mergeOutput() || taskRunning()) return;
@@ -233,7 +443,9 @@ export default function ImportPlaceholder() {
     setMergeJobId(undefined);
     setMergeError('');
     try {
-      const job = await videoToolsService.startMerge(id, sourceDirectory(), videos().map((video) => video.path), mergeOutput(), mergeFrameMode());
+      const logos = mergeLogoEnabled() && mergeLogo() ? [mergeLogo()!] : [];
+      const texts = mergeTextEnabled() && mergeText().text.trim() ? [mergeText()] : [];
+      const job = await videoToolsService.startMerge(id, sourceDirectory(), videos().map((video) => video.path), mergeOutput(), mergeFrameMode(), mergeVideoCodec(), mergeEncoder(), logos, texts);
       setMergeJobId(job);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Không thể bắt đầu gộp video.';
@@ -331,6 +543,54 @@ export default function ImportPlaceholder() {
             <div class="video-tool-card-header compact"><div><span class="eyebrow">02 · FILE ĐẦU RA</span><h2>Thư mục lưu video gộp</h2><p>Tên file được tạo tự động theo thời gian; file cũ sẽ không bị ghi đè.</p></div></div>
             <div class="video-tool-directory-row"><div class="video-tool-directory-value" title={mergeOutput()}><FolderOpen size={15} /><span>{mergeOutput() ? directoryLabel(mergeOutput()) : 'Đang lấy thư mục dự án…'}</span></div><button class="button button-quiet" type="button" disabled={taskRunning()} onClick={() => void chooseDirectory('merge')}>Chọn thư mục</button></div>
             <label class="merge-frame-mode"><span><strong>Tỷ lệ khung hình</strong><small>{mergeFrameMode() === 'source' ? 'Tự động giữ khung hình của video có độ phân giải lớn nhất.' : 'Video được giữ nguyên tỷ lệ, căn giữa trên nền đen nếu không vừa khung.'}</small></span><select class="settings-select" value={mergeFrameMode()} disabled={taskRunning()} onChange={(event) => setMergeFrameMode(event.currentTarget.value as MergeFrameMode)}><option value="source">Tự động theo video</option><option value="portrait">Dọc · 9:16</option><option value="landscape">Ngang · 16:9</option></select></label>
+            <div class="merge-encoding-options">
+              <label class="merge-frame-mode"><span><strong>Codec video</strong><small>HEVC thường tạo file nhỏ hơn ở chất lượng tương đương.</small></span><select class="settings-select" value={mergeVideoCodec()} disabled={taskRunning()} onChange={(event) => { const codec = event.currentTarget.value as MergeVideoCodec; setMergeVideoCodec(codec); if (mergeEncoder() === 'nvidia' && !(codec === 'hevc' ? exportCapabilities()?.nvidiaHevcEncoderAvailable : exportCapabilities()?.nvidiaEncoderAvailable)) setMergeEncoder('cpu'); }}><option value="h264">H.264 · tương thích rộng</option><option value="hevc">HEVC / H.265 · file gọn hơn</option></select></label>
+              <label class="merge-frame-mode"><span><strong>Mã hóa bằng</strong><small>{mergeEncoder() === 'nvidia' ? selectedMergeGpuMessage() : 'CPU hoạt động trên mọi máy.'}</small></span><select class="settings-select" value={mergeEncoder()} disabled={taskRunning()} onChange={(event) => setMergeEncoder(event.currentTarget.value as MergeEncoder)}><option value="cpu">CPU</option><option value="nvidia" disabled={!selectedMergeGpuAvailable()}>GPU NVIDIA · NVENC</option></select></label>
+            </div>
+            <small class="merge-encoding-note">CPU/GPU chỉ dùng khi cần mã hóa lại. Video cùng codec, cùng thông số và không có logo/chữ hoặc đổi tỷ lệ sẽ được nối trực tiếp, giữ nguyên chất lượng.</small>
+            <section class="merge-logo-section" aria-label="Logo video gộp">
+              <label class="merge-logo-toggle"><input type="checkbox" checked={mergeLogoEnabled()} disabled={taskRunning()} onChange={(event) => setMergeLogoEnabled(event.currentTarget.checked)} /><span><strong>Chèn logo khi gộp video</strong><small>Logo được ghép lên toàn bộ video đầu ra.</small></span></label>
+              <Show when={mergeLogoEnabled()}>
+                <div class="merge-logo-toolbar">
+                  <label class="video-tool-field"><span>Ảnh logo</span><select class="settings-select" value={mergeLogoId()} disabled={taskRunning()} onChange={(event) => void selectMergeLogo(event.currentTarget.value)}><option value="">Chọn logo trong dự án</option><For each={currentProject()?.logos ?? []}>{(logo) => <option value={logo.id}>{logo.originalName}</option>}</For></select></label>
+                  <button class="button button-quiet" type="button" disabled={taskRunning()} onClick={() => void addMergeLogo()}><ImagePlus size={14} /> Thêm logo</button>
+                </div>
+                <Show when={mergeLogoError()}><div class="video-tool-inline-error"><CircleAlert size={14} /><span>{mergeLogoError()}</span></div></Show>
+                <Show when={!mergeLogo() && videos().length > 0}><div class="merge-logo-empty"><ImagePlus size={15} /><span>Chọn một logo đã có hoặc thêm ảnh mới để xem trước và chỉnh vị trí.</span></div></Show>
+              </Show>
+            </section>
+            <section class="merge-logo-section merge-text-section" aria-label="Chữ trên video gộp">
+              <label class="merge-logo-toggle"><input type="checkbox" checked={mergeTextEnabled()} disabled={taskRunning()} onChange={(event) => setMergeTextEnabled(event.currentTarget.checked)} /><span><strong>Chèn chữ khi gộp video</strong><small>Chữ được ghép lên toàn bộ video đầu ra.</small></span></label>
+              <Show when={mergeTextEnabled()}>
+                <label class="video-tool-field merge-text-content-field"><span>Nội dung chữ</span><textarea class="settings-textarea" rows="3" maxLength={4000} value={mergeText().text} disabled={taskRunning()} onInput={(event) => setMergeText({ ...mergeText(), text: event.currentTarget.value })} /></label>
+                <div class="merge-logo-controls merge-text-controls">
+                  <label><span>Cỡ chữ <strong>{mergeText().fontSize}px</strong></span><input type="range" min="12" max="180" value={mergeText().fontSize} disabled={taskRunning()} onInput={(event) => setMergeText({ ...mergeText(), fontSize: Number(event.currentTarget.value) })} /></label>
+                  <label><span>Độ mờ <strong>{Math.round(mergeText().opacity * 100)}%</strong></span><input type="range" min="0" max="100" value={Math.round(mergeText().opacity * 100)} disabled={taskRunning()} onInput={(event) => setMergeText({ ...mergeText(), opacity: Number(event.currentTarget.value) / 100 })} /></label>
+                  <label><span>Màu chữ</span><input type="color" value={mergeText().color} disabled={taskRunning()} onInput={(event) => setMergeText({ ...mergeText(), color: event.currentTarget.value.toUpperCase() })} /></label>
+                  <label><span>Font family</span><input class="settings-text-input" value={mergeText().fontFamily} maxLength={80} disabled={taskRunning()} onInput={(event) => setMergeText({ ...mergeText(), fontFamily: event.currentTarget.value })} /></label>
+                  <label><span>Độ đậm</span><select class="settings-select" value={mergeText().fontWeight} disabled={taskRunning()} onChange={(event) => setMergeText({ ...mergeText(), fontWeight: Number(event.currentTarget.value) })}><option value="400">Regular</option><option value="500">Medium</option><option value="600">Semibold</option><option value="700">Bold</option><option value="800">Extra bold</option></select></label>
+                  <label><span>Căn lề</span><select class="settings-select" value={mergeText().alignment} disabled={taskRunning()} onChange={(event) => setMergeText({ ...mergeText(), alignment: event.currentTarget.value as MergeTextSettings['alignment'] })}><option value="left">Trái</option><option value="center">Giữa</option><option value="right">Phải</option></select></label>
+                </div>
+              </Show>
+            </section>
+            <Show when={videos().length > 0 && ((mergeLogoEnabled() && !!mergeLogo()) || (mergeTextEnabled() && !!mergeText().text.trim()))}>
+              <div class="merge-preview-shell">
+                <div class="merge-preview-heading"><strong>Xem trước video gộp</strong><span>Kéo chữ/logo để di chuyển · kéo góc để đổi kích thước</span></div>
+                <div class="merge-preview-stage" ref={mergePreviewStage} style={{ 'aspect-ratio': String(mergeCanvasAspect()), '--merge-canvas-aspect': String(mergeCanvasAspect()) }} onPointerMove={(event) => { moveMergeLogoPointer(event); moveMergeTextPointer(event); }} onPointerUp={(event) => { endMergeLogoPointer(event); endMergeTextPointer(event); }} onPointerCancel={(event) => { endMergeLogoPointer(event); endMergeTextPointer(event); }}>
+                  <Show when={mergeVideoPreviewUrl()} fallback={<div class="merge-preview-empty"><FileVideo size={20} /><span>Chưa có video xem trước</span></div>}>
+                    {(src) => <video class="merge-preview-video" src={src()} controls muted playsinline preload="metadata" />}
+                  </Show>
+                  <Show when={mergeLogoEnabled() && mergeLogo() && mergeLogoUrl()}><div class="merge-preview-logo" classList={{ dragging: mergeLogoDragging() }} role="group" tabindex="0" aria-label="Logo trong preview gộp video" title="Kéo để di chuyển · kéo góc để đổi kích thước · dùng phím mũi tên để di chuyển" style={{ left: `${(mergeLogo()?.x ?? 0) * 100}%`, top: `${(mergeLogo()?.y ?? 0) * 100}%`, width: `${(mergeLogo()?.width ?? 0) * 100}%`, height: `${(mergeLogo()?.height ?? 0) * 100}%`, opacity: String(mergeLogo()?.opacity ?? 1) }} onKeyDown={nudgeMergeLogo} onPointerDown={(event) => beginMergeLogoPointer(event, 'move')} onPointerUp={endMergeLogoPointer} onPointerCancel={endMergeLogoPointer}>
+                    <img src={mergeLogoUrl()} alt="Logo trên video gộp" draggable={false} onLoad={(event) => { const image = event.currentTarget; if (image.naturalHeight > 0) setMergeLogoImageAspect(image.naturalWidth / image.naturalHeight); }} />
+                    <button class="merge-preview-resize" type="button" aria-label="Kéo để đổi kích thước logo" onPointerDown={(event) => beginMergeLogoPointer(event, 'resize')} onPointerUp={endMergeLogoPointer} onPointerCancel={endMergeLogoPointer} />
+                  </div></Show>
+                  <Show when={mergeTextEnabled() && mergeText().text.trim()}><div class="merge-preview-text" classList={{ dragging: mergeTextDragging() }} role="group" tabindex="0" aria-label="Chữ trong preview gộp video" title="Kéo để di chuyển · kéo góc để đổi kích thước · dùng phím mũi tên để di chuyển" style={{ left: `${mergeText().x * 100}%`, top: `${mergeText().y * 100}%`, width: `${mergeText().width * 100}%`, height: `${mergeText().height * 100}%`, opacity: String(mergeText().opacity), 'font-family': `"${mergeText().fontFamily}", sans-serif`, 'font-size': `${mergeText().fontSize * 100 / Math.max(mergeCanvasWidth(), 1)}cqw`, 'font-weight': String(mergeText().fontWeight), color: mergeText().color, 'text-align': mergeText().alignment }} onKeyDown={nudgeMergeText} onPointerDown={(event) => beginMergeTextPointer(event, 'move')} onPointerUp={endMergeTextPointer} onPointerCancel={endMergeTextPointer}>
+                    <span>{mergeText().text}</span><button class="merge-preview-resize" type="button" aria-label="Kéo để đổi kích thước chữ" onPointerDown={(event) => beginMergeTextPointer(event, 'resize')} onPointerUp={endMergeTextPointer} onPointerCancel={endMergeTextPointer} />
+                  </div></Show>
+                </div>
+              </div>
+              <Show when={mergeLogoEnabled() && mergeLogo()}><div class="merge-logo-controls"><label><span>Độ mờ logo <strong>{Math.round((mergeLogo()?.opacity ?? 1) * 100)}%</strong></span><input type="range" min="0" max="100" step="1" value={Math.round((mergeLogo()?.opacity ?? 1) * 100)} disabled={taskRunning()} onInput={(event) => { const logo = mergeLogo(); if (logo) setMergeLogo({ ...logo, opacity: Number(event.currentTarget.value) / 100 }); }} /></label><label><span>Kích thước logo <strong>{Math.round((mergeLogo()?.width ?? 0) * 100)}% khung</strong></span><input type="range" min="3" max="100" step="1" value={Math.round((mergeLogo()?.width ?? 0.16) * 100)} disabled={taskRunning()} onInput={(event) => resizeMergeLogoWidth(Number(event.currentTarget.value))} /></label><label class="merge-logo-aspect"><input type="checkbox" checked={mergeLogo()?.maintainAspectRatio ?? true} disabled={taskRunning()} onChange={(event) => { const logo = mergeLogo(); if (logo) setMergeLogo({ ...logo, maintainAspectRatio: event.currentTarget.checked }); }} /><span>Giữ tỷ lệ ảnh</span></label></div></Show>
+            </Show>
             <div class="merge-output-hint"><span>File mặc định</span><code>merged_{new Date().toISOString().slice(0, 10).replaceAll('-', '')}_HHMMSS.mp4</code></div>
             <div class="merge-action-row"><div><strong>{videos().length >= 2 ? `${videos().length} video · ${formatTime(videos().reduce((total, video) => total + video.duration, 0))}` : 'Cần ít nhất 2 video'}</strong><small>{videos().length >= 2 ? 'Stream tương thích sẽ được ghép không mã hóa lại; video khác định dạng được chuẩn hóa.' : 'Chọn thư mục và sắp thứ tự các video trước khi gộp.'}</small></div><button class="button button-primary" type="button" disabled={videos().length < 2 || !mergeOutput() || taskRunning()} onClick={() => void startMerge()}><Show when={mergeStarting()} fallback={<Merge size={15} />}><LoaderCircle size={15} class="spin" /></Show>{mergeStarting() ? 'Đang gộp…' : 'Gộp video'}</button></div>
             <Show when={mergeStarting() || mergeProgress()?.status === 'completed'}><div class="video-tool-progress-track"><span style={{ width: `${Math.round((mergeProgress()?.progress ?? 0) * 100)}%` }} /></div><div class="video-tool-progress-meta"><span>{mergeProgress()?.message ?? 'Đang chuẩn bị…'}</span><strong>{Math.round((mergeProgress()?.progress ?? 0) * 100)}%</strong></div></Show>

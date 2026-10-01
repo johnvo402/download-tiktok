@@ -1,4 +1,4 @@
-use crate::project_service::{BlurRegion, Project, ProjectLogo, ProjectStore, SubtitleSettings};
+use crate::project_service::{BlurRegion, Project, ProjectLogo, ProjectStore, ProjectTextOverlay, SubtitleSettings};
 use crate::video_service::resolve_project_file;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -18,6 +18,8 @@ pub struct VisualSettings {
     pub subtitle: SubtitleSettings,
     pub blur_regions: Vec<BlurRegion>,
     pub logos: Vec<ProjectLogo>,
+    #[serde(default)]
+    pub text_overlays: Vec<ProjectTextOverlay>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -52,13 +54,44 @@ pub fn save_visual_settings(
 ) -> Result<Project, String> {
     validate_subtitle_settings(&settings.subtitle)?;
     validate_blur_regions(&settings.blur_regions)?;
+    validate_text_overlays(&settings.text_overlays)?;
 
     let mut project = store.get(project_id)?;
     validate_logos(store, project_id, &settings.logos)?;
     project.subtitle = settings.subtitle;
     project.blur_regions = settings.blur_regions;
     project.logos = settings.logos;
+    project.text_overlays = settings.text_overlays;
     store.update_project(&project)
+}
+
+fn validate_text_overlays(overlays: &[ProjectTextOverlay]) -> Result<(), String> {
+    let mut ids = std::collections::HashSet::new();
+    for overlay in overlays {
+        if overlay.id.is_empty() || !ids.insert(&overlay.id) {
+            return Err("Mã lớp chữ không hợp lệ hoặc bị trùng.".into());
+        }
+        if overlay.text.chars().count() > 4_000 {
+            return Err("Nội dung lớp chữ vượt quá 4.000 ký tự.".into());
+        }
+        if overlay.text.chars().any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t')) {
+            return Err("Nội dung lớp chữ chứa ký tự không hỗ trợ.".into());
+        }
+        if ![overlay.x, overlay.y, overlay.width, overlay.height, overlay.opacity].into_iter().all(f64::is_finite)
+            || overlay.x < 0.0 || overlay.y < 0.0 || overlay.width <= 0.0 || overlay.height <= 0.0
+            || overlay.x + overlay.width > 1.0 + 1e-9 || overlay.y + overlay.height > 1.0 + 1e-9
+            || !(0.0..=1.0).contains(&overlay.opacity)
+            || !(8..=240).contains(&overlay.font_size)
+            || !(100..=900).contains(&overlay.font_weight)
+            || !["left", "center", "right"].contains(&overlay.alignment.as_str())
+            || overlay.color.len() != 7 || !overlay.color.starts_with('#')
+            || !overlay.color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
+            || overlay.font_family.trim().is_empty() || overlay.font_family.len() > 80
+        {
+            return Err("Thuộc tính lớp chữ không hợp lệ.".into());
+        }
+    }
+    Ok(())
 }
 
 pub fn update_subtitle_settings(
@@ -101,6 +134,7 @@ pub fn import_logo(
         enabled: true,
         opacity: 1.0,
         maintain_aspect_ratio: true,
+        merge_only: false,
     };
     project.logos.push(logo.clone());
     if let Err(error) = store.update_project(&project) {
@@ -594,6 +628,7 @@ mod tests {
                 subtitle: style,
                 blur_regions: vec![region],
                 logos: vec![],
+                text_overlays: vec![],
             },
         )
         .unwrap();

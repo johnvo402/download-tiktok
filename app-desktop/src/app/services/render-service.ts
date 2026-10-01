@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 
 export interface ExportOptions {
   quality: 'fast' | 'balanced' | 'high';
+  videoCodec: 'h264' | 'hevc';
   encoder?: 'cpu' | 'nvidia';
   videoBitrateKbps?: number | null;
   applyBlur: boolean;
@@ -46,6 +47,8 @@ export interface ExportValidation {
 export interface ExportCapabilities {
   nvidiaEncoderAvailable: boolean;
   nvidiaMessage: string;
+  nvidiaHevcEncoderAvailable: boolean;
+  nvidiaHevcMessage: string;
 }
 
 export interface ExportHistoryEntry {

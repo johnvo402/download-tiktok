@@ -54,7 +54,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e .\python
 ```
 
-Lệnh này cài faster-whisper cùng dependency cho TikTok Drama Downloader (Playwright, yt-dlp và curl-cffi). Worker giao tiếp với Rust qua JSON Lines trên stdin/stdout; log chẩn đoán chỉ đi qua stderr. Nếu dùng một Python khác, đặt biến `LOCALIZATION_PYTHON` tới executable trước khi chạy Tauri. TikTok downloader dùng Chrome đã cài trên máy. FFmpeg dùng executable `ffmpeg`/`ffprobe` trên `PATH`.
+Lệnh này cài faster-whisper cùng dependency cho TikTok Drama Downloader (Playwright và curl-cffi). Downloader dùng Chrome đã cài để mở series, nhận diện URL video trực tiếp từ trang và truyền dữ liệu vào file theo từng khối. Worker giao tiếp với Rust qua JSON Lines trên stdin/stdout; log chẩn đoán chỉ đi qua stderr. Nếu dùng một Python khác, đặt biến `LOCALIZATION_PYTHON` tới executable trước khi chạy Tauri. FFmpeg dùng executable `ffmpeg`/`ffprobe` trên `PATH`.
 
 Model faster-whisper không nằm trong installer hoặc repository. Khi người dùng bấm **Generate Transcript**, ứng dụng kiểm tra model cache và hỏi xác nhận trước lần tải đầu tiên; model được lưu trong app-cache dùng chung cho các project để tránh đường dẫn cache quá dài trên Windows. Mặc định là `small`, `Auto`, và tự nhận dạng ngôn ngữ. Chọn CPU nếu CUDA không có hoặc không tương thích.
 

@@ -127,6 +127,8 @@ export class BatchVideoRunner {
         project = await projectService.get(project.id);
         const options: ExportOptions = {
           quality: 'balanced',
+          videoCodec: 'h264',
+          encoder: 'cpu',
           applyBlur: true,
           applyLogos: true,
           burnSubtitles: project.subtitle.enabled,

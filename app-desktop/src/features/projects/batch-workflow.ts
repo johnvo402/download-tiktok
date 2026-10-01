@@ -201,7 +201,7 @@ export class BatchWorkflowRunner {
           const latest = await projectService.get(project.id);
           if (!transcript) transcript = await projectService.getTranscript(project.id);
           const options: ExportOptions = {
-            quality: 'balanced', applyBlur: true, applyLogos: true,
+            quality: 'balanced', videoCodec: 'h264', encoder: 'cpu', applyBlur: true, applyLogos: true,
             burnSubtitles: latest.subtitle.enabled, enableSubtitleBlurOverride: false,
             includeOriginalAudio: !latest.dubbing.muteOriginal,
             includeDubbing: latest.dubbing.enabled, ducking: latest.dubbing.duckingEnabled,

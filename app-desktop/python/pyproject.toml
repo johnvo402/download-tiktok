@@ -10,7 +10,6 @@ requires-python = ">=3.10"
 dependencies = [
     "faster-whisper>=1.1,<2",
     "playwright>=1.55,<2",
-    "yt-dlp>=2025.3.31,<2027",
     "curl-cffi>=0.13,<1",
 ]
 

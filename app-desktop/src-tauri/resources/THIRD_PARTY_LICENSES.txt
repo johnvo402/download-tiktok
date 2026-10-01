@@ -25,8 +25,8 @@ The worker bundles third-party Python packages listed in
 remain with their authors. Corresponding package license files are shipped in
 the worker's `_internal/*.dist-info` directories where available. Review
 `ai-worker/THIRD_PARTY_NOTICES.txt` and the exact bundled inventory before
-redistribution. The worker includes the TikTok downloader runtime (Playwright,
-yt-dlp, and curl-cffi) as well as speech recognition and TTS dependencies.
+redistribution. The worker includes the TikTok downloader runtime (Playwright
+and curl-cffi) as well as speech recognition and TTS dependencies.
 
 Optional AI installer
 ---------------------
