@@ -5,6 +5,7 @@ import { optionalRuntimeService, type OptionalFeature, type OptionalRuntimeStatu
 import Modal from '../../../shared/components/Modal';
 
 const FEATURE_TEXT: Record<OptionalFeature, { title: string; description: string }> = {
+  whisper_openvino: { title: 'Whisper · Intel GPU', description: 'Nhận dạng lời thoại trên GPU Intel.' },
   ocr_openvino: {
     title: 'Tăng tốc Intel · đọc chữ',
     description: 'Dùng model OCR hiện có trên GPU Intel.',

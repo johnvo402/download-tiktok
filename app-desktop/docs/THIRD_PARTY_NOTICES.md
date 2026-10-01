@@ -68,3 +68,15 @@ Preserve upstream wheel LICENSE/NOTICE files in the optional runtime.
 
 - [OpenVINO source and licenses](https://github.com/openvinotoolkit/openvino)
 - [RapidOCR source and license](https://github.com/RapidAI/RapidOCR)
+### Intel Whisper (optional)
+
+OpenVINO GenAI 2026.4.0.0 and OpenVINO Tokenizers 2026.4.0.0 use Apache-2.0,
+matching OpenVINO 2026.4.0. They are installed only on request, outside the base
+worker. Official `OpenVINO/whisper-{tiny,base,small}-fp16-ov` multilingual IR
+artifacts are pinned to repository commits in `worker/asr/openvino-models.json`.
+Their model cards declare Apache-2.0; retain upstream notices when distributing
+weights. Native inference needs no PyTorch or conversion tools.
+
+Sources: https://github.com/openvinotoolkit/openvino.genai,
+https://github.com/openvinotoolkit/openvino_tokenizers,
+https://huggingface.co/OpenVINO/whisper-tiny-fp16-ov.

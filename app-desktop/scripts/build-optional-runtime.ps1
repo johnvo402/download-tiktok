@@ -50,4 +50,5 @@ Get-ChildItem -LiteralPath $WorkerRoot -Filter "*.py" -File -Recurse | ForEach-O
     New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
     Copy-Item -LiteralPath $_.FullName -Destination $destination -Force
 }
+Copy-Item -LiteralPath (Join-Path $WorkerRoot "asr/openvino-models.json") -Destination (Join-Path $Source "worker/asr/openvino-models.json") -Force
 Write-Host "Optional AI installer and source staged for the release."

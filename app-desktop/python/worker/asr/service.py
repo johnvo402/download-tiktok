@@ -184,6 +184,8 @@ def inspect_environment(
     cache_dir: str,
     legacy_cache_dir: str | None = None,
     alignment_language: str | None = None,
+    engine: str = "fasterWhisper",
+    device: str = "cpu",
 ) -> dict[str, Any]:
     if model_name not in SUPPORTED_MODELS:
         raise ValueError(f"Unsupported faster-whisper model: {model_name}")
@@ -224,9 +226,27 @@ def inspect_environment(
         and _alignment_cache_is_complete(Path(cache_dir) / "whisperx", alignment_language)
     )
 
+    from worker.asr.openvino_models import inspect_model
+    from worker.asr.backends import resolve_asr_backend
+    intel = inspect_model(model_name, cache_dir)
+    capabilities = dict(intel["backends"])
+    capabilities["openvino"] = capabilities["openvino"] and intel["intelModelCached"]
+    resolved = None
+    selection_error = None
+    try:
+        resolved = resolve_asr_backend(engine, device, capabilities)
+    except (ValueError, RuntimeError) as error:
+        selection_error = str(error)
+    use_intel = device == "openvino" or engine == "openVinoWhisper" or resolved and resolved.device == "openvino"
     return {
-        "workerInstalled": installed,
-        "modelCached": cached,
+        **intel,
+        "ctranslateModelCached": cached,
+        "resolvedBackend": resolved.device if resolved else None,
+        "resolvedEngine": resolved.engine if resolved else None,
+        "resolvedLabel": resolved.label if resolved else None,
+        "selectionError": selection_error,
+        "workerInstalled": bool(intel["intelRuntimeInstalled"]) if use_intel else installed,
+        "modelCached": intel["intelModelCached"] if use_intel else cached,
         "cudaAvailable": cuda_available,
         "whisperXInstalled": whisperx_installed,
         "alignmentModelCached": alignment_cached,
@@ -503,11 +523,11 @@ def transcribe(request: dict[str, Any], emit: Emitter) -> None:
     cache_dir = Path(str(request["cacheDir"]))
     whisperx_cache_dir = Path(str(request.get("whisperxCacheDir", cache_dir / "whisperx")))
 
-    if engine not in {"fasterWhisper", "whisperX"}:
+    if engine not in {"auto", "fasterWhisper", "openVinoWhisper", "whisperX"}:
         raise ValueError("Unsupported Speech Recognition engine")
     if model_name not in SUPPORTED_MODELS:
         raise ValueError(f"Unsupported faster-whisper model: {model_name}")
-    if device not in {"auto", "cpu", "cuda"}:
+    if device not in {"auto", "cpu", "cuda", "openvino"}:
         raise ValueError(f"Unsupported device: {device}")
     if not audio_path.is_file():
         raise FileNotFoundError("Extracted WAV audio was not found")
@@ -523,48 +543,66 @@ def transcribe(request: dict[str, Any], emit: Emitter) -> None:
         os.environ["HF_HOME"] = str(whisperx_cache_dir)
         os.environ["NLTK_DATA"] = str(whisperx_cache_dir / "nltk_data")
 
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError as error:
-        raise RuntimeError("Bộ nhận dạng lời thoại chưa sẵn sàng. Hãy cập nhật hoặc cài lại JC AI.") from error
-
-    pyav_version = _install_pyav_metadata_errors_compat()
-    LOGGER.info("Speech Recognition dependencies: PyAV %s; model=%s; requested device=%s", pyav_version, model_name, device)
-
-    model_dir = _model_directory(cache_dir, model_name)
-    if not _model_is_complete(model_dir):
-        raise RuntimeError(f"Model {model_name} chưa được cài. Mở Cài đặt → Speech Recognition để cài model trước khi tạo transcript.")
-    LOGGER.info("Loading model %s on %s", model_name, device)
-    try:
-        compute_type = "default" if device == "auto" else "int8" if device == "cpu" else "float16"
-        cpu_threads = _cpu_thread_budget() if device in {"cpu", "auto"} else 4
-        # Load only from the validated local directory. Passing the model name
-        # here would allow faster-whisper to contact Hugging Face on every run.
-        model = _load_whisper_model_with_progress(
-            model_name,
-            model_dir,
-            device,
-            compute_type,
-            cpu_threads,
-            emit,
-        )
-        LOGGER.info("Speech Recognition compute type %s, CPU thread budget %s", compute_type, cpu_threads)
-    except Exception as error:
-        if device == "cuda":
-            raise RuntimeError(f"CUDA model initialization failed. Select CPU or Auto in Speech Recognition settings. {error}") from error
-        raise
-
-    progress(emit, "recognizing", "Đang nhận dạng lời thoại…", 0.0)
-
-    def report_progress(fraction: float) -> None:
-        progress(emit, "recognizing", "Đang nhận dạng lời thoại…", min(fraction, 0.99))
-
-    results, detected_language = _transcribe_audio(
-        model,
-        str(audio_path),
-        language,
-        on_progress=report_progress,
-    )
+    from worker.asr.backends import FasterWhisperBackend, resolve_asr_backend, runtime_capabilities, normalize_segments
+    from worker.asr.openvino_models import model_ready, model_directory
+    from worker.asr.openvino_backend import OpenVinoWhisperBackend, wav_duration
+    capabilities = runtime_capabilities()
+    capabilities["openvino"] = capabilities["openvino"] and model_ready(cache_dir, model_name)
+    selection = resolve_asr_backend(engine, device, capabilities)
+    auto_fallback = device == "auto" and engine in {"auto", "fasterWhisper", "whisperX"}
+    duration = wav_duration(audio_path)
+    started = time.monotonic()
+    LOGGER.info("ASR requested engine=%s device=%s; capabilities=%s; resolved=%s; model=%s", engine, device, capabilities, selection, model_name)
+    backend = None
+    while True:
+        try:
+            progress(emit, "model-loading", f"Đang nạp Whisper {model_name} · {selection.label}…")
+            if selection.device == "openvino":
+                backend = OpenVinoWhisperBackend(model_directory(cache_dir, model_name),
+                    cache_dir.parent.parent / "runtimes/advanced/compiled-whisper")
+            else:
+                model_dir = _model_directory(cache_dir, model_name)
+                if not _model_is_complete(model_dir):
+                    raise RuntimeError(f"Model {model_name} cho CPU/NVIDIA chưa được cài. Tải model trong Cài đặt → Nhận dạng lời thoại.")
+                backend = FasterWhisperBackend(model_name, model_dir, selection.device, emit)
+            loading_stop = threading.Event()
+            loading_started = time.monotonic()
+            loading_thread = None
+            if selection.device == "openvino":
+                def report_loading() -> None:
+                    while not loading_stop.wait(10):
+                        progress(emit, "model-loading", f"Đang nạp Whisper {model_name} · Intel GPU · {int(time.monotonic()-loading_started)} giây")
+                loading_thread = threading.Thread(target=report_loading, daemon=True)
+                loading_thread.start()
+            try:
+                backend.load()
+            finally:
+                loading_stop.set()
+                if loading_thread: loading_thread.join(timeout=1)
+            def report_progress(fraction: float) -> None:
+                progress(emit, "recognizing", f"Đang nhận dạng · {selection.label} · {fraction * duration:.0f}/{duration:.0f} giây", min(fraction, 0.99))
+            results, detected_language = backend.transcribe(audio_path, language, report_progress)
+            results = normalize_segments(results, duration)
+            if not results:
+                raise RuntimeError("Không nhận dạng được lời thoại trong audio.")
+            model = backend.model if isinstance(backend, FasterWhisperBackend) else None
+            device = selection.device
+            break
+        except InterruptedError:
+            if backend: backend.close()
+            raise
+        except Exception:
+            if backend:
+                backend.close()
+            if not auto_fallback or selection.device == "cpu":
+                raise
+            LOGGER.exception("Auto ASR backend %s failed", selection.device)
+            capabilities[selection.device] = False
+            selection = resolve_asr_backend(engine, "auto", capabilities)
+            progress(emit, "backend-fallback", f"Bộ nhận dạng tăng tốc gặp lỗi; đang chuyển sang {selection.label}.")
+    LOGGER.info("ASR complete backend=%s model=%s audio=%.2fs elapsed=%.2fs RTF=%.3f segments=%d language=%s",
+                selection.device, model_name, duration, time.monotonic()-started, (time.monotonic()-started)/duration, len(results), detected_language)
+    backend.close()
 
     if engine == "whisperX":
         if detected_language and detected_language != language:

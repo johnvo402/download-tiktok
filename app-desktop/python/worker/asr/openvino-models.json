@@ -1,0 +1,209 @@
+{
+  "tiny": {
+    "repository": "OpenVINO/whisper-tiny-fp16-ov",
+    "family": "whisper",
+    "revision": "44662d68573bd732e50fc295d1c1ec47e77f67df",
+    "backend": "openvino",
+    "estimatedBytes": 78989789,
+    "files": [
+      {
+        "name": "config.json",
+        "size": 1320,
+        "sha256": null
+      },
+      {
+        "name": "generation_config.json",
+        "size": 3742,
+        "sha256": null
+      },
+      {
+        "name": "openvino_decoder_model.bin",
+        "size": 59104668,
+        "sha256": "c396b01cec40fe6873d7aa5a367ab8204175207cef4cb829027285f6200e69cb"
+      },
+      {
+        "name": "openvino_decoder_model.xml",
+        "size": 342799,
+        "sha256": null
+      },
+      {
+        "name": "openvino_detokenizer.bin",
+        "size": 736181,
+        "sha256": "2542d1fe6c4c5d838e7b7c61b24996b94ae0cb54e64ff6dbaab2b9dd5ddd7ca0"
+      },
+      {
+        "name": "openvino_detokenizer.xml",
+        "size": 9699,
+        "sha256": null
+      },
+      {
+        "name": "openvino_encoder_model.bin",
+        "size": 16416874,
+        "sha256": "3a5370a29ae8c03c1ec604414c2fafed0469ad7ff85a62c88e368ab7e1be6eb6"
+      },
+      {
+        "name": "openvino_encoder_model.xml",
+        "size": 165493,
+        "sha256": null
+      },
+      {
+        "name": "openvino_tokenizer.bin",
+        "size": 1898933,
+        "sha256": "846f3c65f7a71f120fce7aaaf41b342f0767eb13e3c4e7c2a54f1d49b5c38fda"
+      },
+      {
+        "name": "openvino_tokenizer.xml",
+        "size": 27011,
+        "sha256": null
+      },
+      {
+        "name": "preprocessor_config.json",
+        "size": 356,
+        "sha256": null
+      },
+      {
+        "name": "tokenizer_config.json",
+        "size": 282713,
+        "sha256": null
+      }
+    ]
+  },
+  "small": {
+    "repository": "OpenVINO/whisper-small-fp16-ov",
+    "family": "whisper",
+    "revision": "2410d022171ca8a97343182f88eec8807a324db9",
+    "backend": "openvino",
+    "estimatedBytes": 487859534,
+    "files": [
+      {
+        "name": "config.json",
+        "size": 1325,
+        "sha256": null
+      },
+      {
+        "name": "generation_config.json",
+        "size": 3841,
+        "sha256": null
+      },
+      {
+        "name": "openvino_decoder_model.bin",
+        "size": 307161756,
+        "sha256": "31ce50290e94bf7d59e9011514cc62fc8d24621026a1aba9982c02a8ba217e29"
+      },
+      {
+        "name": "openvino_decoder_model.xml",
+        "size": 960207,
+        "sha256": null
+      },
+      {
+        "name": "openvino_detokenizer.bin",
+        "size": 736181,
+        "sha256": "2542d1fe6c4c5d838e7b7c61b24996b94ae0cb54e64ff6dbaab2b9dd5ddd7ca0"
+      },
+      {
+        "name": "openvino_detokenizer.xml",
+        "size": 9699,
+        "sha256": null
+      },
+      {
+        "name": "openvino_encoder_model.bin",
+        "size": 176308330,
+        "sha256": "771c2f08bc68f51d19d0c1e5ce13111ed9828a7e475df98eddb4043dd756f3f2"
+      },
+      {
+        "name": "openvino_encoder_model.xml",
+        "size": 469182,
+        "sha256": null
+      },
+      {
+        "name": "openvino_tokenizer.bin",
+        "size": 1898933,
+        "sha256": "846f3c65f7a71f120fce7aaaf41b342f0767eb13e3c4e7c2a54f1d49b5c38fda"
+      },
+      {
+        "name": "openvino_tokenizer.xml",
+        "size": 27011,
+        "sha256": null
+      },
+      {
+        "name": "preprocessor_config.json",
+        "size": 356,
+        "sha256": null
+      },
+      {
+        "name": "tokenizer_config.json",
+        "size": 282713,
+        "sha256": null
+      }
+    ]
+  },
+  "base": {
+    "repository": "OpenVINO/whisper-base-fp16-ov",
+    "family": "whisper",
+    "revision": "84fbe975a79a8c996fd32c036558f29e2db6670f",
+    "backend": "openvino",
+    "estimatedBytes": 148885420,
+    "files": [
+      {
+        "name": "config.json",
+        "size": 1320,
+        "sha256": null
+      },
+      {
+        "name": "generation_config.json",
+        "size": 3802,
+        "sha256": null
+      },
+      {
+        "name": "openvino_decoder_model.bin",
+        "size": 104006812,
+        "sha256": "36f67da0ba9327bf817a258855bf696ad01cbf899268bc6c06f7e10c448f0427"
+      },
+      {
+        "name": "openvino_decoder_model.xml",
+        "size": 496004,
+        "sha256": null
+      },
+      {
+        "name": "openvino_detokenizer.bin",
+        "size": 736181,
+        "sha256": "2542d1fe6c4c5d838e7b7c61b24996b94ae0cb54e64ff6dbaab2b9dd5ddd7ca0"
+      },
+      {
+        "name": "openvino_detokenizer.xml",
+        "size": 9699,
+        "sha256": null
+      },
+      {
+        "name": "openvino_encoder_model.bin",
+        "size": 41181290,
+        "sha256": "9ee2fa771d004d1af47ffc7da0909f2025d43b7df05e5c92532d959b9c2db234"
+      },
+      {
+        "name": "openvino_encoder_model.xml",
+        "size": 241299,
+        "sha256": null
+      },
+      {
+        "name": "openvino_tokenizer.bin",
+        "size": 1898933,
+        "sha256": "846f3c65f7a71f120fce7aaaf41b342f0767eb13e3c4e7c2a54f1d49b5c38fda"
+      },
+      {
+        "name": "openvino_tokenizer.xml",
+        "size": 27011,
+        "sha256": null
+      },
+      {
+        "name": "preprocessor_config.json",
+        "size": 356,
+        "sha256": null
+      },
+      {
+        "name": "tokenizer_config.json",
+        "size": 282713,
+        "sha256": null
+      }
+    ]
+  }
+}

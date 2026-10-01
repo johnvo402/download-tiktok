@@ -7,6 +7,11 @@ import uuid
 from pathlib import Path, PurePosixPath
 from typing import Iterable
 
+# Backend artifacts share this integrity contract. The family/backend-specific
+# repository, pinned revision, sizes and upstream hashes live next to each
+# engine (for Whisper IR: asr/openvino-models.json). Manifests verify the local
+# files; they never trigger a network request or mix incompatible formats.
+
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()

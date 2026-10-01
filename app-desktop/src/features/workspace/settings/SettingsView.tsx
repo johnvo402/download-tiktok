@@ -1,3 +1,4 @@
+import IntelWhisperCard from "./IntelWhisperCard";
 import { createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { useNavigate, useSearchParams } from '@solidjs/router';
 import { convertFileSrc } from '@tauri-apps/api/core';
@@ -235,7 +236,7 @@ export default function SettingsView() {
     setAsrEnvironment(undefined);
     setAsrEnvironmentError('');
     try {
-      const environment = await projectService.getAsrEnvironment(model, language);
+      const environment = await projectService.getAsrEnvironment(model, language, settings()?.asr.engine, settings()?.asr.device);
       if (revision === asrEnvironmentRevision) setAsrEnvironment(environment);
     } catch (error) {
       if (revision === asrEnvironmentRevision) setAsrEnvironmentError(error instanceof Error ? error.message : 'Không thể kiểm tra Speech Recognition.');
@@ -718,25 +719,33 @@ export default function SettingsView() {
               <div class="settings-card asr-settings-card">
                 <div class="tts-model-status-row">
                   <div class="provider-card-icon"><AudioLines size={17} /></div>
-                  <div class="provider-card-main"><span class="provider-eyebrow">CHẠY TRÊN THIẾT BỊ</span><h3>{settings()!.asr.engine === 'whisperX' ? 'WhisperX' : 'faster-whisper'}</h3>
-                    <p>{asrEnvironmentLoading() ? 'Đang kiểm tra thành phần nhận dạng…' : !asrEnvironment()?.workerInstalled ? 'Bộ xử lý chưa sẵn sàng.' : settings()!.asr.engine === 'whisperX' && !asrEnvironment()?.whisperXInstalled ? 'Cài WhisperX bên dưới để dùng cách nhận dạng này.' : !asrEnvironment()?.modelCached ? `Model faster-whisper ${settings()!.asr.model} chưa được cài.` : settings()!.asr.engine === 'whisperX' ? settings()!.asr.language === 'auto' ? 'Chọn ngôn ngữ cụ thể để cài model căn chỉnh thời gian.' : asrEnvironment()?.alignmentModelCached ? `Model ASR ${settings()!.asr.model} và căn chỉnh ${settings()!.asr.language} đã sẵn sàng.` : `Model ASR ${settings()!.asr.model} đã có; chưa cài model căn chỉnh ${settings()!.asr.language}.` : `Model ${settings()!.asr.model} đã được cài trên thiết bị.`}</p>
+                  <div class="provider-card-main"><span class="provider-eyebrow">CHẠY TRÊN THIẾT BỊ</span><h3>{settings()!.asr.engine === 'whisperX' ? 'WhisperX' : settings()!.asr.engine === 'openVinoWhisper' ? 'Whisper · Intel GPU' : settings()!.asr.engine === 'auto' ? 'Whisper · Tự động' : 'faster-whisper'}</h3>
+                    <p>{asrEnvironmentLoading() ? 'Đang kiểm tra thành phần nhận dạng…' : !asrEnvironment()?.workerInstalled ? 'Bộ xử lý chưa sẵn sàng.' : settings()!.asr.engine === 'whisperX' && !asrEnvironment()?.whisperXInstalled ? 'Cài WhisperX bên dưới để dùng cách nhận dạng này.' : !asrEnvironment()?.modelCached ? `Model ${settings()!.asr.model} cho thiết bị đang chọn chưa được cài.` : settings()!.asr.engine === 'whisperX' ? settings()!.asr.language === 'auto' ? 'Chọn ngôn ngữ cụ thể để cài model căn chỉnh thời gian.' : asrEnvironment()?.alignmentModelCached ? `Model ASR ${settings()!.asr.model} và căn chỉnh ${settings()!.asr.language} đã sẵn sàng.` : `Model ASR ${settings()!.asr.model} đã có; chưa cài model căn chỉnh ${settings()!.asr.language}.` : `Model ${settings()!.asr.model} đã được cài trên thiết bị.`}</p>
                   </div>
                   <span class="provider-status-dot" classList={{ 'provider-status-dot-ready': !!asrEnvironment()?.modelCached && (settings()!.asr.engine !== 'whisperX' || (!!asrEnvironment()?.whisperXInstalled && !!asrEnvironment()?.alignmentModelCached)) }} />
                 </div>
                 <Show when={!asrEnvironmentLoading() && !asrEnvironment()?.workerInstalled}>
-                  <div class="tts-install-instructions"><strong>Thành phần nhận dạng chưa sẵn sàng</strong><span>Hãy cập nhật hoặc cài lại JC AI. Model chỉ tải khi bạn xác nhận.</span></div>
+                  <div class="tts-install-instructions"><strong>Thành phần nhận dạng chưa sẵn sàng</strong><span>{settings()!.asr.device === 'openvino' || settings()!.asr.engine === 'openVinoWhisper' ? 'Cài tăng tốc Intel ở mục bên dưới, sau đó tải model bạn muốn sử dụng.' : 'Hãy cập nhật hoặc cài lại JC AI. Model chỉ tải khi bạn xác nhận.'}</span></div>
                 </Show>
                 <div class="provider-config-grid">
-                  <label class="provider-field"><span>Cách nhận dạng</span><select class="settings-select" value={settings()!.asr.engine} onChange={(event) => updateAsr({ engine: event.currentTarget.value as AppSettings['asr']['engine'] })}><option value="fasterWhisper">faster-whisper · nhận dạng nhanh</option><option value="whisperX">WhisperX · căn chính xác thời gian</option></select></label>
-                  <label class="provider-field"><span>Model ASR</span><select class="settings-select" value={settings()!.asr.model} onChange={(event) => { const model = event.currentTarget.value as AppSettings['asr']['model']; updateAsr({ model }); void refreshAsrEnvironment(model, settings()?.asr.language ?? 'auto'); }}><option value="tiny">tiny</option><option value="base">base</option><option value="small">small · khuyến nghị</option><option value="medium">medium</option><option value="large-v3">large-v3</option></select></label>
-                  <label class="provider-field"><span>Thiết bị</span><select class="settings-select" value={settings()!.asr.device} onChange={(event) => { chooseDevice('asr', event.currentTarget.value as 'cpu' | 'cuda'); if (cudaInstallTarget()) event.currentTarget.value = settings()!.asr.device; }}><option value="cpu">CPU</option><option value="cuda">NVIDIA · CUDA{asrEnvironment()?.cudaAvailable ? '' : ' · cài khi chọn'}</option></select></label>
+                  <label class="provider-field"><span>Cách nhận dạng</span><select class="settings-select" value={settings()!.asr.engine} onChange={(event) => { const engine = event.currentTarget.value as AppSettings['asr']['engine']; updateAsr({ engine, ...(engine === 'openVinoWhisper' ? { device: 'openvino' as const } : (engine === 'whisperX' || engine === 'fasterWhisper') && settings()!.asr.device === 'openvino' ? { device: 'cpu' as const } : {}) }); void refreshAsrEnvironment(); }}><option value="auto">Tự động · khuyên dùng</option><option value="openVinoWhisper">Whisper · Intel GPU</option><option value="fasterWhisper">faster-whisper · nhận dạng nhanh</option><option value="whisperX">WhisperX · căn chính xác thời gian</option></select></label>
+                  <label class="provider-field"><span>Model ASR</span><select class="settings-select" value={settings()!.asr.model} onChange={(event) => { const model = event.currentTarget.value as AppSettings['asr']['model']; updateAsr({ model }); void refreshAsrEnvironment(model, settings()?.asr.language ?? 'auto'); }}><option value="tiny">tiny</option><option value="base">base</option><option value="small">small · khuyến nghị</option><option value="medium" disabled={settings()!.asr.device === 'openvino' || settings()!.asr.engine === 'openVinoWhisper'}>medium</option><option value="large-v3" disabled={settings()!.asr.device === 'openvino' || settings()!.asr.engine === 'openVinoWhisper'}>large-v3</option></select></label>
+                  <label class="provider-field"><span>Thiết bị</span><select class="settings-select" value={settings()!.asr.device} onChange={(event) => {
+  const device = event.currentTarget.value as AppSettings['asr']['device'];
+  if (device === 'cuda') chooseDevice('asr', 'cuda');
+  else updateAsr({ device, ...(device === 'openvino' && settings()!.asr.engine !== 'openVinoWhisper' ? { engine: 'auto' as const } : {}) });
+  void refreshAsrEnvironment();
+}}>
+<option value="auto">Tự động</option><option value="cpu" disabled={settings()!.asr.engine === 'openVinoWhisper'}>CPU · INT8</option>
+<option value="cuda" disabled={settings()!.asr.engine === 'openVinoWhisper'}>NVIDIA · CUDA</option><option value="openvino" disabled={settings()!.asr.engine === 'whisperX'}>Intel GPU · OpenVINO</option>
+</select></label>
                   <Show when={settings()!.asr.engine !== 'whisperX'}><label class="provider-field"><span>Ngôn ngữ</span><select class="settings-select" value={settings()!.asr.language} onChange={(event) => { const language = event.currentTarget.value as AppSettings['asr']['language']; updateAsr({ language }); void refreshAsrEnvironment(settings()?.asr.model ?? 'small', language); }}><option value="auto">Tự nhận diện</option><option value="en">English</option><option value="vi">Tiếng Việt</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="zh">中文</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="es">Español</option></select></label></Show>
                 </div>
                 <Show when={settings()!.asr.engine === 'whisperX'}>
                   <div class="settings-info-note"><AudioLines size={15} /><span>WhisperX dùng mô hình nhận dạng đã cài, rồi căn lại thời gian theo ngôn ngữ. Hãy chọn ngôn ngữ cụ thể để dùng tính năng này.</span></div>
                   <OptionalAiRuntimeCard
                     embedded
-                    preferredProfile={settings()!.asr.device}
+                    preferredProfile={settings()!.asr.device === 'cuda' ? 'cuda' : 'cpu'}
                     feature="whisperx"
                     configuration={<div class="provider-config-grid"><label class="provider-field"><span>Ngôn ngữ để căn thời gian</span><select class="settings-select" value={settings()!.asr.language} onChange={(event) => { const language = event.currentTarget.value as AppSettings['asr']['language']; updateAsr({ language }); void refreshAsrEnvironment(settings()?.asr.model ?? 'small', language); }}><option value="auto">Chọn ngôn ngữ trước khi cài</option><option value="en">English</option><option value="vi">Tiếng Việt</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="zh">中文</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="es">Español</option></select></label></div>}
                     available={asrEnvironment()?.whisperXInstalled}
@@ -748,6 +757,9 @@ export default function SettingsView() {
                   />
                   <Show when={asrEnvironment()?.whisperXInstalled && asrEnvironment()?.alignmentModelCached}><span class="version-chip">Căn thời gian · {settings()!.asr.language} · Đã cài</span></Show>
                 </Show>
+                <div class="provider-help" role="status">Đang dùng: {asrEnvironment()?.resolvedLabel ?? 'Chưa sẵn sàng'} · CPU {asrEnvironment()?.backends?.cpu ? 'sẵn sàng' : 'chưa sẵn sàng'} · NVIDIA {asrEnvironment()?.cudaAvailable ? 'sẵn sàng' : 'chưa sẵn sàng'} · Intel {asrEnvironment()?.intelGpuAvailable ? 'sẵn sàng' : 'chưa sẵn sàng'}</div>
+                <Show when={asrEnvironment()?.selectionError}><p class="asr-config-warning" role="alert">{asrEnvironment()?.selectionError}</p></Show>
+                <Show when={settings()!.asr.engine !== 'whisperX'}><IntelWhisperCard model={settings()!.asr.model} environment={asrEnvironment()} onChanged={async () => { await refreshAsrEnvironment(); await refreshStorage(); }} /></Show>
                 <p class="provider-help">Audio được trộn về mono và nhận dạng một lượt. Chọn model lớn hơn nếu cần cải thiện khả năng nhận diện lời thoại nhanh hoặc khó nghe; WhisperX giúp căn thời gian chính xác hơn.</p>
                 <Show when={settings()!.asr.device === 'cuda' && asrEnvironment()?.workerInstalled && !asrEnvironment()?.cudaAvailable}><p class="asr-config-warning" role="alert">CUDA chưa sẵn sàng. Chọn lại NVIDIA trong mục Thiết bị để cài, hoặc dùng CPU.</p></Show>
                 <Show when={asrEnvironmentError()}><div class="provider-feedback provider-feedback-error" role="alert">{asrEnvironmentError()}</div></Show>
@@ -755,10 +767,10 @@ export default function SettingsView() {
                 <div class="provider-action-row">
                   <button class="button button-quiet provider-action-secondary" type="button" disabled={busy() || installingAsrModel() || installingWhisperXAlignment()} onClick={() => void saveSettings()}>{busy() ? 'Đang lưu…' : 'Lưu cấu hình'}</button>
                   <button class="button button-quiet provider-action-secondary" type="button" disabled={asrEnvironmentLoading() || installingAsrModel() || installingWhisperXAlignment()} onClick={() => void refreshAsrEnvironment()}>{asrEnvironmentLoading() ? 'Đang kiểm tra…' : 'Kiểm tra lại'}</button>
-                  <Show when={settings()!.asr.engine !== 'whisperX' && asrEnvironment()?.workerInstalled && !asrEnvironment()?.modelCached}>
+                  <Show when={settings()!.asr.engine !== 'whisperX' && settings()!.asr.device !== 'openvino' && settings()!.asr.engine !== 'openVinoWhisper' && asrEnvironment()?.workerInstalled && !asrEnvironment()?.ctranslateModelCached}>
                     <button class="button button-primary" type="button" disabled={busy() || installingAsrModel() || installingWhisperXAlignment() || asrEnvironmentLoading()} onClick={() => setShowAsrModelConfirm(true)}>{installingAsrModel() ? 'Đang cài model…' : `Cài model ${settings()!.asr.model}`}</button>
                   </Show>
-                  <Show when={asrEnvironment()?.modelCached}><span class="version-chip">Đã cài · {settings()!.asr.model}</span><button class="button button-quiet" type="button" disabled={removingAsrModel() || installingAsrModel() || installingWhisperXAlignment()} onClick={() => setShowRemoveAsrModelConfirm(true)}>{removingAsrModel() ? 'Đang gỡ…' : 'Gỡ model'}</button></Show>
+                  <Show when={asrEnvironment()?.ctranslateModelCached}><span class="version-chip">CPU/NVIDIA đã cài · {settings()!.asr.model}</span><button class="button button-quiet" type="button" disabled={removingAsrModel() || installingAsrModel() || installingWhisperXAlignment()} onClick={() => setShowRemoveAsrModelConfirm(true)}>{removingAsrModel() ? 'Đang gỡ…' : 'Gỡ model'}</button></Show>
                 </div>
               </div>
             </Show>
@@ -977,6 +989,7 @@ export default function SettingsView() {
                 <div class="storage-model-stat">
                   <small>Mô hình đã tải · tổng</small><strong>{storageUsage() ? formatBytes(storageUsage()!.modelsBytes) : '—'}</strong>
                   <div class="storage-model-breakdown">
+                    <div class="storage-model-location"><span><b>Whisper · Intel</b><small title={storageUsage()?.whisperIntelDirectory}>{storageUsage()?.whisperIntelDirectory ?? 'Model Whisper cho GPU Intel'}</small></span><strong>{storageUsage() ? formatBytes(storageUsage()!.whisperIntelBytes) : '—'}</strong><button class="storage-model-open" type="button" aria-label="Mở thư mục Whisper Intel" onClick={() => void openStorageFolder(() => storageService.openModelFolder('whisperIntel'))}><FolderOpen size={13} /></button></div>
                     <div class="storage-model-location"><span><b>faster-whisper</b><small title={storageUsage()?.fasterWhisperDirectory}>{storageUsage()?.fasterWhisperDirectory ?? 'Đường dẫn model Speech Recognition'}</small></span><strong>{storageUsage() ? formatBytes(storageUsage()!.fasterWhisperBytes) : '—'}</strong><button class="storage-model-open" type="button" aria-label="Mở thư mục faster-whisper" title="Mở thư mục faster-whisper" onClick={() => void openStorageFolder(() => storageService.openModelFolder('fasterWhisper'))}><FolderOpen size={13} /></button></div>
                     <div class="storage-model-location"><span><b>RapidOCR</b><small title={storageUsage()?.ocrDirectory}>{storageUsage()?.ocrDirectory ?? 'Đường dẫn model OCR'}</small></span><strong>{storageUsage() ? formatBytes(storageUsage()!.ocrBytes) : '—'}</strong><button class="storage-model-open" type="button" aria-label="Mở thư mục RapidOCR" title="Mở thư mục RapidOCR" onClick={() => void openStorageFolder(() => storageService.openModelFolder('ocr'))}><FolderOpen size={13} /></button></div>
                     <div class="storage-model-location"><span><b>VieNeu-TTS</b><small title={storageUsage()?.vieNeuTtsDirectory}>{storageUsage()?.vieNeuTtsDirectory ?? 'Đường dẫn model Voice / TTS'}</small></span><strong>{storageUsage() ? formatBytes(storageUsage()!.vieNeuTtsBytes) : '—'}</strong><button class="storage-model-open" type="button" aria-label="Mở thư mục VieNeu-TTS" title="Mở thư mục VieNeu-TTS" onClick={() => void openStorageFolder(() => storageService.openModelFolder('vieNeuTts'))}><FolderOpen size={13} /></button></div>

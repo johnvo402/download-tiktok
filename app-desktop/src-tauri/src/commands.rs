@@ -1176,8 +1176,10 @@ pub async fn get_asr_environment(
     app: tauri::AppHandle,
     model: String,
     alignment_language: Option<String>,
+    engine: Option<String>,
+    device: Option<String>,
 ) -> Result<asr_service::AsrEnvironment, String> {
-    tauri::async_runtime::spawn_blocking(move || asr_service::get_asr_environment(app, model, alignment_language))
+    tauri::async_runtime::spawn_blocking(move || asr_service::get_asr_environment(app, model, alignment_language, engine, device))
         .await
         .map_err(|error| format!("Không thể kiểm tra môi trường Speech Recognition: {error}"))?
 }
@@ -1266,8 +1268,8 @@ pub async fn install_whisperx_alignment(
 }
 
 #[tauri::command]
-pub async fn install_asr_model(app: tauri::AppHandle, model: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || asr_service::install_model(app, model))
+pub async fn install_asr_model(app: tauri::AppHandle, model: String, backend: Option<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || asr_service::install_model(app, model, backend))
         .await
         .map_err(|error| format!("Không thể khởi tạo cài đặt model Speech Recognition: {error}"))?
 }
@@ -1277,13 +1279,14 @@ pub async fn remove_asr_model(
     app: tauri::AppHandle,
     jobs: tauri::State<'_, asr_service::AsrJobs>,
     model: String,
+    backend: Option<String>,
 ) -> Result<(), String> {
     let jobs = jobs.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = PROJECT_JOB_START_LOCK
             .lock()
             .map_err(|_| "Không thể khóa trạng thái project jobs.".to_string())?;
-        asr_service::remove_model(app, &jobs, model)
+        asr_service::remove_model(app, &jobs, model, backend)
     })
     .await
     .map_err(|error| format!("Không thể gỡ model faster-whisper: {error}"))?

@@ -3,7 +3,7 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_sub
 from pathlib import Path
 
 ROOT = Path(SPECPATH).parent.resolve()
-datas = []
+datas = [(str(ROOT / "worker/asr/openvino-models.json"), "worker/asr")]
 binaries = []
 hiddenimports = []
 
@@ -38,6 +38,9 @@ hiddenimports += [
     "vieneu._v3_turbo_engine.onnx_runtime_lite",
     "vieneu_utils.phonemize_text",
     "worker.asr.service",
+    "worker.asr.backends",
+    "worker.asr.openvino_models",
+    "worker.asr.openvino_backend",
     "worker.tts.service",
     "worker.ocr.service",
     "worker.ocr.backends",
@@ -63,7 +66,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        "openvino", "openvino_telemetry",
+        "openvino", "openvino_telemetry", "openvino_genai", "openvino_tokenizers",
         "torch", "torchvision", "torchaudio", "transformers", "tensorflow",
         "gradio", "gradio_client", "fastapi", "uvicorn", "librosa",
         "numba", "llvmlite", "scipy", "pandas",

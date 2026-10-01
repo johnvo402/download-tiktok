@@ -23,9 +23,9 @@ export interface AppSettings {
     voiceProfiles: Array<{ id: string; name: string; audioPath: string }>;
   };
   asr: {
-    engine: 'fasterWhisper' | 'whisperX';
+    engine: 'auto' | 'fasterWhisper' | 'openVinoWhisper' | 'whisperX';
     model: 'tiny' | 'base' | 'small' | 'medium' | 'large-v3';
-    device: 'cpu' | 'cuda';
+    device: 'auto' | 'cpu' | 'cuda' | 'openvino';
     language: 'auto' | 'en' | 'vi' | 'ja' | 'ko' | 'zh' | 'fr' | 'de' | 'es';
     ocrModel: 'tiny' | 'small' | 'medium';
     ocrDevice: 'auto' | 'cpu' | 'cuda' | 'openvino';

@@ -104,9 +104,15 @@ def main() -> int:
                     str(request["cacheDir"]),
                     request.get("legacyCacheDir"),
                     request.get("alignmentLanguage"),
+                    str(request.get("engine", "fasterWhisper")),
+                    str(request.get("device", "cpu")),
                 )})
             elif operation == "asr_install":
-                install_model(str(request["model"]), str(request["cacheDir"]), emit)
+                if request.get("backend") == "openvino":
+                    from worker.asr.openvino_models import install_model as install_intel_model
+                    install_intel_model(str(request["model"]), str(request["cacheDir"]), emit)
+                else:
+                    install_model(str(request["model"]), str(request["cacheDir"]), emit)
             elif operation == "whisperx_alignment_install":
                 install_whisperx_alignment(str(request["language"]), str(request["cacheDir"]), emit)
             elif operation == "transcribe":

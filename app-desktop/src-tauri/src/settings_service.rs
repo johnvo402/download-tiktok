@@ -135,13 +135,13 @@ impl Default for AsrSettings {
 }
 
 fn default_asr_engine() -> String {
-    "fasterWhisper".to_string()
+    "auto".to_string()
 }
 fn default_asr_model() -> String {
     "small".to_string()
 }
 fn default_asr_device() -> String {
-    "cpu".to_string()
+    "auto".to_string()
 }
 fn default_asr_language() -> String {
     "auto".to_string()
@@ -404,7 +404,7 @@ fn migrate_legacy_tts_voice(settings: &mut AppSettings) -> bool {
 
 fn migrate_automatic_devices(settings: &mut AppSettings) -> bool {
     let mut changed = false;
-    for device in [&mut settings.asr.device, &mut settings.tts.device] {
+    for device in [&mut settings.tts.device] {
         if device == "auto" {
             *device = "cpu".to_string();
             changed = true;
@@ -453,14 +453,23 @@ fn backup_settings(path: &std::path::Path, bytes: &[u8]) -> Result<PathBuf, Stri
 }
 
 pub fn validate_asr_settings(settings: &AsrSettings) -> Result<(), String> {
-    if !["fasterWhisper", "whisperX"].contains(&settings.engine.as_str()) {
+    if !["auto", "fasterWhisper", "openVinoWhisper", "whisperX"].contains(&settings.engine.as_str()) {
         return Err("Engine Speech Recognition không được hỗ trợ.".to_string());
     }
     if !["tiny", "base", "small", "medium", "large-v3"].contains(&settings.model.as_str()) {
         return Err("Model Speech Recognition không được hỗ trợ.".to_string());
     }
-    if !["auto", "cpu", "cuda"].contains(&settings.device.as_str()) {
-        return Err("Thiết bị Speech Recognition phải là Auto, CPU hoặc CUDA.".to_string());
+    if !["auto", "cpu", "cuda", "openvino"].contains(&settings.device.as_str()) {
+        return Err("Thiết bị nhận dạng phải là Tự động, CPU, NVIDIA hoặc Intel GPU.".to_string());
+    }
+    if settings.device == "openvino" && matches!(settings.engine.as_str(), "fasterWhisper" | "whisperX") {
+        return Err("Intel GPU cần chọn Tự động hoặc Whisper Intel; WhisperX không hỗ trợ Intel.".into());
+    }
+    if settings.engine == "openVinoWhisper" && !matches!(settings.device.as_str(), "auto" | "openvino") {
+        return Err("Whisper Intel chỉ hỗ trợ thiết bị Intel GPU.".into());
+    }
+    if (settings.device == "openvino" || settings.engine == "openVinoWhisper") && !matches!(settings.model.as_str(), "tiny" | "base" | "small") {
+        return Err("Whisper Intel hiện hỗ trợ tiny, base và small.".into());
     }
     if !["auto", "en", "vi", "ja", "ko", "zh", "fr", "de", "es"]
         .contains(&settings.language.as_str())
@@ -654,6 +663,22 @@ mod tests {
         assert_eq!(settings.asr.ocr_device, "auto");
         settings.asr.ocr_device = "openvino".into();
         assert!(super::validate_asr_settings(&settings.asr).is_ok());
+    }
+
+    #[test]
+    fn asr_auto_survives_migration_and_intel_settings_are_validated() {
+        let mut settings = AppSettings::default();
+        assert_eq!(settings.asr.engine, "auto");
+        assert_eq!(settings.asr.device, "auto");
+        super::migrate_automatic_devices(&mut settings);
+        assert_eq!(settings.asr.device, "auto");
+        settings.asr.device = "openvino".into();
+        assert!(super::validate_asr_settings(&settings.asr).is_ok());
+        settings.asr.engine = "whisperX".into();
+        assert!(super::validate_asr_settings(&settings.asr).is_err());
+        settings.asr.engine = "openVinoWhisper".into();
+        settings.asr.model = "large-v3".into();
+        assert!(super::validate_asr_settings(&settings.asr).is_err());
     }
 
     #[test]

@@ -13,6 +13,8 @@ use tauri::{AppHandle, Manager};
 pub struct StorageUsage {
     pub models_bytes: u64,
     pub faster_whisper_bytes: u64,
+    pub whisper_intel_bytes: u64,
+    pub whisper_intel_directory: String,
     pub ocr_bytes: u64,
     pub vie_neu_tts_bytes: u64,
     pub dialogue_separation_bytes: u64,
@@ -36,6 +38,8 @@ pub struct StorageUsage {
 pub enum ModelFolderKind {
     #[serde(rename = "fasterWhisper")]
     FasterWhisper,
+    #[serde(rename = "whisperIntel")]
+    WhisperIntel,
     #[serde(rename = "vieNeuTts")]
     VieNeuTts,
     #[serde(rename = "ocr")]
@@ -233,6 +237,8 @@ pub fn usage(app: &AppHandle, jobs: &JobStore) -> Result<StorageUsage, String> {
     let vie_neu_tts_directory = app_models.join("huggingface");
     let dialogue_separation_directory = app_models.join("audio-separation");
     let faster_whisper_bytes = directory_size(&faster_whisper_directory);
+    let whisper_intel_directory = app_models.join("whisper");
+    let whisper_intel_bytes = directory_size(&whisper_intel_directory);
     let ocr_bytes = directory_size(&ocr_directory);
     let vie_neu_tts_bytes = directory_size(&vie_neu_tts_directory);
     let dialogue_separation_bytes = directory_size(&dialogue_separation_directory);
@@ -240,6 +246,7 @@ pub fn usage(app: &AppHandle, jobs: &JobStore) -> Result<StorageUsage, String> {
         .saturating_sub(directory_size(&app_models.join("tts-preview")));
     let other_model_data_bytes = models_bytes
         .saturating_sub(faster_whisper_bytes)
+        .saturating_sub(whisper_intel_bytes)
         .saturating_sub(ocr_bytes)
         .saturating_sub(vie_neu_tts_bytes);
     let other_model_data_bytes = other_model_data_bytes.saturating_sub(dialogue_separation_bytes);
@@ -270,6 +277,8 @@ pub fn usage(app: &AppHandle, jobs: &JobStore) -> Result<StorageUsage, String> {
     Ok(StorageUsage {
         models_bytes,
         faster_whisper_bytes,
+        whisper_intel_bytes,
+        whisper_intel_directory: whisper_intel_directory.to_string_lossy().into_owned(),
         ocr_bytes,
         vie_neu_tts_bytes,
         dialogue_separation_bytes,
@@ -336,6 +345,7 @@ pub fn open_model_folder(app: &AppHandle, kind: ModelFolderKind) -> Result<Strin
     let folder = match kind {
         ModelFolderKind::FasterWhisper => app
             .path().app_data_dir().map_err(|error| error.to_string())?.join("models").join("fw"),
+        ModelFolderKind::WhisperIntel => app.path().app_data_dir().map_err(|error| error.to_string())?.join("models").join("whisper"),
         ModelFolderKind::VieNeuTts => app
             .path()
             .app_data_dir()

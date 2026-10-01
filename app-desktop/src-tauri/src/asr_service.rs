@@ -99,6 +99,18 @@ pub struct AsrEnvironment {
     pub whisper_x_installed: bool,
     pub alignment_model_cached: bool,
     pub alignment_language: Option<String>,
+    #[serde(default)] pub intel_runtime_installed: bool,
+    #[serde(default)] pub intel_gpu_available: bool,
+    #[serde(default)] pub intel_model_supported: bool,
+    #[serde(default)] pub intel_model_cached: bool,
+    #[serde(default)] pub ctranslate_model_cached: bool,
+    #[serde(default)] pub intel_estimated_download_bytes: u64,
+    #[serde(default)] pub resolved_backend: Option<String>,
+    #[serde(default)] pub resolved_engine: Option<String>,
+    #[serde(default)] pub resolved_label: Option<String>,
+    #[serde(default)] pub selection_error: Option<String>,
+    #[serde(default)] pub backends: std::collections::BTreeMap<String, bool>,
+    #[serde(default)] pub word_timestamps: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -212,6 +224,8 @@ pub fn get_asr_environment(
     app: AppHandle,
     model: String,
     alignment_language: Option<String>,
+    engine: Option<String>,
+    device: Option<String>,
 ) -> Result<AsrEnvironment, String> {
     validate_model(&model)?;
     let alignment_language = alignment_language.filter(|language| language != "auto");
@@ -221,32 +235,11 @@ pub fn get_asr_environment(
     let root = asr_cache_dir(&app)?;
     let legacy_root = legacy_asr_cache_dir(&app)?;
     let worker = worker_root(&app)?;
-    let request = serde_json::json!({ "operation": "inspect", "model": model, "cacheDir": root, "legacyCacheDir": legacy_root, "alignmentLanguage": alignment_language });
+    let request = serde_json::json!({ "operation": "inspect", "model": model, "cacheDir": root, "legacyCacheDir": legacy_root, "alignmentLanguage": alignment_language, "engine": engine.unwrap_or_else(default_asr_engine), "device": device.unwrap_or_else(|| "cpu".into()) });
     let response = inspect_worker(&worker, &request)?;
-    Ok(AsrEnvironment {
-        worker_installed: response
-            .get("workerInstalled")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false),
-        model_cached: response
-            .get("modelCached")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false),
-        cuda_available: response
-            .get("cudaAvailable")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false),
-        model,
-        whisper_x_installed: response
-            .get("whisperXInstalled")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false),
-        alignment_model_cached: response
-            .get("alignmentModelCached")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false),
-        alignment_language,
-    })
+    let mut response = response;
+    response["model"] = serde_json::json!(model);
+    serde_json::from_value(response).map_err(|error| format!("Trạng thái nhận dạng không hợp lệ: {error}"))
 }
 
 fn ocr_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -490,14 +483,28 @@ pub fn install_whisperx_alignment(app: AppHandle, language: String) -> Result<()
     )
 }
 
-pub fn install_model(app: AppHandle, model: String) -> Result<(), String> {
+pub fn install_model(app: AppHandle, model: String, backend: Option<String>) -> Result<(), String> {
     let _operation = MODEL_CACHE_OPERATION_LOCK
         .lock()
         .map_err(|_| "Không thể khóa thao tác model Speech Recognition.".to_string())?;
     validate_model(&model)?;
     let root = asr_cache_dir(&app)?;
-    let legacy_root = legacy_asr_cache_dir(&app)?;
+    let backend = backend.unwrap_or_else(|| "ctranslate2".into());
+    if !matches!(backend.as_str(), "ctranslate2" | "openvino") {
+        return Err("Backend model không hợp lệ.".into());
+    }
     let worker = worker_root(&app)?;
+    if backend == "openvino" {
+        if !matches!(model.as_str(), "tiny" | "base" | "small") {
+            return Err("Whisper Intel hiện hỗ trợ tiny, base và small.".into());
+        }
+        let _gpu = crate::resource_scheduler::ai_gpu_slot().try_lock()
+            .map_err(|_| "GPU đang xử lý một tác vụ khác. Hãy đợi hoàn tất rồi tải model Intel.".to_string())?;
+        return run_ocr_install_worker(&app, &worker, &serde_json::json!({
+            "operation": "asr_install", "model": model, "cacheDir": root, "backend": backend
+        }));
+    }
+    let legacy_root = legacy_asr_cache_dir(&app)?;
     let environment = inspect_worker(
         &worker,
         &serde_json::json!({ "operation": "inspect", "model": model, "cacheDir": root, "legacyCacheDir": legacy_root }),
@@ -525,7 +532,7 @@ pub fn install_model(app: AppHandle, model: String) -> Result<(), String> {
     )
 }
 
-pub fn remove_model(app: AppHandle, jobs: &AsrJobs, model: String) -> Result<(), String> {
+pub fn remove_model(app: AppHandle, jobs: &AsrJobs, model: String, backend: Option<String>) -> Result<(), String> {
     let _operation = MODEL_CACHE_OPERATION_LOCK
         .lock()
         .map_err(|_| "Không thể khóa thao tác model Speech Recognition.".to_string())?;
@@ -539,6 +546,13 @@ pub fn remove_model(app: AppHandle, jobs: &AsrJobs, model: String) -> Result<(),
     }
     drop(active);
     let root = asr_cache_dir(&app)?;
+    if backend.as_deref() == Some("openvino") {
+        if !matches!(model.as_str(), "tiny" | "base" | "small") { return Err("Model Intel không hợp lệ.".into()); }
+        let intel_root = root.parent().ok_or("Thư mục model không hợp lệ.")?.join("whisper").join(&model);
+        if intel_root.exists() { remove_model_child(&intel_root, "openvino")?; }
+        return Ok(());
+    }
+    if backend.as_deref().is_some_and(|value| value != "ctranslate2") { return Err("Backend model không hợp lệ.".into()); }
     remove_model_child(&root, &model)?;
     let legacy_root = legacy_asr_cache_dir(&app)?;
     if legacy_root.is_dir() {
@@ -627,6 +641,7 @@ pub fn generate_transcript(
     let cache_dir = asr_cache_dir(&app)?;
     let cuda_available;
     let mut ocr_gpu = false;
+    let mut asr_gpu = false;
     if options.mode == "ocr" {
         let environment = inspect_worker(&worker, &serde_json::json!({
             "operation": "ocr_inspect",
@@ -667,7 +682,7 @@ pub fn generate_transcript(
     } else {
         let legacy_cache_dir = legacy_asr_cache_dir(&app)?;
         let alignment_language = if options.engine == "whisperX" { Some(options.language.clone()) } else { None };
-        let environment = inspect_worker(&worker, &serde_json::json!({ "operation": "inspect", "model": options.model, "cacheDir": cache_dir, "legacyCacheDir": legacy_cache_dir, "alignmentLanguage": alignment_language }))?;
+        let environment = inspect_worker(&worker, &serde_json::json!({ "operation": "inspect", "model": options.model, "cacheDir": cache_dir, "legacyCacheDir": legacy_cache_dir, "alignmentLanguage": alignment_language, "engine": options.engine, "device": options.device }))?;
         cuda_available = environment.get("cudaAvailable").and_then(|value| value.as_bool()).unwrap_or(false);
         if !environment.get("workerInstalled").and_then(|value| value.as_bool()).unwrap_or(false) {
             return Err("Bộ nhận dạng lời thoại chưa sẵn sàng. Hãy cập nhật hoặc cài lại JC AI.".to_string());
@@ -678,6 +693,8 @@ pub fn generate_transcript(
         if options.engine == "whisperX" && !environment.get("alignmentModelCached").and_then(|value| value.as_bool()).unwrap_or(false) {
             return Err(format!("WhisperX chưa có mô hình căn thời gian cho ngôn ngữ {}. Mở Cài đặt → Nhận dạng lời thoại để tải.", options.language));
         }
+        asr_gpu = environment.get("resolvedBackend").and_then(|value| value.as_str()).is_some_and(|value| matches!(value, "cuda" | "openvino"));
+        if let Some(error) = environment.get("selectionError").and_then(|value| value.as_str()) { return Err(error.into()); }
         if options.device == "cuda" && !cuda_available {
             return Err("Tăng tốc NVIDIA chưa sẵn sàng cho faster-whisper. Chọn Tự động hoặc CPU trong Cài đặt.".to_string());
         }
@@ -716,7 +733,7 @@ pub fn generate_transcript(
     let use_gpu = if options.mode == "ocr" {
         ocr_gpu
     } else {
-        options.device == "cuda" || options.device == "auto" && cuda_available
+        asr_gpu
     };
     let mut resources = vec!["python-worker", "disk"];
     resources.push(if use_gpu { "gpu" } else { "cpu" });
@@ -1405,7 +1422,7 @@ fn run_ocr_install_worker(
                         }
                     };
                     match envelope.get("type").and_then(|value| value.as_str()) {
-                        Some("progress") => { let _ = app.emit("ocr-model-progress", &envelope); }
+                        Some("progress") => { let event = if request.get("operation").and_then(|value| value.as_str()) == Some("asr_install") { "asr-model-progress" } else { "ocr-model-progress" }; let _ = app.emit(event, &envelope); }
                         Some("completed") | Some("failed") => final_message = Some(envelope),
                         _ => remember_protocol_noise(&mut non_protocol_output, line),
                     }
@@ -1452,13 +1469,17 @@ fn remember_protocol_noise(lines: &mut Vec<String>, value: &str) {
 fn worker_request_command(worker: &Path, request: &serde_json::Value) -> Command {
     if request.get("operation").and_then(|value| value.as_str()).is_some_and(|value| value.starts_with("ocr_")) {
         crate::runtime_paths::ocr_worker_command(worker)
+    } else if request.get("operation").and_then(|value| value.as_str()).is_some_and(|value| matches!(value, "inspect" | "transcribe" | "asr_install")) {
+        crate::runtime_paths::asr_worker_command(worker)
     } else {
         crate::runtime_paths::worker_command(worker)
     }
 }
 
 fn worker_root(_app: &AppHandle) -> Result<PathBuf, String> {
-    if crate::optional_runtime::feature_installed("whisperx") {
+    if crate::optional_runtime::feature_installed("whisper_openvino") {
+        crate::runtime_paths::ai_worker_dir_for("whisper_openvino")
+    } else if crate::optional_runtime::feature_installed("whisperx") {
         crate::runtime_paths::ai_worker_dir_for("whisperx")
     } else {
         crate::runtime_paths::ai_worker_dir()
@@ -1540,11 +1561,11 @@ fn validate_options(options: &AsrOptions) -> Result<(), String> {
             || region.x + region.width > 1.000001 || region.y + region.height > 1.000001
         { return Err("Vùng OCR của dự án không hợp lệ.".into()); }
     }
-    if !["fasterWhisper", "whisperX"].contains(&options.engine.as_str()) {
+    if !["auto", "fasterWhisper", "openVinoWhisper", "whisperX"].contains(&options.engine.as_str()) {
         return Err("Engine Speech Recognition không hợp lệ.".to_string());
     }
     validate_model(&options.model)?;
-    if !["auto", "cpu", "cuda"].contains(&options.device.as_str()) {
+    if !["auto", "cpu", "cuda", "openvino"].contains(&options.device.as_str()) {
         return Err("Device Speech Recognition không hợp lệ.".to_string());
     }
     if options.language != "auto"
@@ -1556,6 +1577,15 @@ fn validate_options(options: &AsrOptions) -> Result<(), String> {
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'))
     {
         return Err("Mã ngôn ngữ Speech Recognition không hợp lệ.".to_string());
+    }
+    if options.device == "openvino" && matches!(options.engine.as_str(), "fasterWhisper" | "whisperX") {
+        return Err("Intel GPU cần chọn Tự động hoặc Whisper Intel.".into());
+    }
+    if options.engine == "openVinoWhisper" && !matches!(options.device.as_str(), "auto" | "openvino") {
+        return Err("Whisper Intel chỉ hỗ trợ Intel GPU.".into());
+    }
+    if (options.device == "openvino" || options.engine == "openVinoWhisper") && !matches!(options.model.as_str(), "tiny" | "base" | "small") {
+        return Err("Whisper Intel hiện hỗ trợ tiny, base và small.".into());
     }
     if options.engine == "whisperX" {
         if options.language == "auto" {

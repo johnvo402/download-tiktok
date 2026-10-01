@@ -102,6 +102,18 @@ export interface TtsJobEvent {
 }
 
 export interface AsrEnvironment {
+  wordTimestamps: boolean;
+  intelRuntimeInstalled: boolean;
+  intelGpuAvailable: boolean;
+  intelModelSupported: boolean;
+  intelModelCached: boolean;
+  ctranslateModelCached: boolean;
+  intelEstimatedDownloadBytes: number;
+  resolvedBackend: 'cpu' | 'cuda' | 'openvino' | null;
+  resolvedEngine: string | null;
+  resolvedLabel: string | null;
+  selectionError: string | null;
+  backends: Record<string, boolean>;
   workerInstalled: boolean;
   modelCached: boolean;
   cudaAvailable: boolean;

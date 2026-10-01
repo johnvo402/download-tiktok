@@ -7,7 +7,14 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 
 static INSTALL_LOCK: Mutex<()> = Mutex::new(());
-const FEATURES: [&str; 5] = ["whisperx", "bandit", "acceleration", "sttn", "ocr_openvino"];
+const FEATURES: [&str; 6] = [
+    "whisperx",
+    "bandit",
+    "acceleration",
+    "sttn",
+    "ocr_openvino",
+    "whisper_openvino",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -30,8 +37,8 @@ fn valid_install(feature: &str, profile: &str) -> bool {
     FEATURES.contains(&feature)
         && backend(profile).is_some()
         && (feature != "acceleration" || profile == "cuda")
-        && (feature != "ocr_openvino" || profile == "openvino")
-        && (profile != "openvino" || feature == "ocr_openvino")
+        && (!matches!(feature, "ocr_openvino" | "whisper_openvino") || profile == "openvino")
+        && (profile != "openvino" || matches!(feature, "ocr_openvino" | "whisper_openvino"))
 }
 const RUNTIME_VERSION: u32 = 7;
 const CUDA_ONNXRUNTIME_VERSION: &str = "1.26.0";
@@ -390,6 +397,7 @@ fn requirement_name(feature: &str) -> &'static str {
         "bandit" => "requirements-optional-bandit.in",
         "acceleration" => "requirements-optional-acceleration.in",
         "ocr_openvino" => "requirements-optional-ocr-openvino.in",
+        "whisper_openvino" => "requirements-optional-whisper-openvino.in",
         _ => "requirements-optional-sttn.in",
     }
 }
@@ -418,7 +426,7 @@ fn copy_runtime(source: &Path, destination: &Path) -> Result<(), String> {
 fn frozen_constraints(python: &Path, destination: &Path) -> Result<PathBuf, String> {
     let mut command = Command::new(python);
     hide_console(&mut command);
-    let output = command.args(["-c", "from importlib.metadata import distributions; print('\\n'.join(sorted(d.metadata['Name']+'=='+d.version for d in distributions() if d.metadata['Name'])))"])
+    let output = command.args(["-c", "from importlib.metadata import distributions; print(chr(10).join(sorted(d.metadata['Name']+'=='+d.version for d in distributions() if d.metadata['Name'])))"])
         .output().map_err(|error| format!("Không thể kiểm tra các gói đang dùng: {error}"))?;
     if !output.status.success() {
         return Err("Không thể bảo vệ các thành phần AI đang dùng.".into());
@@ -510,7 +518,7 @@ fn install_feature(
     if !Path::new(requirements).is_file() {
         return Err("Ứng dụng thiếu danh sách thành phần. Hãy cập nhật hoặc cài lại JC AI.".into());
     }
-    if feature == "ocr_openvino" {
+    if matches!(feature, "ocr_openvino" | "whisper_openvino") {
         let constraints = Path::new(python)
             .parent()
             .and_then(Path::parent)
@@ -524,12 +532,35 @@ fn install_feature(
             "-r",
             requirements,
         ];
-        let constraints_text = constraints.as_ref().and_then(|path| path.to_str());
-        if let Some(value) = constraints_text.filter(|value| Path::new(value).is_file()) {
+        // uv splits constraint paths on spaces; a file URI preserves Unicode
+        // and spaces in Windows account/data paths.
+        let constraints_text = constraints.as_ref().filter(|path| path.is_file())
+            .and_then(|path| reqwest::Url::from_file_path(path).ok())
+            .map(|url| url.to_string());
+        if let Some(value) = constraints_text.as_deref() {
             args.extend(["--constraint", value]);
         }
-        run_uv(app, uv, root, &args, "Cài tăng tốc Intel cho đọc chữ")?;
-        if profile != "cuda" {
+        run_uv(app, uv, root, &args, "Cài tăng tốc Intel")?;
+        if feature == "whisper_openvino" {
+            // Shared CPU fallback stays available without Torch. Existing CUDA
+            // features already contain faster-whisper; preserve their ORT GPU.
+            let mut fallback = vec![
+                "pip",
+                "install",
+                "--no-progress",
+                "--python",
+                python,
+                "faster-whisper==1.2.1",
+            ];
+            if profile == "cuda" {
+                fallback.push("--no-deps");
+            }
+            if let Some(value) = constraints_text.as_deref() {
+                fallback.extend(["--constraint", value]);
+            }
+            run_uv(app, uv, root, &fallback, "Chuẩn bị nhận dạng CPU dự phòng")?;
+        }
+        if feature == "ocr_openvino" && profile != "cuda" {
             let mut cpu_args = vec![
                 "pip",
                 "install",
@@ -538,7 +569,7 @@ fn install_feature(
                 python,
                 "onnxruntime==1.30.0",
             ];
-            if let Some(value) = constraints_text.filter(|value| Path::new(value).is_file()) {
+            if let Some(value) = constraints_text.as_deref() {
                 cpu_args.extend(["--constraint", value]);
             }
             run_uv(app, uv, root, &cpu_args, "Chuẩn bị bộ đọc chữ CPU")?;
@@ -638,13 +669,19 @@ fn install_feature(
 
 fn verification_script(features: &[String], profile: &str) -> String {
     let mut script = String::from("from packaging.version import Version\n");
-    if features.iter().any(|feature| feature != "ocr_openvino") {
+    if features
+        .iter()
+        .any(|feature| !matches!(feature.as_str(), "ocr_openvino" | "whisper_openvino"))
+    {
         script.push_str(
             "import torch\nassert Version(torch.__version__.split('+')[0]).release[:2] == (2, 8)\n",
         );
     }
     if features.iter().any(|feature| feature == "ocr_openvino") {
         script.push_str("from importlib.metadata import version\nassert version('openvino') == '2026.4.0'\nimport rapidocr, onnxruntime\nfrom worker.ocr.backends import probe_openvino_gpu\ncapability = probe_openvino_gpu()\nassert capability.available, capability.message\n");
+    }
+    if features.iter().any(|feature| feature == "whisper_openvino") {
+        script.push_str("from importlib.metadata import version\nassert version('openvino') == '2026.4.0'\nassert version('openvino-genai') == '2026.4.0.0'\nassert version('openvino-tokenizers') == '2026.4.0.0'\nimport openvino_genai, faster_whisper\nfrom worker.ocr.backends import probe_openvino_gpu\nassert probe_openvino_gpu().available\n");
     }
     if profile == "cuda" && cfg!(windows) {
         script.push_str("import os, pathlib; gpu_dlls = os.add_dll_directory(str(pathlib.Path(torch.__file__).parent / 'lib'))\nimport onnxruntime; onnxruntime.preload_dlls()\n");
@@ -785,14 +822,14 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
     }
     let old = read_marker();
     // Adding Intel is orthogonal to the existing CPU/CUDA feature set.
-    let profile = if feature == "ocr_openvino" {
+    let profile = if matches!(feature, "ocr_openvino" | "whisper_openvino") {
         old.as_ref()
             .map(|marker| marker.profile.as_str())
             .unwrap_or(profile)
     } else {
         profile
     };
-    let reuse_current = feature == "ocr_openvino"
+    let reuse_current = matches!(feature, "ocr_openvino" | "whisper_openvino")
         && old
             .as_ref()
             .is_some_and(|marker| marker.runtime_version == RUNTIME_VERSION);
@@ -965,6 +1002,14 @@ mod tests {
     #[test]
     fn intel_install_is_independent_and_profiles_are_validated() {
         assert!(super::valid_install("ocr_openvino", "openvino"));
+        assert!(super::valid_install("whisper_openvino", "openvino"));
+        assert!(!super::valid_install("whisper_openvino", "cuda"));
+        let whisper = super::verification_script(
+            &["ocr_openvino".into(), "whisper_openvino".into()],
+            "openvino",
+        );
+        assert!(whisper.contains("openvino_genai"));
+        assert!(!whisper.contains("import torch"));
         assert!(!super::valid_install("ocr_openvino", "cuda"));
         assert!(!super::valid_install("whisperx", "openvino"));
         assert!(!super::valid_install("invented", "openvino"));

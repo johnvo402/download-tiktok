@@ -912,7 +912,8 @@ export default function TranslationPanel() {
         return;
       }
       setAsrOptions({ ...options, mode, ocrFps: projectTranscriptSettings.ocrFps, ocrRegion: projectTranscriptSettings.ocrRegion });
-      const environment = await projectService.getAsrEnvironment(options.model, options.language);
+      const environment = await projectService.getAsrEnvironment(options.model, options.language, options.engine, options.device);
+      if (environment.selectionError) { setNotice({ kind: 'error', message: environment.selectionError }); return; }
       if (!environment.workerInstalled) {
         setNotice({ kind: 'error', message: 'AI Worker chưa sẵn sàng. Hãy sửa chữa hoặc cài lại ứng dụng, sau đó thử lại.' });
         return;

@@ -36,12 +36,17 @@ ocr = ["rapidocr==3.9.2", "onnxruntime==1.30.0"]
 ocr-cuda = ["rapidocr==3.9.2", "onnxruntime-gpu==1.26.0"]
 # Intel OCR shares ONNX weights; no CUDA or Torch dependency.
 ocr-openvino = ["rapidocr==3.9.2", "onnxruntime==1.30.0", "openvino==2026.4.0", "openvino-telemetry==2025.2.0"]
+whisper-openvino = ["openvino==2026.4.0", "openvino-genai==2026.4.0.0", "openvino-tokenizers==2026.4.0.0"]
+
 # Optional, large runtime for cinematic dialogue/music/effects separation.
 # Install CPU PyTorch first with scripts/setup-dialogue-dev.ps1.
 dialogue = [
     "soundfile>=0.12,<1",
     "bandit-infer @ git+https://github.com/openmirlab/bandit-infer.git@7ec03cb568811958db65a96a10fdb8879922b2ac",
 ]
+
+[tool.setuptools.package-data]
+"worker.asr" = ["openvino-models.json"]
 
 [tool.setuptools.packages.find]
 include = ["worker*"]

@@ -45,7 +45,7 @@ export async function validateBatchProjects(projectIds: string[], steps: BatchSt
     if (steps.transcriptIfMissing || steps.translateMissing) appSettings = await translationService.getSettings();
   } catch { /* The per-project check below explains the unavailable settings. */ }
   try {
-    if (steps.transcriptIfMissing && appSettings) asrEnvironment = await projectService.getAsrEnvironment(appSettings.settings.asr.model, appSettings.settings.asr.language);
+    if (steps.transcriptIfMissing && appSettings) asrEnvironment = await projectService.getAsrEnvironment(appSettings.settings.asr.model, appSettings.settings.asr.language, appSettings.settings.asr.engine, appSettings.settings.asr.device);
   } catch { /* The per-project check below explains the unavailable worker. */ }
   try {
     if (steps.generateMissingVoices) ttsEnvironment = await ttsService.getEnvironment();

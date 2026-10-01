@@ -135,6 +135,13 @@ pub fn ai_worker_dir_for(feature: &str) -> Result<PathBuf, String> {
     worker_dir()
 }
 
+pub fn asr_worker_command(worker_root: &Path) -> Command {
+    worker_command_scoped(
+        worker_root,
+        crate::optional_runtime::feature_installed("whisper_openvino"),
+    )
+}
+
 pub fn ocr_worker_dir() -> Result<PathBuf, String> {
     if crate::optional_runtime::feature_installed("ocr_openvino") {
         return ai_worker_dir_for("ocr_openvino");

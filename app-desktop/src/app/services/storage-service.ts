@@ -3,6 +3,8 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 export interface StorageUsage {
   modelsBytes: number;
   fasterWhisperBytes: number;
+  whisperIntelBytes: number;
+  whisperIntelDirectory: string;
   ocrBytes: number;
   vieNeuTtsBytes: number;
   dialogueSeparationBytes: number;
@@ -34,7 +36,7 @@ export const storageService = {
   clearAiInstallationCache: () => call<number>('clear_ai_installation_cache'),
   openCacheFolder: () => call<string>('open_cache_folder'),
   openAiComponentsFolder: () => call<string>('open_ai_components_folder'),
-  openModelFolder: (kind: 'fasterWhisper' | 'vieNeuTts' | 'ocr' | 'dialogueSeparation') => call<string>('open_model_folder', { kind }),
+  openModelFolder: (kind: 'fasterWhisper' | 'whisperIntel' | 'vieNeuTts' | 'ocr' | 'dialogueSeparation') => call<string>('open_model_folder', { kind }),
 };
 
 export function formatBytes(value: number): string {
