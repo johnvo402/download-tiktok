@@ -44,6 +44,8 @@ npm run tauri -- dev
 
 `npm run dev` chỉ chạy giao diện trong trình duyệt để phát triển CSS/UI; quyền project filesystem chỉ hoạt động trong ứng dụng Tauri.
 
+Preview trên Windows dùng renderer wgpu chung với Export. Kiến trúc, tùy chọn tương thích và kết quả kiểm thử nằm trong [docs/NATIVE_PREVIEW_ENGINE.md](docs/NATIVE_PREVIEW_ENGINE.md).
+
 ### Python worker / downloader / Speech Recognition (development only)
 
 Tạo môi trường riêng ở thư mục gốc repository và cài worker cho ASR cùng TikTok Drama Downloader:

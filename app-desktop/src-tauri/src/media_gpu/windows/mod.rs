@@ -7,6 +7,7 @@ pub(crate) mod metrics;
 mod path;
 mod pipeline;
 mod processor;
+pub(crate) mod preview;
 pub use decoder::Decoder;
 pub use device::Session;
 pub use pipeline::NativePipeline;

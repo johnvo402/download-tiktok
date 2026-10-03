@@ -166,7 +166,7 @@ pub fn decoder_command(source: &Path) -> Result<Command, String> {
         .stdin(Stdio::null());
     Ok(command)
 }
-fn pts_from_line(line: &str, time_base: Option<f64>) -> Option<f64> {
+pub(crate) fn pts_from_line(line: &str, time_base: Option<f64>) -> Option<f64> {
     if !line.contains("showinfo") {
         return None;
     }

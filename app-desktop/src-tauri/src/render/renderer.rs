@@ -29,17 +29,28 @@ impl Default for Params {
         }
     }
 }
+#[derive(Clone)]
+struct PassBind {
+    bind: wgpu::BindGroup,
+    params: wgpu::Buffer,
+}
+impl std::ops::Deref for PassBind {
+    type Target = wgpu::BindGroup;
+    fn deref(&self) -> &Self::Target {
+        &self.bind
+    }
+}
 struct BlurResources {
     a: Texture,
     b: Texture,
-    crop: wgpu::BindGroup,
-    horizontal: wgpu::BindGroup,
-    vertical: wgpu::BindGroup,
-    layer: wgpu::BindGroup,
+    crop: PassBind,
+    horizontal: PassBind,
+    vertical: PassBind,
+    layer: PassBind,
 }
 struct Layer {
     _texture: Arc<Texture>,
-    bind: wgpu::BindGroup,
+    bind: PassBind,
     rect: PixelRect,
     bytes: usize,
 }
@@ -70,6 +81,7 @@ pub struct Renderer {
     text_bytes: usize,
     pub(crate) scene: RenderScene,
     patches: Vec<Layer>,
+    selection: Option<Arc<Texture>>,
 }
 impl Renderer {
     pub fn new(scene: RenderScene, logo_paths: &[PathBuf]) -> Result<Self, String> {
@@ -79,6 +91,13 @@ impl Renderer {
         scene: RenderScene,
         logo_paths: &[PathBuf],
         vendor: Option<u32>,
+    ) -> Result<Self, String> {
+        Self::with_device(scene, logo_paths, device::create_preferred(vendor)?)
+    }
+    pub fn with_device(
+        scene: RenderScene,
+        logo_paths: &[PathBuf],
+        gpu: GpuDevice,
     ) -> Result<Self, String> {
         for rect in scene
             .blurs
@@ -102,7 +121,6 @@ impl Renderer {
                 return Err("Vùng hiệu ứng vượt kích thước video.".into());
             }
         }
-        let gpu = device::create_preferred(vendor)?;
         let d = &gpu.device;
         if scene.width > d.limits().max_texture_dimension_2d
             || scene.height > d.limits().max_texture_dimension_2d
@@ -224,6 +242,7 @@ impl Renderer {
             text_bytes: 0,
             scene,
             patches: Vec::new(),
+            selection: None,
         })
     }
     /// Borrowed frame API permits a future GPU-surface input without tying scenes to export jobs.
@@ -590,6 +609,8 @@ impl Renderer {
 
 #[path = "passes/mod.rs"]
 mod passes;
+#[path = "preview_target.rs"]
+mod preview_target;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

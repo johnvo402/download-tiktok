@@ -26,6 +26,8 @@ pub const ORDER: [Stage; 5] = [
 pub struct RenderScene {
     pub width: u32,
     pub height: u32,
+    /// Pixel units remain relative to the design/source resolution. Export uses 1.
+    pub pixel_scale: f32,
     pub blurs: Vec<BlurRenderSpec>,
     pub logos: Vec<LogoRenderSpec>,
     pub text: Vec<TextOverlayRenderSpec>,
@@ -36,6 +38,7 @@ impl RenderScene {
         Self {
             width,
             height,
+            pixel_scale: 1.0,
             blurs: Vec::new(),
             logos: Vec::new(),
             text: Vec::new(),
@@ -69,6 +72,7 @@ impl RenderScene {
         Self {
             width: spec.width,
             height: spec.height,
+            pixel_scale: 1.0,
             blurs: spec
                 .blur_regions
                 .iter()
@@ -84,6 +88,51 @@ impl RenderScene {
                 .collect(),
             subtitle: spec.subtitle.clone(),
         }
+    }
+    /// Target adaptation of the canonical scene, shared with the existing passes.
+    /// It never changes project data, timings, text content or normalized placement.
+    pub fn scaled(&self, scale: f32) -> Self {
+        if scale == 1.0 {
+            return self.clone();
+        }
+        let scale = scale.clamp(0.25, 1.0);
+        let mut scene = self.clone();
+        scene.width = (self.width as f32 * scale).round().max(1.0) as u32;
+        scene.height = (self.height as f32 * scale).round().max(1.0) as u32;
+        scene.pixel_scale = self.pixel_scale * scale;
+        let rect = |r: PixelRect| {
+            let x = (r.x as f32 * scale).round() as u32;
+            let y = (r.y as f32 * scale).round() as u32;
+            PixelRect {
+                x: x.min(scene.width - 1),
+                y: y.min(scene.height - 1),
+                width: ((r.width as f32 * scale).round().max(1.0) as u32)
+                    .min(scene.width - x.min(scene.width - 1)),
+                height: ((r.height as f32 * scale).round().max(1.0) as u32)
+                    .min(scene.height - y.min(scene.height - 1)),
+            }
+        };
+        let font = |n: u16| (n as f32 * scale).round().max(1.0) as u16;
+        for r in &mut scene.blurs {
+            r.rect = rect(r.rect);
+        }
+        for r in &mut scene.logos {
+            r.rect = rect(r.rect);
+        }
+        for r in &mut scene.text {
+            r.rect = rect(r.rect);
+            r.font_size = font(r.font_size);
+        }
+        scene.subtitle.region = scene.subtitle.region.map(rect);
+        scene.subtitle.configured_font_size = font(scene.subtitle.configured_font_size);
+        scene.subtitle.min_font_size = font(scene.subtitle.min_font_size);
+        scene.subtitle.outline_width = (scene.subtitle.outline_width as f32 * scale).round() as u16;
+        for event in &mut scene.subtitle.events {
+            event.layout.font_size = font(event.layout.font_size);
+            event.layout.x = (event.layout.x as f32 * scale).round() as u32;
+            event.layout.y = (event.layout.y as f32 * scale).round() as u32;
+        }
+        scene
     }
 }
 pub fn active(pts: f64, start_ms: u64, end_ms: Option<u64>) -> bool {

@@ -1,6 +1,7 @@
 mod asr_service;
 mod batch_service;
 mod commands;
+mod preview;
 mod diagnostics_service;
 pub mod hardware_acceleration;
 mod dialogue_service;
@@ -30,6 +31,7 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(preview::PreviewManager::default())
         .manage(asr_service::AsrJobs::default())
         .manage(translation_service::TranslationJobs::default())
         .manage(tts_service::TtsJobs::default())
@@ -38,7 +40,9 @@ pub fn run() {
         .manage(job_service::JobStore::default())
         .setup(|app| {
             let resource_dir = app.path().resource_dir()?;
-            let app_data = app.path().app_data_dir()?;
+            let app_data = if cfg!(debug_assertions) {
+                std::env::var_os("JC_QA_DATA_DIR").map(std::path::PathBuf::from).unwrap_or(app.path().app_data_dir()?)
+            } else { app.path().app_data_dir()? };
             runtime_paths::initialize(resource_dir, app_data.clone());
             std::fs::create_dir_all(app_data.join("projects"))?;
             if let Err(error) = settings_service::migrate_legacy_custom_prompt(app.handle()) {
@@ -72,6 +76,13 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            preview::commands::preview_open,
+            preview::commands::preview_audio_path,
+            preview::commands::preview_close,
+            preview::commands::preview_control,
+            preview::commands::preview_resize,
+            preview::commands::preview_update_scene,
+            preview::commands::preview_status,
             commands::get_optional_runtime_status,
             commands::open_ai_components_folder,
             commands::install_optional_runtime,
@@ -161,6 +172,7 @@ pub fn run() {
             commands::open_cache_folder,
             commands::open_model_folder
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run JC AI");
+        .build(tauri::generate_context!())
+        .expect("failed to build JC AI")
+        .run(|app,event| { if matches!(event,tauri::RunEvent::Exit) { app.state::<preview::PreviewManager>().close(None,None); } });
 }

@@ -1,5 +1,5 @@
 //! Reusable offscreen visual renderer. No project storage, audio, or encoder policy.
-mod device;
+pub(crate) mod device;
 pub mod frame;
 pub mod graph;
 pub mod renderer;

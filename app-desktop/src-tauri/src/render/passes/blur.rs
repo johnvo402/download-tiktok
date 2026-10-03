@@ -12,12 +12,14 @@ impl Renderer {
             .blurs
             .iter()
             .map(|r| {
-                let factor = (graph::blur_sigma(r.strength_px) / 4.0).ceil().max(1.0);
+                let factor = ((graph::blur_sigma(r.strength_px) * scene.pixel_scale) / 4.0)
+                    .ceil()
+                    .max(1.0);
                 let w = (r.rect.width as f32 / factor).ceil().max(1.0) as u32;
                 let h = (r.rect.height as f32 / factor).ceil().max(1.0) as u32;
                 let a = Texture::new(d, w, h, "ROI blur A");
                 let b = Texture::new(d, w, h, "ROI blur B");
-                let crop = Self::bind(
+                let crop = Self::bind_uniform(
                     d,
                     layout,
                     sampler,
@@ -32,29 +34,39 @@ impl Renderer {
                         ..Default::default()
                     },
                 );
-                let horizontal = Self::bind(
+                let horizontal = Self::bind_uniform(
                     d,
                     layout,
                     sampler,
                     &a,
                     Params {
                         step: [1.0 / w as f32, 0.0, 0.0, 0.0],
-                        effect: [graph::blur_sigma(r.strength_px) / factor, 0.0, 0.0, 1.0],
+                        effect: [
+                            (graph::blur_sigma(r.strength_px) * scene.pixel_scale) / factor,
+                            0.0,
+                            0.0,
+                            1.0,
+                        ],
                         ..Default::default()
                     },
                 );
-                let vertical = Self::bind(
+                let vertical = Self::bind_uniform(
                     d,
                     layout,
                     sampler,
                     &b,
                     Params {
                         step: [0.0, 1.0 / h as f32, 0.0, 0.0],
-                        effect: [graph::blur_sigma(r.strength_px) / factor, 0.0, 0.0, 1.0],
+                        effect: [
+                            (graph::blur_sigma(r.strength_px) * scene.pixel_scale) / factor,
+                            0.0,
+                            0.0,
+                            1.0,
+                        ],
                         ..Default::default()
                     },
                 );
-                let layer = Self::bind(
+                let layer = Self::bind_uniform(
                     d,
                     layout,
                     sampler,

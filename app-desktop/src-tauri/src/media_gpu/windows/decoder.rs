@@ -68,6 +68,17 @@ impl Decoder {
             _lifecycle: session.lifecycle.clone(),
         })
     }
+    pub fn seek(&mut self, seconds: f64) -> Result<(), String> {
+        if !seconds.is_finite() || seconds < 0.0 { return Err("Timestamp seek không hợp lệ.".into()); }
+        let time = (seconds * 10_000_000.0) as i64 + self.first.unwrap_or(0);
+        unsafe {
+            self.reader.Flush(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)
+                .and_then(|_| self.reader.SetCurrentPosition(&windows::core::GUID::zeroed(), &windows::core::PROPVARIANT::from(time)))
+                .map_err(|e| super::native_error("Không seek được video.", e))?;
+        }
+        self.ended = false;
+        Ok(())
+    }
     pub fn next(&mut self) -> Result<Option<Frame>, String> {
         unsafe {
             self.read().map_err(|e| {

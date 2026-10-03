@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+/* Native visuals share Export; DOM nodes beneath the HWND supply hit testing only. */
+.native-interaction-only .overlay-blur::before,
+.native-interaction-only .overlay-blur::after,
+.native-interaction-only .overlay-logo img,
+.native-interaction-only .overlay-logo-missing,
+.native-interaction-only .overlay-text-content { display: none !important; }
+.native-interaction-only .overlay-object { background: transparent !important; backdrop-filter: none !important; }
+.preview-compatibility-note { font-size: 11px; color: var(--muted); padding: 4px 16px; }
+
 
 :root {
   font-family: Inter, "Segoe UI", "Noto Sans", Arial, sans-serif;

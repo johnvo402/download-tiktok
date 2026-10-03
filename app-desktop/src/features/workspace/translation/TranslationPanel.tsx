@@ -178,11 +178,12 @@ export default function TranslationPanel() {
 
   createEffect(() => setProjectSaveState(saveState()));
 
-  createEffect(on(
-    () => {
+  const transcriptSourceIdentity = createMemo(() => {
       const project = currentProject();
       return `${project?.id ?? ''}:${project?.source.videoPath ?? ''}:${project?.source.checksumSha256 ?? ''}`;
-    },
+  });
+  createEffect(on(
+    transcriptSourceIdentity,
     () => {
     const project = untrack(currentProject);
     const retained = untrack(currentTranscript);

@@ -1,12 +1,21 @@
 use std::sync::{Arc, Mutex};
 
+#[derive(Clone)]
 pub struct GpuDevice {
+    pub instance: wgpu::Instance,
+    pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub info: wgpu::AdapterInfo,
     pub error: Arc<Mutex<Option<String>>>,
 }
 pub fn create_preferred(vendor: Option<u32>) -> Result<GpuDevice, String> {
+    create_with_power(vendor, wgpu::PowerPreference::HighPerformance)
+}
+pub fn create_with_power(
+    vendor: Option<u32>,
+    power: wgpu::PowerPreference,
+) -> Result<GpuDevice, String> {
     // Windows prefers DX12; portable Vulkan/Metal follow. No CUDA/DXC SDK install.
     for backends in [
         wgpu::Backends::DX12,
@@ -27,7 +36,7 @@ pub fn create_preferred(vendor: Option<u32>) -> Result<GpuDevice, String> {
                 .ok_or(())
         } else {
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
+                power_preference: power,
                 force_fallback_adapter: false,
                 compatible_surface: None,
             }))
@@ -75,6 +84,8 @@ pub fn create_preferred(vendor: Option<u32>) -> Result<GpuDevice, String> {
         log::info!("Visual renderer: wgpu; adapter={}; backend={:?}; type={:?}; driver={} {}; format=RGBA8 SDR; max_texture={}",
             info.name, info.backend, info.device_type, info.driver, info.driver_info, device.limits().max_texture_dimension_2d);
         return Ok(GpuDevice {
+            instance,
+            adapter,
             device,
             queue,
             info,

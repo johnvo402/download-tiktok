@@ -8,6 +8,9 @@ import { blurRect, logoRect, textOverlayRect, moveRect, resizeRect, type Rect } 
 import type { BlurRegion, ProjectLogo, ProjectTextOverlay } from '../projects/types';
 
 interface OverlayCanvasProps {
+  interactionOnly?: boolean;
+  onPreviewDraft?: (draft: { kind: OverlayKind; id: string; rect: Rect } | undefined) => void;
+  onPreviewPick?: (rect: Rect | undefined) => void;
   left: number;
   top: number;
   width: number;
@@ -89,6 +92,25 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
     });
   });
 
+  createEffect(() => { props.onPreviewDraft?.(draft()); });
+  createEffect(() => { props.onPreviewPick?.(regionDraft()); });
+  let nativeTarget: Element | undefined;
+  const nativePointer = (event: Event) => {
+    if (!props.interactionOnly || !layer) return;
+    const p = (event as CustomEvent<{kind:string;clientX:number;clientY:number;buttons:number}>).detail;
+    if (p.kind === 'pointerdown') {
+      nativeTarget = document.elementsFromPoint(p.clientX,p.clientY).find(e => layer.contains(e) && (e.matches('.overlay-resize-handle,.overlay-object') || e === layer));
+      if (props.regionPicking || props.blurRegionPicking || props.subtitleRegionPicking) nativeTarget = layer;
+      (nativeTarget as HTMLElement | undefined)?.focus?.({preventScroll:true});
+      if (!nativeTarget) setSelectedOverlay(null);
+    }
+    const target = nativeTarget ?? layer;
+    target.dispatchEvent(new PointerEvent(p.kind,{bubbles:true,clientX:p.clientX,clientY:p.clientY,pointerId:777,button:0,buttons:p.buttons}));
+    if (p.kind === 'pointerup') nativeTarget = undefined;
+  };
+  onMount(() => window.addEventListener('native-preview-pointer', nativePointer));
+  onCleanup(() => window.removeEventListener('native-preview-pointer', nativePointer));
+
   const blurDraftRect = (region: BlurRegion): Rect => draft()?.kind === 'blur' && draft()?.id === region.id ? draft()!.rect : blurRect(region);
   const logoDraftRect = (logo: ProjectLogo): Rect => draft()?.kind === 'logo' && draft()?.id === logo.id ? draft()!.rect : logoRect(logo);
   const textDraftRect = (text: ProjectTextOverlay): Rect => draft()?.kind === 'text' && draft()?.id === text.id ? draft()!.rect : textOverlayRect(text);
@@ -126,7 +148,7 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
     // Capture on the object that received the pointer down. Capturing on the
     // pointer-events:none overlay layer retargets the follow-up click to that
     // layer, which the preview interprets as a blank-area click and deselects.
-    event.currentTarget.setPointerCapture(event.pointerId);
+    if (event.isTrusted) event.currentTarget.setPointerCapture(event.pointerId);
   };
 
   const onLayerPointerMove = (event: PointerEvent) => {
@@ -191,7 +213,7 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
     (layer as HTMLDivElement & { __regionStart?: { x: number; y: number } }).__regionStart = { x, y };
     pickingPointer = kind;
     setRegionDraft({ x, y, width: 0, height: 0 });
-    layer.setPointerCapture(event.pointerId);
+    if (event.isTrusted) layer.setPointerCapture(event.pointerId);
   };
 
   const commitRect = (kind: OverlayKind, id: string, rect: Rect) => {
@@ -313,7 +335,7 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
   return <div
     ref={layer!}
     class="video-content-overlay"
-    classList={{ 'region-picking': !!props.regionPicking || !!props.blurRegionPicking || !!props.subtitleRegionPicking }}
+    classList={{ 'native-interaction-only': props.interactionOnly, 'region-picking': !!props.regionPicking || !!props.blurRegionPicking || !!props.subtitleRegionPicking }}
     style={{ left: `${props.left}px`, top: `${props.top}px`, width: `${props.width}px`, height: `${props.height}px`, 'pointer-events': props.regionPicking || props.blurRegionPicking || props.subtitleRegionPicking || props.ocrRegionEditing ? 'auto' : 'none' }}
     onPointerDown={beginRegionPick}
     onPointerMove={onLayerPointerMove}
@@ -431,7 +453,7 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
         <Show when={active()}><span class="overlay-label">Chữ trên video</span><button class="overlay-resize-handle" type="button" aria-label="Đổi kích thước lớp chữ" onPointerDown={(event) => beginPointer(event, 'text', overlay.id, 'resize')} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key.startsWith('Arrow')) { event.preventDefault(); event.stopPropagation(); nudge('text', overlay.id, event.key, event.shiftKey, true); } }} /></Show>
       </div>;
     }}</For>
-    <Show when={translated()}>{(segment) => {
+    <Show when={!props.interactionOnly && translated()}>{(segment) => {
       const style = createMemo(() => subtitle());
       const region = createMemo(() => subtitleRegion());
       const selected = createMemo(() => selectedOverlay()?.type === 'subtitle');

@@ -70,3 +70,22 @@ impl HostMetrics {
         format!("{label}: Rust process CPU={cpu:?}%; sampled peak working set={:.1}MiB (children excluded)", self.sampled_peak as f64 / 1048576.0)
     }
 }
+
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct ResourceSnapshot {pub handles:u32,pub threads:u32,pub working_set:usize,pub gpu_local:u64,pub gpu_shared:u64}
+#[cfg(test)]
+impl ResourceSnapshot {
+ pub fn read(gpu:&wgpu::Device)->Option<Self>{
+  use windows::Win32::{Foundation::CloseHandle,System::{Threading::{GetCurrentProcessId,GetProcessHandleCount},Diagnostics::ToolHelp::*},Graphics::Dxgi::*};
+  unsafe {
+   let mut handles=0;GetProcessHandleCount(GetCurrentProcess(),&mut handles).ok()?;
+   let mut memory=PROCESS_MEMORY_COUNTERS::default();memory.cb=std::mem::size_of_val(&memory) as u32;GetProcessMemoryInfo(GetCurrentProcess(),&mut memory,memory.cb).ok()?;
+   let snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD,0).ok()?;let mut entry=THREADENTRY32{dwSize:std::mem::size_of::<THREADENTRY32>() as u32,..Default::default()};let mut threads=0;
+   if Thread32First(snapshot,&mut entry).is_ok(){loop{if entry.th32OwnerProcessID==GetCurrentProcessId(){threads+=1;}if Thread32Next(snapshot,&mut entry).is_err(){break;}}}let _=CloseHandle(snapshot);
+   let hal=gpu.as_hal::<wgpu::hal::api::Dx12>()?;let luid=hal.raw_device().GetAdapterLuid();let factory:IDXGIFactory4=CreateDXGIFactory1().ok()?;let adapter:IDXGIAdapter3=factory.EnumAdapterByLuid(luid).ok()?;
+   let mut local=DXGI_QUERY_VIDEO_MEMORY_INFO::default();let mut shared=DXGI_QUERY_VIDEO_MEMORY_INFO::default();adapter.QueryVideoMemoryInfo(0,DXGI_MEMORY_SEGMENT_GROUP_LOCAL,&mut local).ok()?;adapter.QueryVideoMemoryInfo(0,DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL,&mut shared).ok()?;
+   Some(Self{handles,threads,working_set:memory.WorkingSetSize,gpu_local:local.CurrentUsage,gpu_shared:shared.CurrentUsage})
+  }
+ }
+}

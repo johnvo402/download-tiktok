@@ -35,11 +35,14 @@ pub async fn clear_ai_installation_cache() -> Result<u64, String> {
         .await.map_err(|error| format!("Không thể xóa cache cài đặt: {error}"))?
 }
 
-fn store(app: &tauri::AppHandle) -> Result<ProjectStore, String> {
+pub(crate) fn store(app: &tauri::AppHandle) -> Result<ProjectStore, String> {
     let mut root = app
         .path()
         .app_data_dir()
         .map_err(|error| format!("Không thể xác định thư mục dữ liệu ứng dụng: {error}"))?;
+    if cfg!(debug_assertions) {
+        if let Some(directory) = std::env::var_os("JC_QA_DATA_DIR") { root = std::path::PathBuf::from(directory); }
+    }
     root.push("projects");
     Ok(ProjectStore::new(root))
 }
@@ -319,6 +322,7 @@ pub async fn delete_project(
             return Err(error);
         }
         let result = (|| {
+            app.state::<crate::preview::PreviewManager>().close_project(&id);
             asr_service::cancel_project_jobs_and_wait(&asr_jobs, &id)?;
             translation_service::cancel_project_jobs_and_wait_ref(&translation_jobs, &id)?;
             tts_service::cancel_project_jobs_and_wait(&tts_jobs, &id)?;
@@ -1071,6 +1075,7 @@ pub async fn import_video(
                     .into(),
             );
         }
+        app.state::<crate::preview::PreviewManager>().close_project(&project_id);
         video_service::import_video(&ProjectStore::new(root), &project_id, &source_path, replace)
     })
     .await
@@ -1340,6 +1345,9 @@ pub fn projects_root(app: &tauri::AppHandle) -> Result<std::path::PathBuf, Strin
         .path()
         .app_data_dir()
         .map_err(|error| format!("Không thể xác định thư mục dữ liệu ứng dụng: {error}"))?;
+    if cfg!(debug_assertions) {
+        if let Some(directory) = std::env::var_os("JC_QA_DATA_DIR") { root = std::path::PathBuf::from(directory); }
+    }
     root.push("projects");
     Ok(root)
 }

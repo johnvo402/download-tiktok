@@ -1,4 +1,6 @@
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { Dynamic } from 'solid-js/web';
+import { createNativePreview } from './native-preview';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open } from '@tauri-apps/plugin-dialog';
 import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from 'solid-js';
@@ -67,6 +69,9 @@ export default function TranslationView() {
   let removeDropListener: (() => void) | undefined;
   let componentAlive = true;
   let previewAttemptedForSource: string | undefined;
+  const nativePreview = createNativePreview(() => previewFrame, () => videoElement, (time, isPlaying) => {
+    setPlayerTime(time); setPlaybackTime(time); setPlaying(isPlaying); setVideoPlaying(isPlaying);
+  });
   const videoSourceKey = createMemo(() => {
     const project = currentProject();
     return JSON.stringify([
@@ -149,6 +154,7 @@ export default function TranslationView() {
   };
 
   const startPreviewSubtitleSync = () => {
+    if (nativePreview.preferred()) return;
     if (subtitleSyncActive) return;
     subtitleSyncActive = true;
     if (videoElement) syncPreviewSubtitle(globalTimeForPlayer(videoElement.currentTime));
@@ -216,7 +222,7 @@ export default function TranslationView() {
     let active = true;
     const isCurrent = () => active && currentProject()?.id === projectId && currentProject()?.source.videoPath === videoPath;
     setLoadingVideo(true);
-    if (needsCompatibilityPreview(
+    if (!nativePreview.preferred() && needsCompatibilityPreview(
       project?.source.videoCodec,
       project?.source.videoProfile,
       project?.source.videoPixelFormat,
@@ -238,7 +244,11 @@ export default function TranslationView() {
   createEffect(() => {
     const target = seekRequest();
     if (target === null || !videoElement || !Number.isFinite(target)) return;
-    if (videoElement.readyState < HTMLMediaElement.HAVE_METADATA) return;
+    if (nativePreview.preferred()) nativePreview.control('seek', target);
+    if (videoElement.readyState < HTMLMediaElement.HAVE_METADATA) {
+      if (nativePreview.preferred()) setSeekRequest(null);
+      return;
+    }
     const preview = activeAiPreview();
     if (preview && !awaitingSourceSeek && target >= preview.startSeconds && target <= preview.endSeconds) {
       videoElement.currentTime = Math.max(0, Math.min(target - preview.startSeconds, videoElement.duration || target - preview.startSeconds));
@@ -285,6 +295,14 @@ export default function TranslationView() {
   });
 
   onMount(() => {
+    const nativeDrop = (event: Event) => {
+      const paths = (event as CustomEvent<string[]>).detail;
+      const path = paths.find(isVideoPath);
+      if (path) void selectVideo(path);
+      else setNotice({ kind: 'error', message: 'Hãy thả một tệp MP4, MOV, MKV hoặc WEBM.' });
+    };
+    window.addEventListener('native-preview-drop', nativeDrop);
+    onCleanup(() => window.removeEventListener('native-preview-drop', nativeDrop));
     frameResizeObserver = new ResizeObserver(updateContentBounds);
     if (previewFrame) frameResizeObserver.observe(previewFrame);
     requestAnimationFrame(updateContentBounds);
@@ -565,6 +583,7 @@ export default function TranslationView() {
   const importVideo = async (path: string, replace: boolean) => {
     const project = currentProject();
     if (!project || importing()) return;
+    videoElement?.pause(); nativePreview.control('pause');
     setImporting(true);
     try {
       const result = await projectService.importVideo(project.id, path, replace);
@@ -579,11 +598,19 @@ export default function TranslationView() {
     } finally {
       setImporting(false);
       setReplacePath(undefined);
+      nativePreview.reload();
     }
   };
 
   const togglePlayback = async () => {
     if (!videoElement || !videoUrl()) return;
+    if (nativePreview.preferred() && !(currentProject()?.source.audioStreams?.length)) {
+      if (segmentVoicePreviewActive()) setSegmentVoicePreviewActive(false);
+      ensureAudioGraph(); await audioContext?.resume();
+      nativePreview.control(playing() ? 'pause' : 'play');
+      setPlaying(!playing()); setVideoPlaying(playing());
+      return;
+    }
     if (videoElement.paused) {
       if (segmentVoicePreviewActive()) setSegmentVoicePreviewActive(false);
       // Create and unlock the Web Audio graph while the Play click still carries
@@ -612,13 +639,20 @@ export default function TranslationView() {
   };
 
   const toggleFullscreen = () => {
-    const frame = videoElement?.parentElement;
+    const frame = previewFrame;
     if (!frame) return;
     if (document.fullscreenElement) void document.exitFullscreen();
     else void frame.requestFullscreen().catch(() => setNotice({ kind: 'error', message: 'Không thể mở video toàn màn hình.' }));
   };
 
   const handleMediaError = async () => {
+    if (nativePreview.preferred()) {
+      if (!currentProject()?.source.audioStreams?.length) return;
+      const p = currentProject()!;
+      try { const path = await invoke<string>('preview_audio_path', { projectId: p.id }); if (currentProject()?.id === p.id) setVideoUrl(convertFileSrc(path)); }
+      catch { setMediaError('Không đọc được âm thanh nguồn. Hãy thử preview tương thích.'); }
+      return;
+    }
     if (creatingProxy()) return;
     if (usingProxy()) {
       const mediaError = videoElement?.error;
@@ -661,6 +695,7 @@ export default function TranslationView() {
 
   const onTimeUpdate = () => {
     const time = globalTimeForPlayer(videoElement.currentTime);
+    if (nativePreview.preferred()) nativePreview.control('audio', time);
     setPlayerTime(time);
     setPlaybackTime(time);
     syncPreviewSubtitle(time);
@@ -853,16 +888,27 @@ export default function TranslationView() {
               <Show when={loadingVideo()}><span class="media-loading-label"><span class="spin status-spinner media-loading-spinner" aria-hidden="true" /> {mediaStatus() || 'Đang mở video…'}</span></Show>
             </div>
           }>
-            <video
-              ref={videoElement!}
+            <Dynamic
+              component={nativePreview.preferred() ? 'audio' : 'video'}
+              ref={(element: HTMLMediaElement) => {
+                if (videoElement && videoElement !== element) {
+                  videoElement.pause(); clearDubbingAudio(); clearDialogueAudio(); void audioContext?.close();
+                  audioContext = undefined; originalGain = undefined; dubbingGain = undefined; dialogueGain = undefined;
+                  dubbingAudio = undefined; dialogueAudio = undefined;
+                }
+                videoElement = element as HTMLVideoElement;
+              }}
               class="workspace-video"
+              style={{ display: nativePreview.preferred() ? 'none' : undefined }}
               src={activeVideoUrl()}
               crossOrigin="anonymous"
               preload="metadata"
               playsinline
               onLoadedMetadata={() => {
                 const preview = activeAiPreview();
-                if (!preview && Number.isFinite(videoElement.duration)) setDuration(videoElement.duration);
+                if (!preview && Number.isFinite(videoElement.duration)) {
+                  setDuration(nativePreview.preferred() ? (currentProject()?.source.duration ?? videoElement.duration) : videoElement.duration);
+                }
                 updateContentBounds();
                 if (preview) {
                   videoElement.currentTime = 0;
@@ -879,14 +925,17 @@ export default function TranslationView() {
                 setLoadingVideo(false);
               }}
               onTimeUpdate={onTimeUpdate}
-              onPlay={() => { setPlaying(true); setVideoPlaying(true); startPreviewSubtitleSync(); }}
-              onPause={() => { setPlaying(false); setVideoPlaying(false); stopPreviewSubtitleSync(); syncPreviewSubtitle(globalTimeForPlayer(videoElement.currentTime)); dubbingAudio?.pause(); }}
+              onPlay={() => { nativePreview.control('play'); setPlaying(true); setVideoPlaying(true); startPreviewSubtitleSync(); }}
+              onPause={() => { nativePreview.control('pause'); setPlaying(false); setVideoPlaying(false); stopPreviewSubtitleSync(); syncPreviewSubtitle(globalTimeForPlayer(videoElement.currentTime)); dubbingAudio?.pause(); }}
               onSeeking={() => { syncPreviewSubtitle(globalTimeForPlayer(videoElement.currentTime)); clearDubbingAudio(); activeDubId = undefined; finishedDubId = undefined; setActiveDubbingSegment(undefined); }}
-              onSeeked={onTimeUpdate}
-              onEnded={() => { setPlaying(false); setVideoPlaying(false); stopPreviewSubtitleSync(); syncPreviewSubtitle(globalTimeForPlayer(videoElement.currentTime)); clearDubbingAudio(); activeDubId = undefined; finishedDubId = undefined; }}
+              onSeeked={() => { if (nativePreview.preferred()) nativePreview.control('seek', globalTimeForPlayer(videoElement.currentTime)); onTimeUpdate(); }}
+              onEnded={() => { nativePreview.control('pause'); setPlaying(false); setVideoPlaying(false); stopPreviewSubtitleSync(); syncPreviewSubtitle(globalTimeForPlayer(videoElement.currentTime)); clearDubbingAudio(); activeDubId = undefined; finishedDubId = undefined; }}
               onError={() => void handleMediaError()}
             />
             <OverlayCanvas
+              interactionOnly={nativePreview.preferred()}
+              onPreviewDraft={nativePreview.setDraft}
+              onPreviewPick={nativePreview.setPick}
               left={contentBounds().left}
               top={contentBounds().top}
               width={contentBounds().width}
@@ -905,7 +954,7 @@ export default function TranslationView() {
               onSubtitleRegionChange={(region) => void saveSubtitleRegion(region)}
               onOcrRegionDelete={() => void deleteOcrRegion()}
             />
-            <Show when={!playing() && !mediaError()}>
+            <Show when={!nativePreview.preferred() && !playing() && !mediaError()}>
               <button class="video-center-play" type="button" aria-label="Phát video" onClick={togglePlayback}><Play size={22} fill="currentColor" /></button>
             </Show>
           </Show>
@@ -915,6 +964,7 @@ export default function TranslationView() {
           <Show when={mediaError()}><div class="media-error-overlay" role="alert"><AlertTriangle size={17} /><span class="media-error-message">{mediaError()}</span><Show when={currentProject()?.source.videoPath}><button class="media-error-retry" type="button" onClick={retryPreview}>{usingProxy() ? 'Tạo lại preview' : 'Thử tạo preview'}</button></Show></div></Show>
         </div>
       </div>
+      <Show when={nativePreview.warning()}><span class="preview-compatibility-note" role="status">{nativePreview.preferred() ? nativePreview.warning() : 'Đang dùng preview tương thích.'}</span></Show>
       <div class="playback-controls" aria-label="Điều khiển phát video">
         <button class="play-button" type="button" aria-label={playing() ? 'Tạm dừng video' : 'Phát video'} disabled={!videoUrl() || loadingVideo() || creatingProxy()} onClick={togglePlayback}>
           {playing() ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}

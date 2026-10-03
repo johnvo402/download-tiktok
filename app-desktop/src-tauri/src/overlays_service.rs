@@ -65,7 +65,7 @@ pub fn save_visual_settings(
     store.update_project(&project)
 }
 
-fn validate_text_overlays(overlays: &[ProjectTextOverlay]) -> Result<(), String> {
+pub(crate) fn validate_text_overlays(overlays: &[ProjectTextOverlay]) -> Result<(), String> {
     let mut ids = std::collections::HashSet::new();
     for overlay in overlays {
         if overlay.id.is_empty() || !ids.insert(&overlay.id) {
@@ -230,7 +230,7 @@ pub fn logo_asset_path(
     resolve_project_file(store, project_id, &logo.relative_path, "media/overlays")
 }
 
-fn validate_subtitle_settings(settings: &SubtitleSettings) -> Result<(), String> {
+pub(crate) fn validate_subtitle_settings(settings: &SubtitleSettings) -> Result<(), String> {
     if let Some(region) = &settings.region {
         if ![region.x, region.y, region.width, region.height]
             .into_iter()
@@ -292,7 +292,7 @@ fn validate_subtitle_settings(settings: &SubtitleSettings) -> Result<(), String>
     Ok(())
 }
 
-fn validate_blur_regions(regions: &[BlurRegion]) -> Result<(), String> {
+pub(crate) fn validate_blur_regions(regions: &[BlurRegion]) -> Result<(), String> {
     let mut ids = std::collections::HashSet::new();
     if regions
         .iter()
@@ -331,7 +331,7 @@ fn validate_blur_regions(regions: &[BlurRegion]) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_logos(
+pub(crate) fn validate_logos(
     store: &ProjectStore,
     project_id: &str,
     logos: &[ProjectLogo],

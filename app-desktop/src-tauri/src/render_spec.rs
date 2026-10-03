@@ -3,7 +3,7 @@ use crate::transcript_service::Transcript;
 use serde::{Deserialize, Serialize};
 use crate::hardware_acceleration::{VideoCodec, VideoEncoder};
 
-#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PixelRect {
     pub x: u32,

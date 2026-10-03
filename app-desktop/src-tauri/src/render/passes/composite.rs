@@ -8,12 +8,21 @@ impl Renderer {
         texture: &Texture,
         params: Params,
     ) -> wgpu::BindGroup {
+        Self::bind_uniform(d, layout, sampler, texture, params).bind
+    }
+    pub(in crate::render::renderer) fn bind_uniform(
+        d: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        texture: &Texture,
+        params: Params,
+    ) -> PassBind {
         let buffer = d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("immutable pass parameters"),
+            label: Some("visual pass parameters"),
             contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        d.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind = d.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout,
             entries: &[
@@ -30,7 +39,11 @@ impl Renderer {
                     resource: buffer.as_entire_binding(),
                 },
             ],
-        })
+        });
+        PassBind {
+            bind,
+            params: buffer,
+        }
     }
     pub(in crate::render::renderer) fn layer_bind(
         d: &wgpu::Device,
@@ -39,8 +52,8 @@ impl Renderer {
         texture: &Texture,
         rect: PixelRect,
         opacity: f32,
-    ) -> wgpu::BindGroup {
-        Self::bind(
+    ) -> PassBind {
+        Self::bind_uniform(
             d,
             layout,
             sampler,
