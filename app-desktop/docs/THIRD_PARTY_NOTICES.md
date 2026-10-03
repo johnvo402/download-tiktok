@@ -80,3 +80,17 @@ weights. Native inference needs no PyTorch or conversion tools.
 Sources: https://github.com/openvinotoolkit/openvino.genai,
 https://github.com/openvinotoolkit/openvino_tokenizers,
 https://huggingface.co/OpenVINO/whisper-tiny-fp16-ov.
+## Native GPU visual renderer
+
+The desktop Rust binary links wgpu 27.0.1 (MIT/Apache-2.0), pollster 0.4.0
+(MIT/Apache-2.0), bytemuck (MIT/Apache-2.0/Zlib), cosmic-text 0.18.2
+(MIT/Apache-2.0) and image (MIT/Apache-2.0). Exact transitive versions are
+recorded in Cargo.lock. No font files or graphics runtime/model downloads are
+bundled by this renderer; text uses installed system fonts. Preserve upstream
+licenses in the release dependency inventory.
+
+- [wgpu](https://github.com/gfx-rs/wgpu)
+- [pollster](https://github.com/zesterer/pollster)
+- [bytemuck](https://github.com/Lokathor/bytemuck)
+- [cosmic-text](https://github.com/pop-os/cosmic-text)
+- [image](https://github.com/image-rs/image)

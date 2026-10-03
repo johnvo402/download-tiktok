@@ -184,7 +184,7 @@ pub fn start_export(
         project_id.clone(),
         project.name.clone(),
         "export",
-        if spec.output.encoder.hardware() { &["gpu", "cpu", "ffmpeg", "disk"] } else { &["cpu", "ffmpeg", "disk"] },
+        if spec.output.encoder.hardware() || crate::render::RenderBackend::configured()? != crate::render::RenderBackend::Legacy { &["gpu", "cpu", "ffmpeg", "disk"] } else { &["cpu", "ffmpeg", "disk"] },
         serde_json::to_value(&options).ok(),
     );
     let state = Arc::new(AtomicU8::new(JOB_RUNNING));
@@ -710,9 +710,65 @@ fn run_export_inner(
         .tempfile_in(&export_dir)
         .map_err(|error| format!("Không thể tạo tệp render tạm trong thư mục đích: {error}"))?;
     let staging_path = staging_file.into_temp_path();
+    let render_backend = crate::render::RenderBackend::configured()?;
+    let mut gpu_permit = None;
+    let mut gpu_renderer = None;
+    let mut gpu_fps = 0.0;
+    if render_backend != crate::render::RenderBackend::Legacy {
+        let initialized = (|| {
+            gpu_fps = crate::render::stream::compatible_input(&source_path)?;
+            loop {
+                if state.load(Ordering::SeqCst) == JOB_CANCELLED { return Err("Đã hủy export.".into()); }
+                match crate::resource_scheduler::ai_gpu_slot().try_lock() {
+                    Ok(permit) => { gpu_permit = Some(permit); break; }
+                    Err(std::sync::TryLockError::Poisoned(error)) => { gpu_permit = Some(error.into_inner()); break; }
+                    Err(std::sync::TryLockError::WouldBlock) => thread::sleep(Duration::from_millis(50)),
+                }
+            }
+            crate::render::renderer::Renderer::new(crate::render::graph::RenderScene::from_spec(&spec), &logo_paths)
+        })();
+        match initialized {
+            Ok(renderer) => gpu_renderer = Some(renderer),
+            Err(error) if render_backend == crate::render::RenderBackend::Auto && state.load(Ordering::SeqCst) != JOB_CANCELLED => {
+                log::warn!("GPU visual renderer unavailable; fallback legacy: {error}");
+                gpu_permit = None;
+                emit_event(app, event(project_id, job_id, "running", 0.0, started.elapsed().as_secs_f64(), source_duration, None, None,
+                    "Đang dùng bộ render tương thích FFmpeg.".into(), spec.subtitle.warnings.clone()));
+            }
+            Err(error) => return Err(error),
+        }
+    }
     let candidates = hardware_acceleration::fallback_candidates(options.video_codec, options.encoder, spec.output.encoder)?;
     for (attempt, backend) in candidates.iter().copied().enumerate() {
         spec.output.encoder = backend;
+        if let Some(renderer) = gpu_renderer.as_mut() {
+            let raw_index = 1 + dub_items.len() + usize::from(dialogue_stem.is_some());
+            let mut gpu_graph = format!("[{raw_index}:v]null[vout];");
+            gpu_graph.push_str(&build_audio_filtergraph(&spec.audio, &dub_items, audio_expected, dialogue_stem.as_ref().map(|_| 1 + dub_items.len()), spec.duration));
+            let gpu_filter = render_dir.join("audio-gpu-filtergraph.txt");
+            fs::write(&gpu_filter, gpu_graph).map_err(|error| format!("Không ghi được audio graph: {error}"))?;
+            let command = build_ffmpeg_command(crate::runtime_paths::ffmpeg_command()?, &source_path, &dub_items, &[], &[], dialogue_stem.as_deref(),
+                &gpu_filter, &staging_path, &spec, audio_expected, Some(gpu_fps))?;
+            let rendered = crate::render::stream::run(renderer, crate::render::stream::decoder_command(&source_path)?, command, gpu_fps, &ai_patches, state, |pts, frames| {
+                let fraction = (pts / source_duration).clamp(0.0, 0.995);
+                emit_event(app, event(project_id, job_id, "running", if ai_patches.is_empty() { fraction } else { 0.15 + fraction * 0.845 }, started.elapsed().as_secs_f64(), source_duration, None, None,
+                    format!("Đang render GPU · {frames} khung · {}", backend.label()), spec.subtitle.warnings.clone()));
+            });
+            match rendered {
+                Ok(_) => break,
+                Err(error) => {
+                    log::error!("GPU export failed: {}; {}", error.message, error.details);
+                    if state.load(Ordering::SeqCst) == JOB_CANCELLED { return Err("Đã hủy export.".into()); }
+                    if error.encoder && options.encoder == VideoEncoder::Auto && attempt + 1 < candidates.len()
+                        && hardware_acceleration::is_encoder_initialization_error(&error.details) { continue; }
+                    if render_backend != crate::render::RenderBackend::Auto { return Err(error.message); }
+                    emit_event(app, event(project_id, job_id, "running", 0.0, started.elapsed().as_secs_f64(), source_duration, None, None,
+                        "Render GPU gặp lỗi; đang xuất lại bằng bộ render tương thích.".into(), spec.subtitle.warnings.clone()));
+                    gpu_renderer = None;
+                    drop(gpu_permit.take());
+                }
+            }
+        }
         let mut command = build_ffmpeg_command(
             crate::runtime_paths::ffmpeg_command()?,
             &source_path,
@@ -724,6 +780,7 @@ fn run_export_inner(
             &staging_path,
             &spec,
             audio_expected,
+            None,
         )?;
         if state.load(Ordering::SeqCst) == JOB_CANCELLED {
             return Err("Đã hủy export.".into());
@@ -980,6 +1037,7 @@ fn build_filtergraph(
         &dub_items,
         audio_expected,
         dialogue_input,
+        spec.duration,
     ));
     Ok((graph, dub_items, logos, audio_expected))
 }
@@ -1020,17 +1078,14 @@ fn build_video_filtergraph(
         // to CSS blur() sigma, so using the same strength value made export visibly
         // weaker and could leave hard subtitle glyphs readable. gblur uses the
         // source-pixel strength directly and is not capped by half the crop height.
-        let blur_sigma = f64::from(region.strength_px.clamp(1, 100)) * 2.0;
+        let blur_sigma = f64::from(crate::render::graph::blur_sigma(region.strength_px));
         let noise = if region.pixel_noise > 0 { format!(",noise=alls={}:allf=t+u", region.pixel_noise) } else { String::new() };
-        if region.edge_blend > 0 && region.strength_px < 95 {
+        let feather_px = crate::render::graph::feather_px(rect, region.strength_px, region.edge_blend);
+        if feather_px > 0.0 {
             // Edge softness only mixes original pixels into a narrow outer feather.
             // At maximum strength remove that mix entirely so hard subtitles cannot
             // remain readable near the region boundary.
-            let feather = ((rect.width.min(rect.height) as f64
-                * (region.edge_blend as f64 / 50.0).clamp(0.0, 1.0)
-                * 0.10)
-                .round() as u32)
-                .max(1);
+            let feather = (feather_px.round() as u32).max(1);
             let merge_original = format!("vmergeorig{stage}");
             let mask_base = format!("vmaskbase{stage}");
             let mask = format!("vmask{stage}");
@@ -1094,6 +1149,7 @@ fn build_audio_filtergraph(
     dub_items: &[(PathBuf, f64, f64, String)],
     audio_expected: bool,
     dialogue_input: Option<usize>,
+    duration: f64,
 ) -> String {
     let mut graph = String::new();
     let has_original = audio.include_original;
@@ -1147,13 +1203,15 @@ fn build_audio_filtergraph(
             audio_labels.push("dubmix".into());
         }
         if audio_labels.len() == 1 {
-            graph.push_str(&format!("[{}]alimiter=limit=0.98[aout];", audio_labels[0]));
+            graph.push_str(&format!("[{}]alimiter=limit=0.98[audio_unpadded];", audio_labels[0]));
         } else {
             graph.push_str(&format!(
-                "[{}][{}]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.98[aout];",
+                "[{}][{}]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.98[audio_unpadded];",
                 audio_labels[0], audio_labels[1]
             ));
         }
+        // Keep silence after the last dub: -shortest must not truncate the video.
+        graph.push_str(&format!("[audio_unpadded]apad=whole_dur={duration:.6},atrim=duration={duration:.6}[aout];"));
     }
     graph
 }
@@ -1169,6 +1227,7 @@ fn build_ffmpeg_command(
     output: &Path,
     spec: &RenderSpecification,
     audio_expected: bool,
+    raw_video_fps: Option<f64>,
 ) -> Result<Command, String> {
     command
         .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
@@ -1189,6 +1248,10 @@ fn build_ffmpeg_command(
             .arg(&patch.image_pattern);
     }
     if let Some(path) = dialogue_stem { command.arg("-i").arg(path); }
+    if let Some(fps) = raw_video_fps {
+        command.args(["-f", "rawvideo", "-pix_fmt", "rgba", "-video_size"]).arg(format!("{}x{}", spec.width, spec.height))
+            .arg("-framerate").arg(format!("{fps:.12}")).args(["-i", "pipe:0"]);
+    }
     command
         .args(["-filter_complex_script"])
         .arg(filter_script)
@@ -1621,6 +1684,44 @@ mod tests {
     }
 
     fn verify_render(codec: crate::hardware_acceleration::VideoCodec, backend: VideoEncoder) {
+        verify_render_path(codec, backend, false);
+    }
+
+    #[test]
+    #[ignore="Requires a compatible graphics adapter and FFmpeg; exports real GPU visuals and delayed mixed audio"]
+    fn gpu_exports_real_effects_and_audio_on_cpu_and_intel_qsv() {
+        if crate::render::renderer::Renderer::new(crate::render::graph::RenderScene::empty(320,240), &[]).is_err() { eprintln!("Skipping GPU export: no adapter"); return; }
+        verify_render_path(crate::hardware_acceleration::VideoCodec::H264, VideoEncoder::Cpu, true);
+        verify_render_resolution_audio(crate::hardware_acceleration::VideoCodec::H264, VideoEncoder::Cpu, true, 320, 240, false);
+        let capabilities=hardware_acceleration::capabilities(false).unwrap();
+        if capabilities.encoders.iter().any(|c|c.id==VideoEncoder::Intel&&c.supports(crate::hardware_acceleration::VideoCodec::H264)) {
+            verify_render_path(crate::hardware_acceleration::VideoCodec::H264, VideoEncoder::Intel, true);
+        }
+    }
+
+    fn verify_render_path(codec: crate::hardware_acceleration::VideoCodec, backend: VideoEncoder, gpu:bool) {
+        verify_render_resolution(codec, backend, gpu, 320, 240);
+    }
+
+    #[test]
+    #[ignore = "Real 1080p visual+audio export benchmark, GPU adapter and FFmpeg required"]
+    fn gpu_1080p_export_comparison() {
+        use crate::hardware_acceleration::VideoCodec;
+        if crate::render::renderer::Renderer::new(crate::render::graph::RenderScene::empty(1920,1080), &[]).is_err() {
+            eprintln!("Skipping 1080p GPU export: no compatible adapter"); return;
+        }
+        verify_render_resolution(VideoCodec::H264, VideoEncoder::Cpu, false, 1920, 1080);
+        verify_render_resolution(VideoCodec::H264, VideoEncoder::Cpu, true, 1920, 1080);
+        let capabilities = hardware_acceleration::capabilities(false).unwrap();
+        if capabilities.encoders.iter().any(|c|c.id==VideoEncoder::Intel && c.supports(VideoCodec::H264)) {
+            verify_render_resolution(VideoCodec::H264, VideoEncoder::Intel, true, 1920, 1080);
+        }
+    }
+
+    fn verify_render_resolution(codec: crate::hardware_acceleration::VideoCodec, backend: VideoEncoder, gpu:bool, width:u32, height:u32) {
+        verify_render_resolution_audio(codec, backend, gpu, width, height, true);
+    }
+    fn verify_render_resolution_audio(codec: crate::hardware_acceleration::VideoCodec, backend: VideoEncoder, gpu:bool, width:u32, height:u32, original_audio:bool) {
         if Command::new("ffmpeg").arg("-version").output().is_err() {
             eprintln!("Skipping integration render: FFmpeg is not installed");
             return;
@@ -1642,7 +1743,7 @@ mod tests {
                 "-f",
                 "lavfi",
                 "-i",
-                "color=c=gray:s=320x240:r=20:d=1",
+                &format!("color=c=gray:s={width}x{height}:r=20:d=1"),
                 "-f",
                 "lavfi",
                 "-i",
@@ -1793,6 +1894,7 @@ mod tests {
         let options = ExportOptions {
             encoder: backend,
             video_codec: codec,
+            include_original_audio: original_audio,
             include_dubbing: true,
             ducking: true,
             ..ExportOptions::default()
@@ -1814,7 +1916,7 @@ mod tests {
             "blur must precede translated subtitles"
         );
         assert!(
-            graph.find("subtitles=").unwrap() < graph.rfind("overlay=248").unwrap(),
+            graph.find("subtitles=").unwrap() < graph.rfind(&format!("overlay={}", even_rect(spec.logos[0].rect, spec.width, spec.height).x)).unwrap(),
             "logo overlay must follow translated subtitles"
         );
         assert!(
@@ -1826,16 +1928,39 @@ mod tests {
             "pixel noise should be applied to the blurred crop"
         );
         assert!(graph.contains("adelay=200:all=1"));
-        assert!(graph.contains("if(between(t,0.200,0.650)"));
+        if original_audio { assert!(graph.contains("if(between(t,0.200,0.650)")); }
+        assert!(graph.contains("apad=whole_dur=1.000000"));
         assert_eq!(dubs.len(), 1);
         assert_eq!(logos.len(), 1);
         assert!(expected_audio);
         let filter = project_root.join("cache/filtergraph.txt");
         fs::write(&filter, &graph).unwrap();
         let output_path = project_root.join("exports/render-integration.mp4");
+        let benchmark = Instant::now();
+        if gpu {
+            let mut renderer=crate::render::renderer::Renderer::new(crate::render::graph::RenderScene::from_spec(&spec), &logos).unwrap();
+            let fps=crate::render::stream::compatible_input(&source).unwrap();
+            let gpu_graph=format!("[{}:v]null[vout];{}",1+dubs.len(),build_audio_filtergraph(&spec.audio,&dubs,true,None,spec.duration));
+            assert!(!gpu_graph.contains("gblur")&&!gpu_graph.contains("subtitles=")&&!gpu_graph.contains("overlay="));
+            fs::write(&filter,gpu_graph).unwrap();
+            let command=build_ffmpeg_command(crate::runtime_paths::ffmpeg_command().unwrap(),&source,&dubs,&[],&[],None,&filter,&output_path,&spec,true,Some(fps)).unwrap();
+            let state=Arc::new(AtomicU8::new(JOB_RUNNING));
+            let stats=crate::render::stream::run(&mut renderer,crate::render::stream::decoder_command(&source).unwrap(),command,fps,&[],&state,|_,_|{}).unwrap();
+            assert_eq!(stats.frames,20);assert!(stats.seconds>0.0);
+            println!("wgpu export {backend:?} passed on {} / {} ({:.3}s, {:.1} fps stream)",renderer.adapter_name(),renderer.adapter_backend(),stats.seconds,stats.frames as f64/stats.seconds);
+            let mut cancelled_command=build_ffmpeg_command(crate::runtime_paths::ffmpeg_command().unwrap(),&source,&dubs,&[],&[],None,&filter,&project_root.join("exports/cancelled.mp4"),&spec,true,Some(fps)).unwrap();
+            cancelled_command.stdin(Stdio::piped());
+            let mut slow=crate::runtime_paths::ffmpeg_command().unwrap();
+            slow.args(["-hide_banner","-loglevel","info","-re","-i"]).arg(&source).args(["-map","0:v:0","-an","-vf","setpts=PTS-STARTPTS,showinfo","-fps_mode","passthrough","-pix_fmt","rgba","-f","rawvideo","pipe:1"]).stdout(Stdio::piped()).stderr(Stdio::piped());
+            let state=Arc::new(AtomicU8::new(JOB_RUNNING));let cancel=state.clone();
+            let trigger=thread::spawn(move||{thread::sleep(Duration::from_millis(150));cancel.store(JOB_CANCELLED,Ordering::SeqCst);});
+            let before=Instant::now();
+            let result=crate::render::stream::run(&mut renderer,slow,cancelled_command,fps,&[],&state,|_,_|{});
+            trigger.join().unwrap();assert!(result.is_err());assert!(before.elapsed()<Duration::from_secs(5));
+        } else {
         let rendered = build_ffmpeg_command(
             crate::runtime_paths::ffmpeg_command().unwrap(), &source, &dubs, &logos,
-            &[], None, &filter, &output_path, &spec, expected_audio,
+            &[], None, &filter, &output_path, &spec, expected_audio, None,
         ).unwrap().output().unwrap();
         assert!(
             rendered.status.success(),
@@ -1843,10 +1968,12 @@ mod tests {
             String::from_utf8_lossy(&rendered.stderr),
             graph
         );
+        }
+        if !gpu { println!("legacy export {width}x{height} {backend:?}: {:.3}s", benchmark.elapsed().as_secs_f64()); }
         validate_output(
             &output_path,
-            320,
-            240,
+            width,
+            height,
             project.source.duration.unwrap(),
             true,
         )

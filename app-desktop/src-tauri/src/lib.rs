@@ -10,6 +10,7 @@ mod overlays_service;
 mod optional_runtime;
 mod project_service;
 mod render_service;
+pub mod render;
 pub mod render_spec;
 mod resource_scheduler;
 mod runtime_health;

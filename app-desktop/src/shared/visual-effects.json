@@ -1,0 +1,6 @@
+{
+  "blurSigmaScale": 2.0,
+  "fullStrengthThreshold": 95,
+  "maximumEdgeBlend": 50,
+  "featherFraction": 0.1
+}

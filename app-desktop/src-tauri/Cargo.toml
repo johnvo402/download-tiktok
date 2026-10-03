@@ -26,3 +26,8 @@ tauri-plugin-dialog = "2"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt", "time"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+wgpu = { version = "=27.0.1", default-features = false, features = ["std", "parking_lot", "dx12", "vulkan", "metal", "wgsl"] }
+pollster = "=0.4.0"
+bytemuck = { version = "1.24", features = ["derive"] }
+cosmic-text = "=0.18.2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }

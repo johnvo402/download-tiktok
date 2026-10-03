@@ -1,3 +1,4 @@
+import { blurVisualParams } from './blur-visual-params';
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { currentProject, currentTranscript, selectedOverlay, setActiveWorkspacePanelTab, setBlurRegionPicking, setCurrentProject, setNotice, setOcrRegionEditing, setOcrRegionPicking, setSelectedOverlay, setSubtitleRegionPicking } from '../../app/project-state';
@@ -363,7 +364,7 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
     <For each={currentProject()?.blurRegions ?? []}>{(region) => {
       const rect = () => blurDraftRect(region);
       const active = () => { const current = selectedOverlay(); return current?.type === 'blur' && current.id === region.id; };
-      const edgeFeather = () => region.strength >= 95 ? 0 : ((region.edgeBlend ?? 0) / 50) * 0.1;
+      const visual = () => blurVisualParams(region.strength, region.edgeBlend ?? 0, rect(), props.videoWidth, props.videoHeight, props.height);
       return <div
         class="overlay-object overlay-blur"
         classList={{ selected: active(), disabled: !region.enabled, 'overlay-ai-remove': region.effect === 'sttn' }}
@@ -372,7 +373,7 @@ export default function OverlayCanvas(props: OverlayCanvasProps) {
         tabindex="0"
         aria-label={`${region.effect === 'sttn' ? 'Vùng xóa chữ STTN' : 'Vùng blur'} ${region.id.slice(0, 8)}${region.enabled ? '' : ', đang tắt'}`}
         title="Kéo để di chuyển · góc phải dưới để đổi kích thước"
-        style={{ left: `${rect().x * 100}%`, top: `${rect().y * 100}%`, width: `${rect().width * 100}%`, height: `${rect().height * 100}%`, '--blur-strength': `${region.strength * 2 * (props.height / Math.max(props.videoHeight, 1))}px`, '--blur-edge-x': `${edgeFeather() * 100 * Math.min(rect().width, rect().height) / Math.max(rect().width, 0.0001)}%`, '--blur-edge-y': `${edgeFeather() * 100 * Math.min(rect().width, rect().height) / Math.max(rect().height, 0.0001)}%` }}
+        style={{ left: `${rect().x * 100}%`, top: `${rect().y * 100}%`, width: `${rect().width * 100}%`, height: `${rect().height * 100}%`, '--blur-strength': `${visual().previewSigma}px`, '--blur-edge-x': `${visual().featherXPercent}%`, '--blur-edge-y': `${visual().featherYPercent}%` }}
         onPointerDown={(event) => beginPointer(event, 'blur', region.id, 'move')}
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {

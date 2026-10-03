@@ -911,6 +911,19 @@ where
     F: FnMut(f64, String),
 {
     let operation = request.get("operation").and_then(|value| value.as_str()).unwrap_or("unknown");
+    // Serialize potentially accelerated OCR/STTN with ASR/TTS and the new visual renderer.
+    // The permit is released before subsequent FFmpeg work; model inference is unchanged.
+    let _gpu_permit = if request.get("engine").and_then(|value| value.as_str()) == Some("sttn")
+        || request.get("ocrDevice").and_then(|value| value.as_str()) != Some("cpu") {
+        Some(loop {
+            if state.load(Ordering::SeqCst) == 2 { return Err("Đã hủy khi đang chờ GPU.".into()); }
+            match crate::resource_scheduler::ai_gpu_slot().try_lock() {
+                Ok(permit) => break permit,
+                Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => thread::sleep(Duration::from_millis(50)),
+            }
+        })
+    } else { None };
     log::info!(
         "Starting AI text-removal worker: operation={}, engine={}, requested_ocr_device={}, ocr_model={}",
         operation,

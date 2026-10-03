@@ -178,6 +178,10 @@ pub struct SubtitleRenderSpec {
     pub region: Option<PixelRect>,
     pub font_name: String,
     pub bold: bool,
+    pub font_weight: u16,
+    pub line_height: f64,
+    pub background_color: String,
+    pub background_opacity: f64,
     pub primary_colour: String,
     pub outline_colour: String,
     pub outline_width: u16,
@@ -331,7 +335,10 @@ pub fn build_render_specification(
         .logos
         .iter()
         .filter(|logo| !logo.merge_only)
-        .map(|logo| logo_spec(logo, width, height))
+        .map(|logo| logo_spec(logo, width, height).map(|mut spec| {
+            spec.enabled &= options.apply_logos;
+            spec
+        }))
         .collect::<Result<Vec<_>, _>>()?;
     let text_overlays = project.text_overlays.iter().map(|overlay| text_overlay_spec(overlay, width, height)).collect::<Result<Vec<_>, _>>()?;
     let subtitle = subtitle_spec(
@@ -530,6 +537,10 @@ fn subtitle_spec(
         region,
         font_name: safe_font_name(&settings.font_family),
         bold: settings.font_weight >= 600,
+        font_weight: settings.font_weight,
+        line_height: settings.line_height,
+        background_color: settings.background_color.clone(),
+        background_opacity: if settings.background_enabled { settings.background_opacity } else { 0.0 },
         primary_colour: to_ass_color(&settings.text_color, 1.0)?,
         outline_colour: to_ass_color(&settings.outline_color, 1.0)?,
         outline_width: if settings.outline {
@@ -911,6 +922,29 @@ mod tests {
             video_checksum: None,
             segments: vec![segment(text)],
         }
+    }
+
+    #[test]
+    fn gpu_scene_obeys_export_effect_switches() {
+        let mut project = project(1920,1080,(0.1,0.7,0.8,0.2));
+        project.logos.push(ProjectLogo {
+            id:"logo".into(), relative_path:"media/overlays/logo.png".into(), original_name:"logo.png".into(),
+            x:0.1, y:0.1, width:0.1, height:0.1, enabled:true, opacity:0.5,
+            maintain_aspect_ratio:true, merge_only:false,
+        });
+        let options = ExportOptions { apply_logos:false, apply_blur:false, burn_subtitles:false, ..Default::default() };
+        let spec = build_render_specification(&project,&transcript("Cảnh giới Đại Đế"),10.0,&options).unwrap();
+        let scene = crate::render::graph::RenderScene::from_spec(&spec);
+        assert!(scene.logos.is_empty());
+        assert!(scene.blurs.is_empty());
+        assert!(!scene.subtitle.enabled);
+        let options = ExportOptions::default();
+        let spec = build_render_specification(&project,&transcript("Cảnh giới Đại Đế"),10.0,&options).unwrap();
+        let scene = crate::render::graph::RenderScene::from_spec(&spec);
+        assert_eq!(scene.logos.len(),1);
+        assert_eq!(scene.blurs.len(),1);
+        assert_eq!(scene.blurs[0].rect,spec.blur_regions[0].rect);
+        assert_eq!(scene.subtitle.region,spec.subtitle.region);
     }
 
     #[test]
