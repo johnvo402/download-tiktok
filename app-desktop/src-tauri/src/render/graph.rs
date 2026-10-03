@@ -22,6 +22,7 @@ pub const ORDER: [Stage; 5] = [
 
 /// Same resolved video pixel rectangles as legacy export. Assets are resolved by
 /// the caller before entering the renderer, so imported projects cannot read arbitrary files.
+#[derive(Clone)]
 pub struct RenderScene {
     pub width: u32,
     pub height: u32,

@@ -1,5 +1,8 @@
 # Task 4 — GPU visual renderer
 
+Task 5 bổ sung đường Windows GPU surfaces; xem [Native GPU media pipeline](NATIVE_GPU_MEDIA_PIPELINE.md).
+Trong Auto, đầu vào được hỗ trợ và hardware encoder có thể dùng đường Tier B thay cho staging mô tả bên dưới.
+
 ## Kết quả và phạm vi
 
 Bộ render Rust/wgpu đã được nối vào **Export chính** trong `run_export_inner`.

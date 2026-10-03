@@ -34,8 +34,27 @@ impl StreamFailure {
 pub struct Stats {
     pub frames: u64,
     pub seconds: f64,
+    pub upload_bytes: u64,
+    pub readback_bytes: u64,
+    pub child_cpu_seconds: Option<f64>,
 }
 struct Process(Arc<Mutex<Child>>);
+impl Process {
+    fn cpu_seconds(&self) -> Option<f64> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            let child = self.0.lock().ok()?;
+            crate::media_gpu::windows::metrics::process_cpu_seconds(
+                windows::Win32::Foundation::HANDLE(child.as_raw_handle()),
+            )
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
+}
 impl Drop for Process {
     fn drop(&mut self) {
         if let Ok(mut child) = self.0.lock() {
@@ -474,7 +493,18 @@ pub fn run(
     on_progress(previous.unwrap_or(0.0), frames);
     let seconds = started.elapsed().as_secs_f64();
     log::info!("GPU render stream: adapter={}; resolution={}x{}; frames={frames}; elapsed={seconds:.3}s; fps={:.2}; ms/frame={:.3}",renderer.adapter_name(),renderer.scene.width,renderer.scene.height,frames as f64/seconds,seconds*1000.0/frames.max(1) as f64);
-    Ok(Stats { frames, seconds })
+    let bytes = frames * renderer.scene.width as u64 * renderer.scene.height as u64 * 4;
+    log::info!("Media pipeline: Tier C; frames={frames}; full-frame upload_bytes={bytes}; readback_bytes={bytes}; CPU RGBA staging");
+    Ok(Stats {
+        frames,
+        seconds,
+        upload_bytes: bytes,
+        readback_bytes: bytes,
+        child_cpu_seconds: decoder
+            .cpu_seconds()
+            .zip(encoder.cpu_seconds())
+            .map(|(a, b)| a + b),
+    })
 }
 
 #[cfg(test)]

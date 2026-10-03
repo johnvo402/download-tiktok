@@ -711,10 +711,61 @@ fn run_export_inner(
         .map_err(|error| format!("Không thể tạo tệp render tạm trong thư mục đích: {error}"))?;
     let staging_path = staging_file.into_temp_path();
     let render_backend = crate::render::RenderBackend::configured()?;
+    let media_preference = crate::media_gpu::pipeline::Preference::configured()?;
+    let mut native_video: Option<tempfile::TempPath> = None;
     let mut gpu_permit = None;
     let mut gpu_renderer = None;
     let mut gpu_fps = 0.0;
-    if render_backend != crate::render::RenderBackend::Legacy {
+    if media_preference == crate::media_gpu::pipeline::Preference::ZeroCopy {
+        return Err("Thiết bị hiện chưa hỗ trợ zero-copy trực tiếp. Hãy dùng Auto hoặc GPU-copy.".into());
+    }
+    if render_backend == crate::render::RenderBackend::Legacy && media_preference == crate::media_gpu::pipeline::Preference::GpuCopy {
+        return Err("Không thể bật GPU-copy cùng với bộ render tương thích. Hãy chọn Auto.".into());
+    }
+    #[cfg(windows)]
+    if render_backend != crate::render::RenderBackend::Legacy && media_preference != crate::media_gpu::pipeline::Preference::Cpu {
+        let native_attempt = (|| -> Result<tempfile::TempPath,String> {
+            if !spec.output.encoder.hardware() {return Err("Bộ mã hóa CPU cần pipeline staging.".into());}
+            if !ai_patches.is_empty() {return Err("Vùng phục hồi AI hiện cần pipeline staging.".into());}
+            crate::media_gpu::pipeline::preflight(&source_path)?;
+            loop {
+                if state.load(Ordering::SeqCst)==JOB_CANCELLED{return Err("Đã hủy export.".into());}
+                match crate::resource_scheduler::ai_gpu_slot().try_lock(){
+                    Ok(p)=>{gpu_permit=Some(p);break;},
+                    Err(std::sync::TryLockError::Poisoned(e))=>{gpu_permit=Some(e.into_inner());break;},
+                    Err(std::sync::TryLockError::WouldBlock)=>thread::sleep(Duration::from_millis(50)),
+                }
+            }
+            let temp=tempfile::Builder::new().prefix("native-video-").suffix(".mp4").tempfile_in(&render_dir)
+                .map_err(|e|format!("Không tạo được video tạm: {e}"))?.into_temp_path();
+            let bitrate=crate::media_gpu::pipeline::bitrate(&source_path,&spec)?;
+            let mut pipeline=crate::media_gpu::windows::NativePipeline::new(&source_path,&temp,
+                crate::render::graph::RenderScene::from_spec(&spec),&logo_paths,spec.output.video_codec,bitrate,
+                crate::media_gpu::capability::vendor(spec.output.encoder))?;
+            let mut last=Instant::now();
+            pipeline.run(state,|pts,frames|{
+                if last.elapsed()<Duration::from_millis(250){return;}
+                last=Instant::now();
+                emit_event(app,event(project_id,job_id,"running",(pts/source_duration*0.9).clamp(0.0,0.9),
+                    started.elapsed().as_secs_f64(),source_duration,None,None,
+                    format!("Đang xử lý video trên GPU · {frames} khung · {}",spec.output.encoder.label()),spec.subtitle.warnings.clone()));
+            })?;
+            Ok(temp)
+        })();
+        drop(gpu_permit.take());
+        match native_attempt {
+            Ok(temp)=>native_video=Some(temp),
+            Err(e) if media_preference==crate::media_gpu::pipeline::Preference::Auto && state.load(Ordering::SeqCst)!=JOB_CANCELLED=>{
+                log::warn!("Native GPU pipeline unavailable; Tier C fallback: {e}");
+            },
+            Err(e)=>return Err(e),
+        }
+    }
+    #[cfg(not(windows))]
+    if media_preference == crate::media_gpu::pipeline::Preference::GpuCopy {
+        return Err("Pipeline chia sẻ texture hiện chỉ hỗ trợ Windows.".into());
+    }
+    if native_video.is_none() && render_backend != crate::render::RenderBackend::Legacy {
         let initialized = (|| {
             gpu_fps = crate::render::stream::compatible_input(&source_path)?;
             loop {
@@ -725,7 +776,7 @@ fn run_export_inner(
                     Err(std::sync::TryLockError::WouldBlock) => thread::sleep(Duration::from_millis(50)),
                 }
             }
-            crate::render::renderer::Renderer::new(crate::render::graph::RenderScene::from_spec(&spec), &logo_paths)
+            crate::render::renderer::Renderer::new_preferred(crate::render::graph::RenderScene::from_spec(&spec), &logo_paths, crate::media_gpu::capability::vendor(spec.output.encoder))
         })();
         match initialized {
             Ok(renderer) => gpu_renderer = Some(renderer),
@@ -769,7 +820,12 @@ fn run_export_inner(
                 }
             }
         }
-        let mut command = build_ffmpeg_command(
+        let mut command = if let Some(video) = native_video.as_deref() {
+            let audio_filter=render_dir.join("audio-native-filtergraph.txt");
+            fs::write(&audio_filter,build_audio_filtergraph(&spec.audio,&dub_items,audio_expected,
+                dialogue_stem.as_ref().map(|_|1+dub_items.len()),spec.duration)).map_err(|e|e.to_string())?;
+            build_native_mux_command(&source_path,video,&dub_items,dialogue_stem.as_deref(),&audio_filter,&staging_path,&spec,audio_expected)?
+        } else { build_ffmpeg_command(
             crate::runtime_paths::ffmpeg_command()?,
             &source_path,
             &dub_items,
@@ -781,7 +837,7 @@ fn run_export_inner(
             &spec,
             audio_expected,
             None,
-        )?;
+        )? };
         if state.load(Ordering::SeqCst) == JOB_CANCELLED {
             return Err("Đã hủy export.".into());
         }
@@ -839,7 +895,7 @@ fn run_export_inner(
                     }
                     if key == "progress" && last_emit.elapsed() >= Duration::from_millis(250) {
                         let encode_percent = (out_seconds / source_duration).clamp(0.0, 0.995);
-                        let percent = if ai_patches.is_empty() { encode_percent } else { 0.15 + encode_percent * 0.845 };
+                        let percent = if native_video.is_some() { 0.9 + encode_percent * 0.095 } else if ai_patches.is_empty() { encode_percent } else { 0.15 + encode_percent * 0.845 };
                         emit_event(
                             app,
                             event(
@@ -851,7 +907,7 @@ fn run_export_inner(
                                 source_duration,
                                 speed,
                                 None,
-                                format!("Đang mã hóa video · {}", spec.output.encoder.label()),
+                                if native_video.is_some() { "Đang ghép âm thanh và hoàn tất MP4.".into() } else {format!("Đang mã hóa video · {}", spec.output.encoder.label())},
                                 spec.subtitle.warnings.clone(),
                             ),
                         );
@@ -870,7 +926,7 @@ fn run_export_inner(
                         .lock()
                         .map(|tail| tail.iter().rev().cloned().collect::<Vec<_>>().join(" "))
                         .unwrap_or_default();
-                    if options.encoder == VideoEncoder::Auto && encoded_frames == 0
+                    if native_video.is_none() && options.encoder == VideoEncoder::Auto && encoded_frames == 0
                         && attempt + 1 < candidates.len() && hardware_acceleration::is_encoder_initialization_error(&details) {
                         log::warn!("Auto encode initialization failed on {backend:?}, trying next encoder: {details}");
                         emit_event(app, event(project_id, job_id, "running", if ai_patches.is_empty() { 0.0 } else { 0.15 }, started.elapsed().as_secs_f64(), source_duration, None, None,
@@ -1214,6 +1270,24 @@ fn build_audio_filtergraph(
         graph.push_str(&format!("[audio_unpadded]apad=whole_dur={duration:.6},atrim=duration={duration:.6}[aout];"));
     }
     graph
+}
+
+/// Native video is already encoded. FFmpeg only composes audio and muxes;
+/// no video filter, rawvideo pipe, video decode or second encoding pass.
+fn build_native_mux_command(source:&Path,video:&Path,dubs:&[(PathBuf,f64,f64,String)],stem:Option<&Path>,filter:&Path,
+ output:&Path,spec:&RenderSpecification,audio_expected:bool)->Result<Command,String>{
+    let mut c=crate::runtime_paths::ffmpeg_command()?;
+    c.args(["-hide_banner","-loglevel","error","-y","-i"]).arg(source);
+    for (path,_,_,_) in dubs{c.arg("-i").arg(path);}
+    if let Some(path)=stem{c.arg("-i").arg(path);}
+    let video_index=1+dubs.len()+usize::from(stem.is_some());
+    c.arg("-i").arg(video);
+    if audio_expected{c.arg("-filter_complex_script").arg(filter).args(["-map","[aout]"]);}else{c.arg("-an");}
+    c.arg("-map").arg(format!("{video_index}:v:0")).args(["-c:v","copy"]);
+    if spec.output.video_codec==crate::hardware_acceleration::VideoCodec::Hevc{c.args(["-tag:v","hvc1"]);}
+    c.args(["-c:a","aac","-b:a","192k","-movflags","+faststart","-shortest","-progress","pipe:1","-nostats"])
+        .arg(output).stdout(Stdio::piped()).stderr(Stdio::piped());
+    hide_console_window(&mut c);Ok(c)
 }
 
 fn build_ffmpeg_command(
@@ -1722,6 +1796,20 @@ mod tests {
         verify_render_resolution_audio(codec, backend, gpu, width, height, true);
     }
     fn verify_render_resolution_audio(codec: crate::hardware_acceleration::VideoCodec, backend: VideoEncoder, gpu:bool, width:u32, height:u32, original_audio:bool) {
+        verify_render_resolution_audio_path(codec,backend,gpu,false,width,height,original_audio);
+    }
+    #[cfg(windows)]
+    #[test]
+    #[ignore="Opt-in real MF decode/wgpu/hardware encode, effects, Unicode paths and audio mux"]
+    fn native_gpu_exports_effects_audio_and_1080p() {
+        use crate::hardware_acceleration::VideoCodec;
+        for codec in [VideoCodec::H264,VideoCodec::Hevc] {
+            verify_render_resolution_audio_path(codec,VideoEncoder::Intel,false,true,320,240,true);
+        }
+        verify_render_resolution_audio_path(VideoCodec::H264,VideoEncoder::Intel,false,true,1920,1080,true);
+        verify_render_resolution_audio_path(VideoCodec::H264,VideoEncoder::Intel,false,true,320,240,false);
+    }
+    fn verify_render_resolution_audio_path(codec: crate::hardware_acceleration::VideoCodec, backend: VideoEncoder, gpu:bool, native:bool, width:u32, height:u32, original_audio:bool) {
         if Command::new("ffmpeg").arg("-version").output().is_err() {
             eprintln!("Skipping integration render: FFmpeg is not installed");
             return;
@@ -1937,7 +2025,44 @@ mod tests {
         fs::write(&filter, &graph).unwrap();
         let output_path = project_root.join("exports/render-integration.mp4");
         let benchmark = Instant::now();
-        if gpu {
+        if native {
+            #[cfg(windows)] {
+                let temp_video=project_root.join("cache/native.mp4");
+                crate::media_gpu::pipeline::preflight(&source).unwrap();
+                let mut pipeline=crate::media_gpu::windows::NativePipeline::new(&source,&temp_video,
+                    crate::render::graph::RenderScene::from_spec(&spec),&logos,codec,4_000_000,
+                    crate::media_gpu::capability::vendor(backend)).unwrap();
+                let state=AtomicU8::new(JOB_RUNNING);
+                let stats=pipeline.run(&state,|_,_|{}).unwrap();
+                assert_eq!(stats.frames,20);assert_eq!(stats.upload_bytes,0);assert_eq!(stats.readback_bytes,0);
+                drop(pipeline);
+                fs::write(&filter,build_audio_filtergraph(&spec.audio,&dubs,true,None,spec.duration)).unwrap();
+                let mut command=build_native_mux_command(&source,&temp_video,&dubs,None,&filter,&output_path,&spec,true).unwrap();
+                let rendered=command.output().unwrap();
+                assert!(rendered.status.success(),"native mux: {}",String::from_utf8_lossy(&rendered.stderr));
+                let pcm=crate::runtime_paths::ffmpeg_command().unwrap().args(["-v","error","-i"]).arg(&output_path)
+                    .args(["-vn","-ac","1","-ar","48000","-f","f32le","pipe:1"]).output().unwrap();
+                assert!(pcm.status.success());
+                let samples:Vec<f64>=pcm.stdout.chunks_exact(4).map(|s|f32::from_le_bytes(s.try_into().unwrap()) as f64).collect();
+                let amplitude=|frequency:f64,start:f64,end:f64|{
+                    let a=(start*48000.0) as usize;let b=(end*48000.0) as usize;
+                    let(mut sin,mut cos)=(0.0,0.0);
+                    for (i,s) in samples[a..b].iter().enumerate(){let phase=(a+i) as f64*frequency*std::f64::consts::TAU/48000.0;sin+=s*phase.sin();cos+=s*phase.cos();}
+                    2.0*(sin*sin+cos*cos).sqrt()/(b-a) as f64
+                };
+                let dub_before=amplitude(660.0,0.08,0.16);let dub_inside=amplitude(660.0,0.30,0.40);let dub_after=amplitude(660.0,0.80,0.90);
+                assert!(dub_inside>0.02 && dub_before<dub_inside*0.15 && dub_after<dub_inside*0.15,"dub timing must be 0.2..0.65s");
+                if original_audio {
+                    let before=amplitude(440.0,0.08,0.16);let during=amplitude(440.0,0.30,0.40);let after=amplitude(440.0,0.80,0.90);
+                    assert!(before>0.02 && during<before*0.6 && after>before*0.7,"original ducking must align with dub audio");
+                }
+                println!("Native Tier B {codec:?}, {width}x{height}: {:.3}s; {stats:?}",benchmark.elapsed().as_secs_f64());
+                if let Ok(folder)=std::env::var("JC_GPU_TEST_ARTIFACTS") {
+                    fs::create_dir_all(&folder).unwrap();
+                    fs::copy(&output_path,Path::new(&folder).join(format!("native-{width}x{height}-{codec:?}-{}.mp4",if original_audio{"mixed"}else{"dubbing"}))).unwrap();
+                }
+            }
+        } else if gpu {
             let mut renderer=crate::render::renderer::Renderer::new(crate::render::graph::RenderScene::from_spec(&spec), &logos).unwrap();
             let fps=crate::render::stream::compatible_input(&source).unwrap();
             let gpu_graph=format!("[{}:v]null[vout];{}",1+dubs.len(),build_audio_filtergraph(&spec.audio,&dubs,true,None,spec.duration));
@@ -1969,7 +2094,7 @@ mod tests {
             graph
         );
         }
-        if !gpu { println!("legacy export {width}x{height} {backend:?}: {:.3}s", benchmark.elapsed().as_secs_f64()); }
+        if !gpu && !native { println!("legacy export {width}x{height} {backend:?}: {:.3}s", benchmark.elapsed().as_secs_f64()); }
         validate_output(
             &output_path,
             width,

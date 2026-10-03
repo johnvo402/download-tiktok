@@ -11,6 +11,7 @@ mod optional_runtime;
 mod project_service;
 mod render_service;
 pub mod render;
+pub mod media_gpu;
 pub mod render_spec;
 mod resource_scheduler;
 mod runtime_health;

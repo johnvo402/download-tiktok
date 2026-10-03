@@ -6,7 +6,7 @@ pub struct GpuDevice {
     pub info: wgpu::AdapterInfo,
     pub error: Arc<Mutex<Option<String>>>,
 }
-pub fn create() -> Result<GpuDevice, String> {
+pub fn create_preferred(vendor: Option<u32>) -> Result<GpuDevice, String> {
     // Windows prefers DX12; portable Vulkan/Metal follow. No CUDA/DXC SDK install.
     for backends in [
         wgpu::Backends::DX12,
@@ -16,13 +16,24 @@ pub fn create() -> Result<GpuDevice, String> {
             backends,
             ..Default::default()
         });
-        let Ok(adapter) =
+        let selected = if let Some(vendor) = vendor {
+            instance
+                .enumerate_adapters(backends)
+                .into_iter()
+                .find(|a| {
+                    a.get_info().vendor == vendor
+                        && a.get_info().device_type != wgpu::DeviceType::Cpu
+                })
+                .ok_or(())
+        } else {
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: false,
                 compatible_surface: None,
             }))
-        else {
+            .map_err(|_| ())
+        };
+        let Ok(adapter) = selected else {
             continue;
         };
         let info = adapter.get_info();

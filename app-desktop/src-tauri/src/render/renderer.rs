@@ -44,17 +44,23 @@ struct Layer {
     bytes: usize,
 }
 
+/// Cached GPU target view; COM/native handles stay inside media_gpu/windows.
+pub struct GpuTarget {
+    inner: Texture,
+}
 pub struct Renderer {
     gpu: GpuDevice,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     copy: wgpu::RenderPipeline,
+    copy_bgra: wgpu::RenderPipeline,
+    output_bind: wgpu::BindGroup,
     blur: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
     source: Texture,
     output: Texture,
     copy_bind: wgpu::BindGroup,
-    readback: wgpu::Buffer,
+    readback: Option<wgpu::Buffer>,
     stride: u32,
     blurs: Vec<BlurResources>,
     logos: Vec<Layer>,
@@ -67,6 +73,13 @@ pub struct Renderer {
 }
 impl Renderer {
     pub fn new(scene: RenderScene, logo_paths: &[PathBuf]) -> Result<Self, String> {
+        Self::new_preferred(scene, logo_paths, None)
+    }
+    pub fn new_preferred(
+        scene: RenderScene,
+        logo_paths: &[PathBuf],
+        vendor: Option<u32>,
+    ) -> Result<Self, String> {
         for rect in scene
             .blurs
             .iter()
@@ -89,7 +102,7 @@ impl Renderer {
                 return Err("Vùng hiệu ứng vượt kích thước video.".into());
             }
         }
-        let gpu = device::create()?;
+        let gpu = device::create_preferred(vendor)?;
         let d = &gpu.device;
         if scene.width > d.limits().max_texture_dimension_2d
             || scene.height > d.limits().max_texture_dimension_2d
@@ -144,7 +157,7 @@ impl Renderer {
             bind_group_layouts: &[&layout],
             push_constant_ranges: &[],
         });
-        let pipeline = |entry: &str, blend| {
+        let pipeline = |entry: &str, blend, format| {
             d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(entry),
                 layout: Some(&pipeline_layout),
@@ -158,7 +171,7 @@ impl Renderer {
                     module: &shader,
                     entry_point: Some(entry),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: FORMAT,
+                        format,
                         blend,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -171,24 +184,22 @@ impl Renderer {
                 cache: None,
             })
         };
-        let copy = pipeline("copy", None);
-        let blur = pipeline("blur", None);
-        let composite = pipeline("layer", Some(wgpu::BlendState::ALPHA_BLENDING));
+        let copy = pipeline("copy", None, FORMAT);
+        let copy_bgra = pipeline("copy", None, wgpu::TextureFormat::Bgra8Unorm);
+        let blur = pipeline("blur", None, FORMAT);
+        let composite = pipeline("layer", Some(wgpu::BlendState::ALPHA_BLENDING), FORMAT);
         if let Some(error) = pollster::block_on(d.pop_error_scope()) {
             log::error!("GPU shader/pipeline: {error}");
             return Err("Không biên dịch được hiệu ứng GPU. Hãy dùng chế độ tương thích.".into());
         }
         let source = Texture::new(d, scene.width, scene.height, "source frame");
         let output = Texture::new(d, scene.width, scene.height, "composite target");
+        let output_bind = Self::bind(d, &layout, &sampler, &output, Params::default());
         let copy_bind = Self::bind(d, &layout, &sampler, &source, Params::default());
         let stride = (scene.width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
             * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let readback = d.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("frame readback"),
-            size: stride as u64 * scene.height as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        // Native surface rendering never needs a CPU-readable full-frame buffer.
+        let readback = None;
         let blurs = Self::build_blurs(&gpu, &layout, &sampler, &output, &scene);
         let logos = Self::build_logos(&gpu, &layout, &sampler, &scene, logo_paths)?;
         Ok(Self {
@@ -196,6 +207,8 @@ impl Renderer {
             layout,
             sampler,
             copy,
+            copy_bgra,
+            output_bind,
             blur,
             composite,
             source,
@@ -274,6 +287,97 @@ impl Renderer {
             return Err("Frame đầu vào GPU không hợp lệ.".into());
         }
         let pts = frame.pts_seconds;
+        let keys = self.prepare_text(pts)?;
+        self.source.upload(&self.gpu.queue, frame.data);
+        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        Self::draw(
+            &mut encoder,
+            &self.copy,
+            &self.copy_bind,
+            &self.output,
+            None,
+        );
+        for (index, data) in patches {
+            let layer = self
+                .patches
+                .get(*index)
+                .ok_or("Patch không được đăng ký.")?;
+            if data.len() != byte_len(layer.rect.width, layer.rect.height)? {
+                return Err("Frame phục hồi không hợp lệ.".into());
+            }
+            layer._texture.upload(&self.gpu.queue, data);
+            Self::draw(
+                &mut encoder,
+                &self.composite,
+                &layer.bind,
+                &self.output,
+                Some(layer.rect),
+            );
+        }
+        self.encode_visual(&mut encoder, pts, keys);
+        let readback = self.readback.get_or_insert_with(|| {
+            self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("frame readback"),
+                size: self.stride as u64 * self.scene.height as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            })
+        });
+        encoder.copy_texture_to_buffer(
+            self.output.texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(self.stride),
+                    rows_per_image: Some(self.scene.height),
+                },
+            },
+            wgpu::Extent3d {
+                width: self.scene.width,
+                height: self.scene.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let submission = self.gpu.queue.submit([encoder.finish()]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+        self.gpu
+            .device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: Some(Duration::from_secs(10)),
+            })
+            .map_err(|e| format!("GPU không hoàn thành frame: {e}"))?;
+        rx.recv_timeout(Duration::from_secs(1))
+            .map_err(|_| "GPU không trả frame.")?
+            .map_err(|_| "Không đọc được frame từ GPU.")?;
+        let mapped = readback.slice(..).get_mapped_range();
+        for (src, dst) in mapped
+            .chunks(self.stride as usize)
+            .zip(output.chunks_mut(self.scene.width as usize * 4))
+        {
+            dst.copy_from_slice(&src[..dst.len()]);
+        }
+        drop(mapped);
+        readback.unmap();
+        if let Some(error) = self
+            .gpu
+            .error
+            .lock()
+            .map_err(|_| "Không đọc được trạng thái GPU.")?
+            .take()
+        {
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn prepare_text(&mut self, pts: f64) -> Result<Vec<String>, String> {
         let mut requests = Vec::new();
         if self.scene.subtitle.enabled {
             let sub = &self.scene.subtitle;
@@ -343,40 +447,17 @@ impl Renderer {
         for (key, text, rect, style, minimum) in requests {
             keys.push(self.cache_text(key, &text, rect, style, minimum)?);
         }
-        self.source.upload(&self.gpu.queue, frame.data);
-        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
-        Self::draw(
-            &mut encoder,
-            &self.copy,
-            &self.copy_bind,
-            &self.output,
-            None,
-        );
-        for (index, data) in patches {
-            let layer = self
-                .patches
-                .get(*index)
-                .ok_or("Patch không được đăng ký.")?;
-            if data.len() != byte_len(layer.rect.width, layer.rect.height)? {
-                return Err("Frame phục hồi không hợp lệ.".into());
-            }
-            layer._texture.upload(&self.gpu.queue, data);
-            Self::draw(
-                &mut encoder,
-                &self.composite,
-                &layer.bind,
-                &self.output,
-                Some(layer.rect),
-            );
-        }
+        Ok(keys)
+    }
+    fn encode_visual(&self, encoder: &mut wgpu::CommandEncoder, pts: f64, keys: Vec<String>) {
         // Explicit order: clean patches -> blur -> subtitle -> text -> logo.
         for (region, pass) in self.scene.blurs.iter().zip(&self.blurs) {
             if graph::active(pts, region.start_ms, region.end_ms) {
-                Self::draw(&mut encoder, &self.copy, &pass.crop, &pass.a, None);
-                Self::draw(&mut encoder, &self.blur, &pass.horizontal, &pass.b, None);
-                Self::draw(&mut encoder, &self.blur, &pass.vertical, &pass.a, None);
+                Self::draw(encoder, &self.copy, &pass.crop, &pass.a, None);
+                Self::draw(encoder, &self.blur, &pass.horizontal, &pass.b, None);
+                Self::draw(encoder, &self.blur, &pass.vertical, &pass.a, None);
                 Self::draw(
-                    &mut encoder,
+                    encoder,
                     &self.composite,
                     &pass.layer,
                     &self.output,
@@ -387,7 +468,7 @@ impl Renderer {
         for key in keys {
             let layer = &self.text[&key];
             Self::draw(
-                &mut encoder,
+                encoder,
                 &self.composite,
                 &layer.bind,
                 &self.output,
@@ -397,7 +478,7 @@ impl Renderer {
         for (logo, layer) in self.scene.logos.iter().zip(&self.logos) {
             if graph::active(pts, logo.start_ms, logo.end_ms) {
                 Self::draw(
-                    &mut encoder,
+                    encoder,
                     &self.composite,
                     &layer.bind,
                     &self.output,
@@ -405,58 +486,99 @@ impl Renderer {
                 );
             }
         }
-        encoder.copy_texture_to_buffer(
-            self.output.texture.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &self.readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(self.stride),
-                    rows_per_image: Some(self.scene.height),
-                },
-            },
-            wgpu::Extent3d {
-                width: self.scene.width,
-                height: self.scene.height,
-                depth_or_array_layers: 1,
-            },
-        );
-        let submission = self.gpu.queue.submit([encoder.finish()]);
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.readback
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = tx.send(result);
-            });
-        self.gpu
-            .device
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(submission),
-                timeout: Some(Duration::from_secs(10)),
-            })
-            .map_err(|e| format!("GPU không hoàn thành frame: {e}"))?;
-        rx.recv_timeout(Duration::from_secs(1))
-            .map_err(|_| "GPU không trả frame.")?
-            .map_err(|_| "Không đọc được frame từ GPU.")?;
-        let mapped = self.readback.slice(..).get_mapped_range();
-        for (src, dst) in mapped
-            .chunks(self.stride as usize)
-            .zip(output.chunks_mut(self.scene.width as usize * 4))
+    }
+    /// Reuses the same visual passes with GPU textures. No full video CPU upload/readback.
+    pub fn prepare_gpu_input(&self, texture: &wgpu::Texture) -> Result<wgpu::BindGroup, String> {
+        if texture.width() != self.scene.width
+            || texture.height() != self.scene.height
+            || texture.format() != wgpu::TextureFormat::Bgra8Unorm
         {
-            dst.copy_from_slice(&src[..dst.len()]);
+            return Err("Texture video không tương thích với bộ render.".into());
         }
-        drop(mapped);
-        self.readback.unmap();
-        if let Some(error) = self
-            .gpu
+        let wrapper = Texture {
+            texture: texture.clone(),
+            view: texture.create_view(&Default::default()),
+            width: texture.width(),
+            height: texture.height(),
+        };
+        Ok(Self::bind(
+            &self.gpu.device,
+            &self.layout,
+            &self.sampler,
+            &wrapper,
+            Params::default(),
+        ))
+    }
+    pub fn prepare_gpu_target(&self, target: &wgpu::Texture) -> Result<GpuTarget, String> {
+        if target.width() != self.scene.width
+            || target.height() != self.scene.height
+            || target.format() != wgpu::TextureFormat::Bgra8Unorm
+        {
+            return Err("Texture đích video không hợp lệ.".into());
+        }
+        Ok(GpuTarget {
+            inner: Texture {
+                texture: target.clone(),
+                view: target.create_view(&Default::default()),
+                width: target.width(),
+                height: target.height(),
+            },
+        })
+    }
+    pub fn render_surfaces(
+        &mut self,
+        input: &wgpu::Texture,
+        input_bind: &wgpu::BindGroup,
+        target: &GpuTarget,
+        pts: f64,
+    ) -> Result<(), String> {
+        let texture = &target.inner.texture;
+        if !pts.is_finite()
+            || texture.width() != self.scene.width
+            || texture.height() != self.scene.height
+            || texture.format() != wgpu::TextureFormat::Bgra8Unorm
+        {
+            return Err("Texture đích video không hợp lệ.".into());
+        }
+        let keys = self.prepare_text(pts)?;
+        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        Self::draw(&mut encoder, &self.copy, input_bind, &self.output, None);
+        self.encode_visual(&mut encoder, pts, keys);
+        Self::draw(
+            &mut encoder,
+            &self.copy_bgra,
+            &self.output_bind,
+            &target.inner,
+            None,
+        );
+        // COMMON is required before the D3D11 video processor accesses a shared surface.
+        encoder.transition_resources(
+            std::iter::empty(),
+            [input, texture]
+                .into_iter()
+                .map(|texture| wgpu::TextureTransition {
+                    texture,
+                    selector: None,
+                    state: wgpu::TextureUses::PRESENT,
+                }),
+        );
+        self.gpu.queue.submit([encoder.finish()]);
+        self.check_health()
+    }
+    pub fn check_health(&self) -> Result<(), String> {
+        self.gpu
             .error
             .lock()
             .map_err(|_| "Không đọc được trạng thái GPU.")?
-            .take()
-        {
-            return Err(error);
-        }
-        Ok(())
+            .clone()
+            .map_or(Ok(()), Err)
+    }
+
+    pub fn device(&self) -> wgpu::Device {
+        self.gpu.device.clone()
+    }
+    pub fn queue(&self) -> wgpu::Queue {
+        self.gpu.queue.clone()
     }
     pub fn adapter_name(&self) -> &str {
         &self.gpu.info.name
