@@ -127,6 +127,16 @@ def main() -> int:
                     install_ocr(str(request["cacheDir"]), emit, str(request.get("model", "tiny")))
                 else:
                     transcribe_frames(request, emit)
+            elif operation in {"text_removal_detect_v2", "text_removal_inpaint_v2", "text_removal_patch_video"}:
+                if operation == "text_removal_detect_v2":
+                    from worker.text_removal.detection import detect
+                    emit({"type": "completed", **detect(request, emit)})
+                elif operation == "text_removal_inpaint_v2":
+                    from worker.text_removal.pipeline import process
+                    emit({"type": "completed", **process(request, emit)})
+                else:
+                    from worker.text_removal.patch_cache import patch_video
+                    emit({"type": "completed", "output": str(patch_video(Path(request["patchPath"])))})
             elif operation in {"text_removal_process", "text_removal_process_intervals", "text_removal_scan"}:
                 from worker.text_removal.service import process_frames, process_intervals, scan_subtitle_intervals
 

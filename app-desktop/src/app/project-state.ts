@@ -23,6 +23,7 @@ export const [projectsLoading, setProjectsLoading] = createSignal(true);
 export const [appStartupReady, setAppStartupReady] = createSignal(false);
 
 export interface AiRemovalPreview {
+  nativeCache?: boolean;
   projectId: string;
   regionId: string;
   path: string;

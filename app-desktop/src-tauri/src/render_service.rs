@@ -170,17 +170,8 @@ pub fn start_export(
     if project.source.video_path.is_none() {
         return Err("Dự án chưa có video nguồn.".into());
     }
-    if options.apply_blur {
-        let removal_regions: Vec<_> = project.blur_regions.iter().filter(|region| {
-            region.enabled && region.effect == BlurEffect::Sttn
-        }).collect();
-        if !removal_regions.is_empty() {
-            let effects: Vec<_> = removal_regions.iter().map(|region| region.effect).collect();
-            // Every AI restoration mode now uses sparse RapidOCR to limit work
-            // to time ranges where subtitle text is present.
-            crate::text_removal_service::require_effects_ready(&app, &effects, true)?;
-        }
-    }
+    // prepare_export_patches validates OCR/STTN only for missing work.
+    // Completed immutable patches remain exportable after model removal.
     // Resolve and validate all immutable project inputs before a background job is registered.
     resolve_export_directory(&store, &project_id, options.output_directory.as_deref())?;
     let (_, _, spec, _, _) = prepare(&store, &project_id, &options)?;
@@ -847,6 +838,12 @@ fn run_export_inner(
                 }
             }
         }
+        let mut compatibility_patches=ai_patches.clone();
+        if native_video.is_none(){
+            for patch in &mut compatibility_patches {
+                patch.image_pattern=crate::text_removal_service::compatibility_patch_path(app,patch,state)?;
+            }
+        }
         let mut command = if let Some(video) = native_video.as_deref() {
             let audio_filter=render_dir.join("audio-native-filtergraph.txt");
             fs::write(&audio_filter,master_audio_filter(1,audio_expected)).map_err(|e|e.to_string())?;
@@ -856,7 +853,7 @@ fn run_export_inner(
             &source_path,
             &dub_items,
             &logo_paths,
-            &ai_patches,
+            &compatibility_patches,
             master_audio.as_deref(),
             &filter_path,
             &staging_path,
@@ -1271,11 +1268,11 @@ fn build_ffmpeg_command(
     for patch in ai_patches {
         command
             .args(["-itsoffset"])
-            .arg(format!("{:.6}", patch.start_seconds))
-            .args(["-framerate"])
-            .arg(format!("{:.6}", patch.fps))
-            .arg("-i")
-            .arg(&patch.image_pattern);
+            .arg(format!("{:.6}", patch.start_seconds));
+        if patch.image_pattern.extension().is_none_or(|e|e!="nut"){
+            command.arg("-framerate").arg(format!("{:.6}",patch.fps));
+        }
+        command.arg("-i").arg(&patch.image_pattern);
     }
     if let Some(path) = dialogue_stem { command.arg("-i").arg(path); }
     if let Some(fps) = raw_video_fps {

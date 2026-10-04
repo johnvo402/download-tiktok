@@ -1,0 +1,27 @@
+{
+  "productionEnabled": false,
+  "cases": [
+    {
+      "frames": 2,
+      "ortSeconds": 3.035135299999638,
+      "ortMaxAbsError": 0.00010102987289428711,
+      "openvinoSeconds": 11.046133399999235,
+      "openvinoMaxAbsError": 0.00010670721530914307
+    },
+    {
+      "frames": 3,
+      "ortSeconds": 4.8622965000004115,
+      "ortMaxAbsError": 7.992982864379883e-05,
+      "openvinoSeconds": 5.798024200000327,
+      "openvinoMaxAbsError": 0.00010052323341369629
+    }
+  ],
+  "openvinoDevices": [
+    "CPU",
+    "GPU"
+  ],
+  "openvinoExecutionDevices": [
+    "GPU.0"
+  ],
+  "viablePrototype": true
+}

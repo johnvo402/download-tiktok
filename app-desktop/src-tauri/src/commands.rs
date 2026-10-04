@@ -1207,6 +1207,12 @@ pub async fn get_text_removal_environment(app: tauri::AppHandle) -> Result<crate
 }
 
 #[tauri::command]
+pub async fn get_text_removal_cache_status(app:tauri::AppHandle, project_id:String, region_id:String)->Result<crate::text_removal_service::CacheStatus,String>{
+    tauri::async_runtime::spawn_blocking(move||crate::text_removal_service::cache_status(&app,&store(&app)?,&project_id,&region_id))
+        .await.map_err(|e|e.to_string())?
+}
+
+#[tauri::command]
 pub async fn install_sttn_text_removal_model(app: tauri::AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || crate::text_removal_service::install_sttn_model(app))
         .await
@@ -1227,6 +1233,7 @@ pub async fn start_text_removal_preview(
     project_id: String,
     region_id: String,
     current_time: f64,
+    detect_only: Option<bool>,
 ) -> Result<String, String> {
     let jobs = jobs.inner().clone();
     let project_store = store(&app)?;
@@ -1238,6 +1245,7 @@ pub async fn start_text_removal_preview(
             project_id,
             region_id,
             current_time,
+            detect_only.unwrap_or(false),
         )
     })
     .await

@@ -168,6 +168,10 @@ impl Renderer {
             &self.output,
             None,
         );
+        for index in &self.preview_patches {
+            let layer=&self.patches[*index];
+            Self::draw(&mut encoder,&self.composite,&layer.bind,&self.output,Some(layer.rect));
+        }
         self.encode_visual(&mut encoder, pts, keys);
         // Interaction guides are GPU-only UI. They never enter the export scene.
         if let Some(rect) = guide {

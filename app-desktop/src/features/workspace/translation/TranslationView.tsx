@@ -110,7 +110,8 @@ export default function TranslationView() {
   let subtitleSyncFrameKind: 'video' | 'animation' | undefined;
   let subtitleSyncActive = false;
   let awaitingSourceSeek = false;
-  const activeAiPreview = () => aiRemovalPreview()?.projectId === currentProject()?.id ? aiRemovalPreview() : undefined;
+  const activeAiPreview = () => aiRemovalPreview()?.projectId === currentProject()?.id
+    && !(nativePreview.preferred() && aiRemovalPreview()?.nativeCache) ? aiRemovalPreview() : undefined;
   const activeVideoUrl = createMemo(() => {
     const preview = activeAiPreview();
     return preview ? convertFileSrc(preview.path) : videoUrl();

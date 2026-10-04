@@ -6,7 +6,7 @@ use super::{
 use crate::text_removal_service::AiTextRemovalPatch;
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    path::{Path, PathBuf},
+    path::Path,
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU8, Ordering},
@@ -330,13 +330,19 @@ pub fn run(
     let mut frames = 0_u64;
     let mut previous = None;
     let mut last_progress = Instant::now();
-    let mut patch_cache: Vec<(Option<PathBuf>, Vec<u8>)> =
-        patches.iter().map(|_| (None, Vec::new())).collect();
+    let mut patch_cache: Vec<_> = patches
+        .iter()
+        .map(crate::text_removal_cache::PatchReader::open)
+        .collect::<Result<_, _>>()
+        .map_err(StreamFailure::render)?;
     renderer.clear_patches();
+    let mut patch_rects=Vec::new();
+    let mut patch_layers=Vec::new();
     for patch in patches {
-        renderer
-            .register_patch(patch.rect)
-            .map_err(StreamFailure::render)?;
+        let layer=if let Some(i)=patch_rects.iter().position(|r|*r==patch.rect){patch_layers[i]}else{
+            renderer.register_patch(patch.rect).map_err(StreamFailure::render)?
+        };
+        patch_rects.push(patch.rect);patch_layers.push(layer);
     }
     let mut encode_failed = false;
     loop {
@@ -384,30 +390,12 @@ pub fn run(
             }
         }
         previous = Some(pts);
-        for (patch, cache) in patches.iter().zip(&mut patch_cache) {
-            if pts >= patch.start_seconds && pts < patch.end_seconds {
-                let index = ((pts - patch.start_seconds) * patch.fps + 0.0001).floor() as u64 + 1;
-                let pattern = patch
-                    .image_pattern
-                    .to_string_lossy()
-                    .replace("%08d", &format!("{index:08}"));
-                let path = PathBuf::from(pattern);
-                if cache.0.as_ref() != Some(&path) {
-                    let image = image::open(&path)
-                        .map_err(|_| StreamFailure::render("Thiếu frame phục hồi chữ."))?
-                        .into_rgba8();
-                    cache.1 = image.into_raw();
-                    cache.0 = Some(path);
-                }
+        let mut active = Vec::new();
+        for (index, cache) in patch_cache.iter_mut().enumerate() {
+            if let Some(pixels) = cache.frame(pts).map_err(StreamFailure::render)? {
+                active.push((patch_layers[index], pixels));
             }
         }
-        let active: Vec<_> = patches
-            .iter()
-            .zip(&patch_cache)
-            .enumerate()
-            .filter(|(_, (patch, _))| pts >= patch.start_seconds && pts < patch.end_seconds)
-            .map(|(index, (_, cache))| (index, cache.1.as_slice()))
-            .collect();
         renderer
             .render_frame_with_patches(
                 VideoFrame {

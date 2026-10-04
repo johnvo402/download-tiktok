@@ -16,7 +16,7 @@ import type { AppSettings } from '../../../app/services/translation-service';
 import { compareSegmentTime, formatTimestamp, ttsWindowEnd, validateTranscript } from '../../transcript/transcript-utils';
 import Modal from '../../../shared/components/Modal';
 import { open } from '@tauri-apps/plugin-dialog';
-import { mergeVisualProject, updateVisualSettings } from '../../overlays/overlay-state';
+import { flushVisualSettings, mergeVisualProject, updateVisualSettings } from '../../overlays/overlay-state';
 import type { WorkspacePanelTab } from '../../../app/project-state';
 
 type PanelTab = WorkspacePanelTab;
@@ -93,6 +93,7 @@ export default function TranslationPanel() {
   const [textRemovalEnvironmentError, setTextRemovalEnvironmentError] = createSignal('');
   const [textRemovalPreviewJobId, setTextRemovalPreviewJobId] = createSignal<string>();
   const [textRemovalPreviewProgress, setTextRemovalPreviewProgress] = createSignal({ progress: 0, message: '' });
+  const [removalCacheStatus,setRemovalCacheStatus]=createSignal<Awaited<ReturnType<typeof projectService.getTextRemovalCacheStatus>>>();
   const [cancelingTextRemovalPreview, setCancelingTextRemovalPreview] = createSignal(false);
   const [asrMessage, setAsrMessage] = createSignal('');
   const [asrStage, setAsrStage] = createSignal('');
@@ -141,9 +142,12 @@ export default function TranslationPanel() {
       if (payload.status === 'completed' || payload.status === 'failed' || payload.status === 'cancelled') lastTextRemovalPreviewTerminalId = payload.jobId;
       setTextRemovalPreviewProgress({ progress: Number.isFinite(payload.progress) ? payload.progress : 0, message: payload.message ?? 'Đang xử lý preview…' });
       if (payload.status === 'completed' && payload.output) {
-        setAiRemovalPreview({ projectId: payload.projectId, regionId: payload.regionId, path: payload.output, startSeconds: payload.startSeconds, endSeconds: payload.endSeconds, fps: payload.fps });
+        setAiRemovalPreview({ nativeCache: true, projectId: payload.projectId, regionId: payload.regionId, path: payload.output, startSeconds: payload.startSeconds, endSeconds: payload.endSeconds, fps: payload.fps });
         setTextRemovalPreviewJobId(undefined);
         setNotice({ kind: 'success', message: 'Preview đã xử lý xong. Đang phát đoạn đã xóa chữ bằng AI.' });
+      } else if (payload.status === 'completed') {
+        setTextRemovalPreviewJobId(undefined);
+        setNotice({ kind: 'success', message: payload.message });
       } else if (payload.status === 'failed') {
         setTextRemovalPreviewJobId(undefined);
         setNotice({ kind: 'error', message: payload.message || 'Không thể xử lý preview xóa chữ.' });
@@ -714,16 +718,17 @@ export default function TranslationPanel() {
     return false;
   };
 
-  const startTextRemovalPreview = async (regionId: string) => {
+  const startTextRemovalPreview = async (regionId: string, detectOnly = false) => {
     const project = currentProject();
-    if (!project || !textRemovalReady(selectedBlur()?.effect)) return;
+    if (!project || (detectOnly ? !textRemovalEnvironment()?.ocrReady : !textRemovalReady(selectedBlur()?.effect))) return;
     setTextRemovalPreviewProgress({ progress: 0, message: 'Đang đưa vào hàng đợi…' });
     setCancelingTextRemovalPreview(false);
     try {
-      const id = await projectService.startTextRemovalPreview(project.id, regionId, playbackTime());
+      await flushVisualSettings(project.id);
+      const id = await projectService.startTextRemovalPreview(project.id, regionId, playbackTime(), detectOnly);
       if (lastTextRemovalPreviewTerminalId !== id) {
         setTextRemovalPreviewJobId(id);
-        setNotice({ kind: 'info', message: 'Đang xử lý đoạn preview quanh vị trí phát hiện tại.' });
+        setNotice({ kind: 'info', message: detectOnly ? 'Đang nhận diện thời điểm và vùng chữ; kết quả sẽ được lưu riêng.' : 'Đang xóa phụ đề trong vùng đã chọn. Kết quả được lưu để dùng lại khi export.' });
       }
     } catch (error) {
       setTextRemovalPreviewJobId(undefined);
@@ -809,6 +814,18 @@ export default function TranslationPanel() {
       ...currentProject()?.dubbing.audioProcessing, ...changes,
     } });
   };
+  createEffect(() => {
+    const project=currentProject(); const region=selectedBlur(); const progress=textRemovalPreviewProgress();
+    if(!project || region?.effect!=='sttn'){setRemovalCacheStatus(undefined);return;}
+    void project.updatedAt; void JSON.stringify(region); void progress;
+    let active=true;
+    const timer=window.setTimeout(()=>{
+      void projectService.getTextRemovalCacheStatus(project.id,region.id)
+        .then(value=>{if(active)setRemovalCacheStatus(value);})
+        .catch(()=>{if(active)setRemovalCacheStatus(undefined);});
+    },400);
+    onCleanup(()=>{active=false;window.clearTimeout(timer);});
+  });
 
   const fitAndRegenerate = async (segmentId: string) => {
     const project = currentProject();
@@ -1249,15 +1266,19 @@ export default function TranslationPanel() {
                   : 'RapidOCR tìm thời điểm có chữ và tạo mask theo nét chữ; STTN dùng các khung lân cận để phục hồi nền. Transcript không bị thay đổi.'}</span>
                 <label class="property-control-row"><span>Phạm vi phục hồi</span><select class="settings-select" value={region().textRemovalMode ?? 'ocrGuided'} onChange={(event) => updateBlurSettings(region().id, { textRemovalMode: event.currentTarget.value as 'ocrGuided' | 'fullRegion' })}><option value="ocrGuided">Theo nét chữ · RapidOCR</option><option value="fullRegion">Phục hồi toàn vùng khoanh</option></select></label>
                 <label class="property-control-row"><span>Tốc độ quét RapidOCR</span><select class="settings-select" value={region().textRemovalScanFps ?? 2} onChange={(event) => updateBlurSettings(region().id, { textRemovalScanFps: Number(event.currentTarget.value) === 1 ? 1 : 2 })}><option value="1">1 khung/giây · nhanh</option><option value="2">2 khung/giây · khuyến nghị</option></select></label>
+                <Show when={removalCacheStatus()}>{status=><span class="ai-removal-state" role="status">
+                  {status().state==='not_detected'?'Chưa có nhận diện cho cấu hình này.':`${status().intervals} đoạn có chữ · ${status().sampledFrames} mẫu${status().ocrBackend?` · OCR ${status().ocrBackend}`:''}${status().state==='removed'||status().state==='partial'?` · Đã lưu ${status().cachedFrames} khung phục hồi (${(status().cachedBytes/1048576).toFixed(1)} MB)${status().state==='partial'?' · Bấm Xóa phụ đề để tiếp tục':''}`:' · Sẵn sàng xóa phụ đề'}`}
+                </span>}</Show>
                 <Show when={textRemovalEnvironmentLoading()}><span class="ai-removal-state"><LoaderCircle size={12} class="spin" /> Đang kiểm tra thành phần…</span></Show>
                 <Show when={!textRemovalEnvironmentLoading() && textRemovalEnvironment()}>{(environment) => <>
                   <span class="ai-removal-state" classList={{ 'ai-removal-ready': environment().ocrReady }}>{environment().ocrReady ? `RapidOCR ${environment().ocrModel} sẵn sàng` : `RapidOCR ${environment().ocrModel} chưa sẵn sàng`}</span>
                   <span class="ai-removal-state" classList={{ 'ai-removal-ready': environment().sttnRuntimeInstalled && environment().sttnModelInstalled }}>
                     {`STTN ${environment().sttnRuntimeInstalled && environment().sttnModelInstalled ? 'đã cài' : 'chưa cài đầy đủ'}`}
                   </span>
-                  <Show when={textRemovalReady(region().effect)}>
+                  <Show when={environment().ocrReady}>
                     <div class="ai-removal-preview-actions">
-                      <button class="button button-primary ai-removal-preview-button" type="button" disabled={!region().enabled || !!textRemovalPreviewJobId()} onClick={() => void startTextRemovalPreview(region().id)}>
+                      <button class="button button-quiet" type="button" disabled={!region().enabled || !!textRemovalPreviewJobId()} onClick={() => void startTextRemovalPreview(region().id, true)}>Nhận diện phụ đề</button>
+                      <button class="button button-primary ai-removal-preview-button" type="button" disabled={!region().enabled || !textRemovalReady(region().effect) || !!textRemovalPreviewJobId()} onClick={() => void startTextRemovalPreview(region().id)}>
                         <Show when={textRemovalPreviewJobId()} fallback={<Sparkles size={14} />}><LoaderCircle size={14} class="spin" /></Show>
                         {textRemovalPreviewJobId() ? 'Đang xử lý preview…' : region().textRemovalMode === 'fullRegion' ? 'Phục hồi toàn vùng khoanh' : 'Xóa sub bằng STTN'}
                       </button>

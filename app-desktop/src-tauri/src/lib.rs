@@ -22,6 +22,7 @@ mod settings_service;
 mod storage_service;
 mod transcript_service;
 mod text_removal_service;
+mod text_removal_cache;
 mod translation_service;
 mod tts_service;
 mod video_service;
@@ -111,6 +112,7 @@ pub fn run() {
             commands::get_asr_environment,
             commands::get_ocr_environment,
             commands::get_text_removal_environment,
+            commands::get_text_removal_cache_status,
             commands::install_sttn_text_removal_model,
             commands::remove_sttn_text_removal_model,
             commands::start_text_removal_preview,

@@ -34,6 +34,7 @@ pub struct Status {
     pub frames: u64,
     pub seek_ms: f64,
     pub render_scale: f32,
+    pub clean_patches: usize,
     pub error: Option<String>,
 }
 #[derive(Clone, serde::Deserialize)]
@@ -232,6 +233,7 @@ impl PreviewManager {
                 frames: 0,
                 seek_ms: 0.0,
                 render_scale: 1.0,
+                clean_patches: 0,
                 error: None,
             }),
         });
@@ -322,6 +324,12 @@ fn run(
     let scene = scene::build(&project, &transcript)?.scaled(scale);
     let paths = scene::logos(store, &project.id, &scene)?;
     let mut renderer = Renderer::with_device(scene, &paths, gpu.clone())?;
+    let cached = if offset == 0. {
+        crate::text_removal_service::cached_preview_patches(app, store, &project)?
+    } else {
+        vec![]
+    };
+    let mut clean = super::clean_patches::CleanPatches::new(&mut renderer, cached, scale)?;
     let pointer_app = app.clone();
     let pointer_id = s.id.clone();
     let pointer_owner = s.owner.clone();
@@ -446,6 +454,12 @@ fn run(
             let scene = scene::build(&project, &transcript)?.scaled(scale);
             let paths = scene::logos(store, &project.id, &scene)?;
             renderer.update_scene(scene, &paths)?;
+            let cached = if offset == 0. {
+                crate::text_removal_service::cached_preview_patches(app, store, &project)?
+            } else {
+                vec![]
+            };
+            clean = super::clean_patches::CleanPatches::new(&mut renderer, cached, scale)?;
             dirty = true;
         }
         if let Some(p) = updates.playing {
@@ -484,23 +498,32 @@ fn run(
         }
         // Native video samples the shared device clock directly; IPC is UI telemetry only.
         use tauri::Manager;
-        let audio=app.state::<crate::audio::transport::AudioManager>();
-        let master=audio.status(&s.project_id).ok().filter(|a|a.error.is_none());
-        if let Some(master)=&master {
+        let audio = app.state::<crate::audio::transport::AudioManager>();
+        let master = audio
+            .status(&s.project_id)
+            .ok()
+            .filter(|a| a.error.is_none());
+        if let Some(master) = &master {
             clock.set_playing(master.playing && !master.buffering);
-            clock.audio_anchor(master.time.clamp(s.range.0,s.range.1));
+            clock.audio_anchor(master.time.clamp(s.range.0, s.range.1));
         }
-        let mut position = master.as_ref().map_or_else(||clock.now(),|a|a.time.clamp(s.range.0,s.range.1));
+        let mut position = master
+            .as_ref()
+            .map_or_else(|| clock.now(), |a| a.time.clamp(s.range.0, s.range.1));
         if position >= s.range.1 && clock.playing {
             clock.set_playing(false);
             position = s.range.1;
-            if master.is_some(){let _=audio.control(&s.project_id,"pause",None,None,None);}
+            if master.is_some() {
+                let _ = audio.control(&s.project_id, "pause", None, None, None);
+            }
         }
         let busy = crate::resource_scheduler::ai_gpu_slot().try_lock().is_err()
             || crate::resource_scheduler::ffmpeg_slot().try_lock().is_err();
         if busy && clock.playing {
             clock.set_playing(false);
-            if master.is_some(){let _=audio.control(&s.project_id,"pause",None,None,None);}
+            if master.is_some() {
+                let _ = audio.control(&s.project_id, "pause", None, None, None);
+            }
         }
         if visible && !busy && (clock.playing || dirty) {
             let generation = s.generation.load(Ordering::SeqCst);
@@ -568,6 +591,7 @@ fn run(
                         width: (r.width as f32 * scale).round().max(1.0) as u32,
                         height: (r.height as f32 * scale).round().max(1.0) as u32,
                     });
+                    let clean_count = clean.upload(&mut renderer, pts)?;
                     match &mut source {
                         Source::Hardware(v) => {
                             v.present(&mut renderer, &view, size, pts, render_guide)?
@@ -588,6 +612,7 @@ fn run(
                     st.present_ms = present_ms;
                     st.render_scale = scale;
                     st.frames += 1;
+                    st.clean_patches = clean_count;
                     if let Some(start) = seek_started.take() {
                         st.seek_ms = start.elapsed().as_secs_f64() * 1000.0;
                         log::debug!("Preview seek {:.2}ms, pts={pts}", st.seek_ms);
@@ -629,6 +654,12 @@ fn run(
                 drop(new_source);
                 renderer = new_renderer;
                 scale = next;
+                let cached = if offset == 0. {
+                    crate::text_removal_service::cached_preview_patches(app, store, &project)?
+                } else {
+                    vec![]
+                };
+                clean = super::clean_patches::CleanPatches::new(&mut renderer, cached, scale)?;
                 last_frame_pts = -1.0;
                 dirty = true;
                 s.status.lock().unwrap().decode = match source {

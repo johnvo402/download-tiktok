@@ -65,7 +65,7 @@ export function createNativePreview(viewport:()=>HTMLDivElement|undefined, media
   if(!p?.source.videoPath||!b){++generation;const old=untrack(session);setSession(undefined);setReady(false);if(old)void invoke('preview_close',{sessionId:old}).catch(()=>undefined);return;}
   setPreferred(engine!=='compatibility');setWarning('');
   const token=++generation;const old=untrack(session);setSession(undefined);setReady(false);lastVisual='';lastTranslations='';lastBounds='';
-  const preview=aiRemovalPreview()?.projectId===p.id?aiRemovalPreview():undefined;
+  const preview=aiRemovalPreview()?.projectId===p.id && !aiRemovalPreview()?.nativeCache?aiRemovalPreview():undefined;
   void (async()=>{
    if(old)await invoke('preview_close',{sessionId:old});
    const id=await invoke<string>('preview_open',{projectId:p.id,bounds:b,clean:preview?{path:preview.path,startSeconds:preview.startSeconds,endSeconds:preview.endSeconds}:null});
@@ -97,7 +97,7 @@ export function createNativePreview(viewport:()=>HTMLDivElement|undefined, media
   observer=new ResizeObserver(resize);if(viewport())observer.observe(viewport()!);
   mutations=new MutationObserver(resize);mutations.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['hidden','open','aria-hidden']});
   window.addEventListener('resize',resize);document.addEventListener('fullscreenchange',resize);document.addEventListener('visibilitychange',resize);
-  const tick=(now:number)=>{if(alive){resize();const audio=media();if(session()&&audio&&!audio.paused&&Number.isFinite(audio.currentTime)&&now-lastAudio>=100){lastAudio=now;control('audio',audio.currentTime+(aiRemovalPreview()?.startSeconds??0));}requestAnimationFrame(tick);}};requestAnimationFrame(tick);
+  const tick=(now:number)=>{if(alive){resize();const audio=media();if(session()&&audio&&!audio.paused&&Number.isFinite(audio.currentTime)&&now-lastAudio>=100){lastAudio=now;control('audio',audio.currentTime+(aiRemovalPreview()?.nativeCache?0:aiRemovalPreview()?.startSeconds??0));}requestAnimationFrame(tick);}};requestAnimationFrame(tick);
  });
  onCleanup(()=>{alive=false;++generation;cancelAnimationFrame(scheduled);observer?.disconnect();mutations?.disconnect();listeners.forEach(l=>l());window.removeEventListener('resize',resize);document.removeEventListener('fullscreenchange',resize);document.removeEventListener('visibilitychange',resize);const id=session();if(id)void invoke('preview_close',{sessionId:id}).catch(()=>undefined);});
  return {preferred,ready,warning,control,setDraft,setPick,reload:()=>setReload(n=>n+1)};

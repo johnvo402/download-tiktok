@@ -81,6 +81,7 @@ pub struct Renderer {
     text_bytes: usize,
     pub(crate) scene: RenderScene,
     patches: Vec<Layer>,
+    preview_patches: Vec<usize>,
     selection: Option<Arc<Texture>>,
 }
 impl Renderer {
@@ -242,6 +243,7 @@ impl Renderer {
             text_bytes: 0,
             scene,
             patches: Vec::new(),
+            preview_patches: Vec::new(),
             selection: None,
         })
     }
@@ -285,6 +287,17 @@ impl Renderer {
     }
     pub fn clear_patches(&mut self) {
         self.patches.clear();
+        self.preview_patches.clear();
+    }
+    pub fn upload_clean_preview(&mut self, patches: &[(usize, &[u8])]) -> Result<(), String> {
+        self.preview_patches.clear();
+        for (index, pixels) in patches {
+            let layer=self.patches.get(*index).ok_or("Patch preview chưa đăng ký.")?;
+            if pixels.len()!=byte_len(layer.rect.width,layer.rect.height)?{return Err("Kích thước patch preview không hợp lệ.".into())}
+            layer._texture.upload(&self.gpu.queue,pixels);
+            self.preview_patches.push(*index);
+        }
+        Ok(())
     }
     pub fn render_frame(&mut self, frame: VideoFrame<'_>, output: &mut [u8]) -> Result<(), String> {
         self.render_frame_with_patches(frame, &[], output)

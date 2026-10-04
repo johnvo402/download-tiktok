@@ -5,6 +5,8 @@ mod quality;
 pub(crate) mod scene;
 mod software;
 #[cfg(windows)]
+mod clean_patches;
+#[cfg(windows)]
 mod surface;
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]

@@ -37,6 +37,7 @@ dependencies = [
  "chrono",
  "cosmic-text",
  "cpal",
+ "flate2",
  "hound",
  "image",
  "keyring",

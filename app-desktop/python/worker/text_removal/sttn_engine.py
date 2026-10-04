@@ -7,7 +7,6 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from worker.text_removal.sttn_model import InpaintGenerator
 from worker.text_removal.intervals import centers_covering_masked_frames
 
 MODEL_WIDTH = 432
@@ -101,6 +100,7 @@ def process_sttn_frames(
         else:
             device = torch.device("cuda")
         try:
+            from worker.text_removal.sttn_model import InpaintGenerator
             checkpoint = torch.load(str(model_path), map_location="cpu", weights_only=True)
             state = checkpoint.get("netG", checkpoint) if isinstance(checkpoint, dict) else checkpoint
             model = InpaintGenerator().to(device)

@@ -1,6 +1,6 @@
 use crate::project_service::BlurEffect;
-use crate::render_spec::{PixelRect, RenderSpecification};
 use crate::project_service::TextRemovalMode;
+use crate::render_spec::{PixelRect, RenderSpecification};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
@@ -15,7 +15,8 @@ use tauri::{AppHandle, Emitter, Manager};
 
 const STTN_MODEL_SIZE: u64 = 66_252_587;
 const STTN_MODEL_SHA256: &str = "25b0c2c30042d82efd1893bd42ec726764262d94115393a1718f8d65d2a7817b";
-const STTN_MODEL_URL: &str = "https://drive.google.com/uc?export=download&id=1ZAMV8547wmZylKRt5qR_tC5VlosXD4Wv";
+const STTN_MODEL_URL: &str =
+    "https://drive.google.com/uc?export=download&id=1ZAMV8547wmZylKRt5qR_tC5VlosXD4Wv";
 const WORKER_TIMEOUT: Duration = Duration::from_secs(12 * 60 * 60);
 
 #[derive(Clone, Debug, Serialize)]
@@ -63,9 +64,12 @@ struct WorkerEvent {
     kind: String,
     progress: Option<f64>,
     message: Option<String>,
+    #[cfg(test)]
     intervals: Option<Vec<RemovalInterval>>,
     interval_results: Option<Vec<WorkerIntervalResult>>,
+    #[cfg(test)]
     detected_frames: Option<usize>,
+    #[cfg(test)]
     sampled_frames: Option<usize>,
 }
 
@@ -73,37 +77,15 @@ struct WorkerEvent {
 #[serde(rename_all = "camelCase")]
 struct WorkerIntervalResult {
     masked_pixels: u64,
+    path: Option<String>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RemovalInterval {
     start_seconds: f64,
     end_seconds: f64,
-}
-
-struct RegionScan {
-    region_id: String,
-    mask_mode: TextRemovalMode,
-    rect: PixelRect,
-    ocr_rect: PixelRect,
-    work_dir: PathBuf,
-    intervals: Vec<RemovalInterval>,
-}
-
-struct RemovalFrameSequence {
-    interval: RemovalInterval,
-    frames_dir: PathBuf,
-    masks_dir: PathBuf,
-    output_dir: PathBuf,
-}
-
-struct RemovalRegionWork {
-    region_id: String,
-    mask_mode: TextRemovalMode,
-    rect: PixelRect,
-    ocr_rect: PixelRect,
-    sequences: Vec<RemovalFrameSequence>,
 }
 
 fn app_models_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -167,17 +149,32 @@ pub fn environment(app: AppHandle) -> Result<TextRemovalEnvironment, String> {
     let ocr = crate::asr_service::get_ocr_environment(app.clone(), model.clone());
     let ocr = ocr.ok();
     let sttn_path = sttn_model_path(&app)?;
-    let sttn_model_installed = fs::metadata(&sttn_path).is_ok_and(|metadata| metadata.is_file() && metadata.len() == STTN_MODEL_SIZE);
+    let sttn_model_installed = fs::metadata(&sttn_path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() == STTN_MODEL_SIZE);
     let runtime = crate::optional_runtime::status();
     let ocr_cuda_available = ocr.as_ref().is_some_and(|value| value.cuda_available);
     Ok(TextRemovalEnvironment {
         sttn_model_installed,
-        sttn_model_bytes: if sttn_model_installed { STTN_MODEL_SIZE } else { 0 },
+        sttn_model_bytes: if sttn_model_installed {
+            STTN_MODEL_SIZE
+        } else {
+            0
+        },
         sttn_estimated_download_bytes: STTN_MODEL_SIZE,
-        sttn_runtime_installed: runtime.installed_features.iter().any(|feature| feature == "sttn"),
-        sttn_cuda_available: runtime.profile.as_deref() == Some("cuda") && runtime.installed_features.iter().any(|feature| feature == "sttn"),
+        sttn_runtime_installed: runtime
+            .installed_features
+            .iter()
+            .any(|feature| feature == "sttn"),
+        sttn_cuda_available: runtime.profile.as_deref() == Some("cuda")
+            && runtime
+                .installed_features
+                .iter()
+                .any(|feature| feature == "sttn"),
         ocr_ready: ocr.as_ref().is_some_and(|value| {
-            value.worker_installed && value.ocr_installed && value.runtime_installed && value.model_cached
+            value.worker_installed
+                && value.ocr_installed
+                && value.runtime_installed
+                && value.model_cached
         }),
         ocr_model: model,
         ocr_cuda_available,
@@ -187,11 +184,16 @@ pub fn environment(app: AppHandle) -> Result<TextRemovalEnvironment, String> {
 
 pub fn install_sttn_model(app: AppHandle) -> Result<(), String> {
     let target = sttn_model_path(&app)?;
-    if fs::metadata(&target).is_ok_and(|metadata| metadata.is_file() && metadata.len() == STTN_MODEL_SIZE) {
+    if fs::metadata(&target)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() == STTN_MODEL_SIZE)
+    {
         return Ok(());
     }
-    let directory = target.parent().ok_or("Thư mục mô hình STTN không hợp lệ.")?;
-    fs::create_dir_all(directory).map_err(|error| format!("Không thể tạo thư mục mô hình: {error}"))?;
+    let directory = target
+        .parent()
+        .ok_or("Thư mục mô hình STTN không hợp lệ.")?;
+    fs::create_dir_all(directory)
+        .map_err(|error| format!("Không thể tạo thư mục mô hình: {error}"))?;
     let metadata = fs::symlink_metadata(directory).map_err(|error| error.to_string())?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err("Thư mục mô hình AI không an toàn; đã dừng tải.".into());
@@ -204,39 +206,62 @@ pub fn install_sttn_model(app: AppHandle) -> Result<(), String> {
         .user_agent("JC-AI-Desktop/1.0")
         .build()
         .map_err(|error| format!("Không thể khởi tạo tải model STTN: {error}"))?;
-    let mut response = client.get(STTN_MODEL_URL).send()
+    let mut response = client
+        .get(STTN_MODEL_URL)
+        .send()
         .and_then(reqwest::blocking::Response::error_for_status)
         .map_err(|error| format!("Không tải được model STTN: {error}"))?;
-    if response.content_length().is_some_and(|length| length != STTN_MODEL_SIZE) {
+    if response
+        .content_length()
+        .is_some_and(|length| length != STTN_MODEL_SIZE)
+    {
         return Err("Kích thước model STTN tải về không hợp lệ.".into());
     }
     let download_result = (|| -> Result<(), String> {
-        let mut file = OpenOptions::new().write(true).create_new(true).open(&partial)
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&partial)
             .map_err(|error| format!("Không thể tạo tệp tải model STTN: {error}"))?;
         let mut digest = Sha256::new();
         let mut downloaded = 0_u64;
         let mut buffer = [0_u8; 256 * 1024];
         let mut last_emit = Instant::now();
         loop {
-            let count = response.read(&mut buffer).map_err(|error| format!("Tải model STTN bị gián đoạn: {error}"))?;
-            if count == 0 { break; }
-            if downloaded + count as u64 > STTN_MODEL_SIZE { return Err("Kích thước model STTN tải về vượt dự kiến.".into()); }
-            file.write_all(&buffer[..count]).map_err(|error| format!("Không thể ghi model STTN xuống ổ đĩa: {error}"))?;
+            let count = response
+                .read(&mut buffer)
+                .map_err(|error| format!("Tải model STTN bị gián đoạn: {error}"))?;
+            if count == 0 {
+                break;
+            }
+            if downloaded + count as u64 > STTN_MODEL_SIZE {
+                return Err("Kích thước model STTN tải về vượt dự kiến.".into());
+            }
+            file.write_all(&buffer[..count])
+                .map_err(|error| format!("Không thể ghi model STTN xuống ổ đĩa: {error}"))?;
             digest.update(&buffer[..count]);
             downloaded += count as u64;
             if last_emit.elapsed() >= Duration::from_millis(250) || downloaded == STTN_MODEL_SIZE {
-                let _ = app.emit("sttn-model-progress", serde_json::json!({
-                    "downloadedBytes": downloaded,
-                    "totalBytes": STTN_MODEL_SIZE,
-                    "progress": (downloaded as f64 / STTN_MODEL_SIZE as f64).clamp(0.0, 1.0),
-                    "message": "Đang tải model STTN…"
-                }));
+                let _ = app.emit(
+                    "sttn-model-progress",
+                    serde_json::json!({
+                        "downloadedBytes": downloaded,
+                        "totalBytes": STTN_MODEL_SIZE,
+                        "progress": (downloaded as f64 / STTN_MODEL_SIZE as f64).clamp(0.0, 1.0),
+                        "message": "Đang tải model STTN…"
+                    }),
+                );
                 last_emit = Instant::now();
             }
         }
-        file.sync_all().map_err(|error| format!("Không thể hoàn tất ghi model STTN: {error}"))?;
-        if downloaded != STTN_MODEL_SIZE || format!("{:x}", digest.finalize()) != STTN_MODEL_SHA256 {
-            return Err("Model STTN tải về chưa đầy đủ hoặc không vượt qua kiểm tra toàn vẹn. Hãy thử lại.".into());
+        file.sync_all()
+            .map_err(|error| format!("Không thể hoàn tất ghi model STTN: {error}"))?;
+        if downloaded != STTN_MODEL_SIZE || format!("{:x}", digest.finalize()) != STTN_MODEL_SHA256
+        {
+            return Err(
+                "Model STTN tải về chưa đầy đủ hoặc không vượt qua kiểm tra toàn vẹn. Hãy thử lại."
+                    .into(),
+            );
         }
         Ok(())
     })();
@@ -254,12 +279,15 @@ pub fn install_sttn_model(app: AppHandle) -> Result<(), String> {
         let _ = fs::remove_file(&partial);
         return Err(format!("Không thể cài model STTN: {error}"));
     }
-    let _ = app.emit("sttn-model-progress", serde_json::json!({
-        "downloadedBytes": STTN_MODEL_SIZE,
-        "totalBytes": STTN_MODEL_SIZE,
-        "progress": 1.0,
-        "message": "Đã cài model STTN"
-    }));
+    let _ = app.emit(
+        "sttn-model-progress",
+        serde_json::json!({
+            "downloadedBytes": STTN_MODEL_SIZE,
+            "totalBytes": STTN_MODEL_SIZE,
+            "progress": 1.0,
+            "message": "Đã cài model STTN"
+        }),
+    );
     Ok(())
 }
 
@@ -281,7 +309,9 @@ fn remove_managed_model(app: &AppHandle, target: PathBuf, label: &str) -> Result
     let canonical_parent = fs::canonicalize(parent)
         .map_err(|error| format!("Không thể xác minh thư mục model {label}: {error}"))?;
     if !canonical_parent.starts_with(&canonical_root) {
-        return Err(format!("Tệp model {label} nằm ngoài thư mục Models của ứng dụng."));
+        return Err(format!(
+            "Tệp model {label} nằm ngoài thư mục Models của ứng dụng."
+        ));
     }
     let bytes = metadata.len();
     fs::remove_file(&target).map_err(|error| format!("Không thể gỡ model {label}: {error}"))?;
@@ -292,10 +322,17 @@ pub fn remove_sttn_model(app: AppHandle) -> Result<u64, String> {
     remove_managed_model(&app, sttn_model_path(&app)?, "STTN")
 }
 
-pub fn require_effects_ready(app: &AppHandle, effects: &[BlurEffect], require_ocr: bool) -> Result<(), String> {
+pub fn require_effects_ready(
+    app: &AppHandle,
+    effects: &[BlurEffect],
+    require_ocr: bool,
+) -> Result<(), String> {
     let status = environment(app.clone())?;
     if require_ocr && !status.ocr_ready {
-        return Err(format!("RapidOCR chưa sẵn sàng. Hãy cài model OCR {} trong Cài đặt → Nhận dạng lời thoại.", status.ocr_model));
+        return Err(format!(
+            "RapidOCR chưa sẵn sàng. Hãy cài model OCR {} trong Cài đặt → Nhận dạng lời thoại.",
+            status.ocr_model
+        ));
     }
     if effects.contains(&BlurEffect::Sttn) {
         if !status.sttn_runtime_installed {
@@ -308,75 +345,46 @@ pub fn require_effects_ready(app: &AppHandle, effects: &[BlurEffect], require_oc
     Ok(())
 }
 
-fn expand_sttn_rect(rect: PixelRect, frame_width: u32, frame_height: u32) -> (PixelRect, PixelRect) {
-    // STTN's released checkpoint was trained on 16:9 432x240 crops. Expand a
-    // subtitle ROI to include nearby scene context while retaining the OCR ROI.
-    let target_ratio = 432.0 / 240.0;
-    let mut width = rect.width.max((rect.height as f64 * target_ratio).ceil() as u32).min(frame_width);
-    let mut height = rect.height.max((rect.width as f64 / target_ratio).ceil() as u32).min(frame_height);
-    if width < rect.width { width = rect.width.min(frame_width); }
-    if height < rect.height { height = rect.height.min(frame_height); }
-    if (width as f64 / height.max(1) as f64) < target_ratio && height < frame_height {
-        height = ((width as f64 / target_ratio).ceil() as u32).max(rect.height).min(frame_height);
-    } else if (width as f64 / height.max(1) as f64) > target_ratio && width < frame_width {
-        width = ((height as f64 * target_ratio).ceil() as u32).max(rect.width).min(frame_width);
-    }
-    let center_x = rect.x.saturating_add(rect.width / 2);
-    let center_y = rect.y.saturating_add(rect.height / 2);
-    let x = center_x.saturating_sub(width / 2).min(frame_width.saturating_sub(width));
-    let y = center_y.saturating_sub(height / 2).min(frame_height.saturating_sub(height));
-    let local = PixelRect {
-        x: rect.x.saturating_sub(x), y: rect.y.saturating_sub(y),
-        width: rect.width.min(width), height: rect.height.min(height),
-    };
-    (PixelRect { x, y, width, height }, local)
-}
-
-fn extract_frames(
-    source: &Path,
-    start: f64,
-    end: f64,
+fn expand_sttn_rect(
     rect: PixelRect,
-    fps: f64,
-    frames_dir: &Path,
-    state: &AtomicU8,
-) -> Result<(), String> {
-    if end <= start || !fps.is_finite() || fps <= 0.0 {
-        return Err("Khoảng thời gian quét chữ không hợp lệ.".into());
-    }
-    fs::create_dir_all(frames_dir).map_err(|error| format!("Không thể tạo thư mục frame OCR: {error}"))?;
-    let crop = format!("crop={}:{}:{}:{},fps={fps:.6}", rect.width, rect.height, rect.x, rect.y);
-    let pattern = frames_dir.join("frame_%08d.jpg");
-    let mut extraction = crate::runtime_paths::ffmpeg_command()?
-        .args(["-hide_banner", "-loglevel", "error", "-y", "-ss"])
-        .arg(format!("{start:.6}"))
-        .arg("-i").arg(source)
-        .arg("-t").arg(format!("{:.6}", end - start))
-        .args(["-vf", &crop, "-vsync", "0", "-q:v", "2", "-start_number", "1"])
-        .arg(&pattern)
-        .stdout(Stdio::null()).stderr(Stdio::null())
-        .spawn().map_err(|error| format!("Không thể trích xuất frame để nhận diện chữ: {error}"))?;
-    loop {
-        if state.load(Ordering::SeqCst) == 2 {
-            let _ = extraction.kill();
-            let _ = extraction.wait();
-            return Err("Đã hủy xử lý xóa chữ.".into());
-        }
-        if let Some(status) = extraction.try_wait().map_err(|error| format!("Không thể theo dõi FFmpeg trích xuất frame: {error}"))? {
-            if !status.success() {
-                return Err("FFmpeg không trích xuất được frame để nhận diện chữ.".into());
-            }
-            break;
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    let has_frames = fs::read_dir(frames_dir).map_err(|error| error.to_string())?
-        .filter_map(Result::ok)
-        .any(|entry| entry.path().extension().is_some_and(|extension| extension == "jpg"));
-    if !has_frames {
-        return Err("Không có frame trong khoảng thời gian cần quét chữ.".into());
-    }
-    Ok(())
+    frame_width: u32,
+    frame_height: u32,
+) -> (PixelRect, PixelRect) {
+    // Add local scene context, then retain the checkpoint's 432:240 aspect ratio
+    // where source bounds permit. Never squash a narrow subtitle strip vertically.
+    let margin = (frame_height as f64 * 0.04).round().max(8.0) as u32;
+    let base_width = rect.width.saturating_add(2 * margin).min(frame_width);
+    let base_height = rect.height.saturating_add(2 * margin).min(frame_height);
+    let width = base_width
+        .max((base_height as f64 * 432. / 240.).ceil() as u32)
+        .min(frame_width);
+    let height = base_height
+        .max((width as f64 * 240. / 432.).ceil() as u32)
+        .min(frame_height);
+    let x = rect
+        .x
+        .saturating_add(rect.width / 2)
+        .saturating_sub(width / 2)
+        .min(frame_width - width);
+    let y = rect
+        .y
+        .saturating_add(rect.height / 2)
+        .saturating_sub(height / 2)
+        .min(frame_height - height);
+    (
+        PixelRect {
+            x,
+            y,
+            width,
+            height,
+        },
+        PixelRect {
+            x: rect.x - x,
+            y: rect.y - y,
+            width: rect.width,
+            height: rect.height,
+        },
+    )
 }
 
 pub fn prepare_export_patches<F>(
@@ -385,161 +393,629 @@ pub fn prepare_export_patches<F>(
     source: &Path,
     render_dir: &Path,
     state: &AtomicU8,
+    progress: F,
+) -> Result<Vec<AiTextRemovalPatch>, String>
+where
+    F: FnMut(f64, String),
+{
+    prepare_patches(app, spec, source, render_dir, state, false, progress)
+}
+
+fn detection_key(
+    source: &str,
+    rect: PixelRect,
+    start: f64,
+    end: f64,
+    fps: u8,
+    model: &str,
+    device: &str,
+) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&serde_json::json!({
+                "version":2,"source":source,"rect":rect,"start":start,"end":end,"scanFps":fps,
+                "ocrModel":model,"ocrVersion":"3.9.2","device":device
+            }))
+            .expect("finite validated region")
+        )
+    )
+}
+fn painting_key(mode: &str, rect: PixelRect) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&serde_json::json!({
+                "engine":"sttn-v2","contextMasks":2,"model":STTN_MODEL_SHA256,"mode":mode,"rect":rect
+            }))
+            .expect("validated pixel rectangle")
+        )
+    )
+}
+fn removal_region_identity(region: &crate::project_service::BlurRegion) -> serde_json::Value {
+    serde_json::json!([
+        region.x,
+        region.y,
+        region.width,
+        region.height,
+        region.enabled,
+        region.effect,
+        region.start_ms,
+        region.end_ms,
+        region.text_removal_scan_fps,
+        region.text_removal_mode
+    ])
+}
+
+/// Read-only lookup for native preview. Missing/stale caches never launch an AI job.
+pub fn cached_preview_patches(
+    app: &AppHandle,
+    store: &crate::project_service::ProjectStore,
+    project: &crate::project_service::Project,
+) -> Result<Vec<AiTextRemovalPatch>, String> {
+    let Some(source_key) = project.source.checksum_sha256.as_deref() else {
+        return Ok(vec![]);
+    };
+    let (Some(width), Some(height), Some(duration)) = (
+        project.source.width,
+        project.source.height,
+        project.source.duration,
+    ) else {
+        return Ok(vec![]);
+    };
+    let root = store
+        .project_directory(&project.id)?
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let cache = root.join("cache/text-removal/v2");
+    if !cache.exists() {
+        return Ok(vec![]);
+    }
+    let cache = cache.canonicalize().map_err(|e| e.to_string())?;
+    if !cache.starts_with(&root) {
+        return Err("Cache xóa chữ nằm ngoài dự án.".into());
+    }
+    let settings = crate::settings_service::get_settings(app)?.settings.asr;
+    let mut patches = vec![];
+    for region in project
+        .blur_regions
+        .iter()
+        .filter(|r| r.enabled && r.effect == BlurEffect::Sttn)
+    {
+        let roi = crate::render_spec::normalized_rect_to_pixels(
+            region.x,
+            region.y,
+            region.width,
+            region.height,
+            width,
+            height,
+        )?;
+        let start = (region.start_ms as f64 / 1000.).clamp(0., duration);
+        let end = region
+            .end_ms
+            .map(|n| n as f64 / 1000.)
+            .unwrap_or(duration)
+            .clamp(start, duration);
+        if end <= start {
+            continue;
+        }
+        let key = detection_key(
+            source_key,
+            roi,
+            start,
+            end,
+            region.text_removal_scan_fps,
+            &settings.ocr_model,
+            &settings.ocr_device,
+        );
+        let (rect, _) = expand_sttn_rect(roi, width, height);
+        let mode = if region.text_removal_mode == TextRemovalMode::FullRegion {
+            "fullRegion"
+        } else {
+            "ocrGuided"
+        };
+        let detection_path = cache.join(&key).join("detection.json");
+        if crate::audio::signal::regular_file(&detection_path).is_err() {
+            continue;
+        }
+        let detection_bytes = fs::read(detection_path).map_err(|e| e.to_string())?;
+        let Ok(detection) = serde_json::from_slice::<serde_json::Value>(&detection_bytes) else {
+            continue;
+        };
+        if !valid_detection(&detection, &key, start, end) {
+            continue;
+        }
+        let detection_fingerprint = format!("{:x}", Sha256::digest(&detection_bytes));
+        let directory = cache.join(&key).join(painting_key(mode, rect));
+        if !directory.exists() {
+            continue;
+        }
+        let directory = directory.canonicalize().map_err(|e| e.to_string())?;
+        if !directory.starts_with(&cache) {
+            return Err("Cache phục hồi không an toàn.".into());
+        }
+        let result = directory.join("result.json");
+        if crate::audio::signal::regular_file(&result).is_err() {
+            continue;
+        }
+        let Ok(json) = serde_json::from_slice::<serde_json::Value>(
+            &fs::read(result).map_err(|e| e.to_string())?,
+        ) else {
+            continue;
+        };
+        if json["version"] != 2
+            || json["complete"] != true
+            || json["detectionKey"] != key
+            || json["detectionFingerprint"] != detection_fingerprint
+        {
+            continue;
+        }
+        let Some(files) = json["files"].as_array() else {
+            continue;
+        };
+        for name in files {
+            let Some(name) = name
+                .as_str()
+                .filter(|s| !s.contains(['/', '\\']) && s.ends_with(".pack"))
+            else {
+                return Err("Tên cache không hợp lệ.".into());
+            };
+            let path = directory.join(name);
+            let Ok(reader) = crate::text_removal_cache::Reader::open(&path) else {
+                continue;
+            };
+            if (reader.metadata.width, reader.metadata.height) != (rect.width, rect.height) {
+                continue;
+            }
+            if let (Some(first), Some(last)) = (
+                reader.metadata.frames.first(),
+                reader.metadata.frames.last(),
+            ) {
+                patches.push(AiTextRemovalPatch {
+                    image_pattern: path,
+                    rect,
+                    fps: project.source.fps.unwrap_or(30.),
+                    start_seconds: first.pts,
+                    end_seconds: last.end,
+                });
+            }
+        }
+    }
+    Ok(patches)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheStatus {
+    state: &'static str,
+    intervals: usize,
+    cached_frames: usize,
+    cached_bytes: u64,
+    sampled_frames: usize,
+    ocr_backend: Option<String>,
+}
+fn valid_detection(value: &serde_json::Value, key: &str, start: f64, end: f64) -> bool {
+    if value["version"] != 2 || value["key"] != key || value["complete"] != true {
+        return false;
+    }
+    let Some(intervals) = value["intervals"].as_array() else {
+        return false;
+    };
+    let mut previous = start;
+    for interval in intervals {
+        let (Some(a), Some(b)) = (
+            interval["startSeconds"].as_f64(),
+            interval["endSeconds"].as_f64(),
+        ) else {
+            return false;
+        };
+        if !a.is_finite()
+            || !b.is_finite()
+            || a < start
+            || a < previous - 1e-7
+            || a >= b
+            || b > end + 1e-7
+        {
+            return false;
+        }
+        let Some(boxes) = interval["boxes"].as_array().filter(|b| !b.is_empty()) else {
+            return false;
+        };
+        for points in boxes {
+            let Some(points) = points.as_array().filter(|p| p.len() >= 4) else {
+                return false;
+            };
+            if !points.iter().all(|p| {
+                p.as_array().is_some_and(|p| {
+                    p.len() == 2 && p.iter().all(|n| n.as_f64().is_some_and(f64::is_finite))
+                })
+            }) {
+                return false;
+            }
+        }
+        previous = b;
+    }
+    true
+}
+pub fn cache_status(
+    app: &AppHandle,
+    store: &crate::project_service::ProjectStore,
+    project_id: &str,
+    region_id: &str,
+) -> Result<CacheStatus, String> {
+    let mut project = store.get(project_id)?;
+    let region = project
+        .blur_regions
+        .iter()
+        .find(|r| r.id == region_id)
+        .cloned()
+        .ok_or("Vùng xử lý không tồn tại.")?;
+    let mut status = CacheStatus {
+        state: "not_detected",
+        intervals: 0,
+        cached_frames: 0,
+        cached_bytes: 0,
+        sampled_frames: 0,
+        ocr_backend: None,
+    };
+    let (Some(source), Some(width), Some(height), Some(duration)) = (
+        project.source.checksum_sha256.as_deref(),
+        project.source.width,
+        project.source.height,
+        project.source.duration,
+    ) else {
+        return Ok(status);
+    };
+    let roi = crate::render_spec::normalized_rect_to_pixels(
+        region.x,
+        region.y,
+        region.width,
+        region.height,
+        width,
+        height,
+    )?;
+    let settings = crate::settings_service::get_settings(app)?.settings.asr;
+    let start = (region.start_ms as f64 / 1000.).clamp(0., duration);
+    let end = region
+        .end_ms
+        .map(|n| n as f64 / 1000.)
+        .unwrap_or(duration)
+        .clamp(start, duration);
+    let key = detection_key(
+        source,
+        roi,
+        start,
+        end,
+        region.text_removal_scan_fps,
+        &settings.ocr_model,
+        &settings.ocr_device,
+    );
+    let root = store
+        .project_directory(project_id)?
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let dir = root.join("cache/text-removal/v2").join(&key);
+    if !dir.exists() {
+        return Ok(status);
+    }
+    let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+    if !dir.starts_with(&root) {
+        return Err("Cache nhận diện không an toàn.".into());
+    }
+    let detection = dir.join("detection.json");
+    if crate::audio::signal::regular_file(&detection).is_err() {
+        return Ok(status);
+    }
+    let json: serde_json::Value =
+        serde_json::from_slice(&fs::read(detection).map_err(|e| e.to_string())?)
+            .map_err(|_| "Cache nhận diện bị hỏng.")?;
+    if !valid_detection(&json, &key, start, end) {
+        return Ok(status);
+    }
+    status.intervals = json["intervals"].as_array().map_or(0, Vec::len);
+    status.sampled_frames = json["sampledFrames"].as_u64().unwrap_or(0) as usize;
+    status.ocr_backend = json["metrics"]["ocrBackend"].as_str().map(str::to_owned);
+    status.state = "detected";
+    project.blur_regions = vec![region.clone()];
+    for p in cached_preview_patches(app, store, &project)? {
+        if let Ok(reader) = crate::text_removal_cache::Reader::open(&p.image_pattern) {
+            status.cached_frames += reader.metadata.frames.len();
+            status.cached_bytes += fs::metadata(&p.image_pattern)
+                .map_err(|e| e.to_string())?
+                .len();
+        }
+    }
+    if status.cached_frames > 0 {
+        status.state = "removed"
+    } else {
+        // Cancellation preserves committed spans even before the overall manifest exists.
+        let (rect, _) = expand_sttn_rect(roi, width, height);
+        let mode = if region.text_removal_mode == TextRemovalMode::FullRegion {
+            "fullRegion"
+        } else {
+            "ocrGuided"
+        };
+        let painted = dir.join(painting_key(mode, rect));
+        if painted.exists() {
+            let painted = painted.canonicalize().map_err(|e| e.to_string())?;
+            if !painted.starts_with(&dir) {
+                return Err("Cache phục hồi không an toàn.".into());
+            }
+            for entry in fs::read_dir(painted).map_err(|e| e.to_string())? {
+                let path = entry.map_err(|e| e.to_string())?.path();
+                if path.extension().is_none_or(|e| e != "pack") {
+                    continue;
+                }
+                let Ok(reader) = crate::text_removal_cache::Reader::open(&path) else {
+                    continue;
+                };
+                if (reader.metadata.width, reader.metadata.height) != (rect.width, rect.height) {
+                    continue;
+                }
+                if reader.metadata.frames.first().is_none_or(|f| f.pts < start)
+                    || reader
+                        .metadata
+                        .frames
+                        .last()
+                        .is_none_or(|f| f.end > end + 1e-7)
+                {
+                    continue;
+                }
+                status.cached_frames += reader.metadata.frames.len();
+                status.cached_bytes += fs::metadata(path).map_err(|e| e.to_string())?.len();
+            }
+            if status.cached_frames > 0 {
+                status.state = "partial";
+            }
+        }
+    }
+    Ok(status)
+}
+fn prepare_patches<F>(
+    app: &AppHandle,
+    spec: &RenderSpecification,
+    source: &Path,
+    render_dir: &Path,
+    state: &AtomicU8,
+    detect_only: bool,
     mut progress: F,
 ) -> Result<Vec<AiTextRemovalPatch>, String>
 where
     F: FnMut(f64, String),
 {
-    let regions: Vec<_> = spec.blur_regions.iter()
-        .filter(|region| region.enabled && region.effect == BlurEffect::Sttn)
+    let regions: Vec<_> = spec
+        .blur_regions
+        .iter()
+        .filter(|r| r.enabled && r.effect == BlurEffect::Sttn)
         .collect();
-    if regions.is_empty() { return Ok(Vec::new()); }
-    let effects: Vec<_> = regions.iter().map(|region| region.effect).collect();
-    // RapidOCR is always used as a sparse presence scan. The selected mask mode
-    // controls what gets restored inside the detected intervals, not whether
-    // those intervals are scanned.
-    require_effects_ready(app, &effects, true)?;
-    let settings = crate::settings_service::get_settings(app)?;
-    let ocr_model = settings.settings.asr.ocr_model;
-    let ocr_device = settings.settings.asr.ocr_device;
-    let cache_dir = app_models_dir(app)?;
-    let sttn_path = sttn_model_path(app)?;
-    let frame_rate = spec.fps.filter(|fps| fps.is_finite() && (1.0..=240.0).contains(fps)).unwrap_or(30.0);
-    let mut scans = Vec::with_capacity(regions.len());
-    for (region_index, region) in regions.iter().enumerate() {
-        if state.load(Ordering::SeqCst) == 2 { return Err("Đã hủy export.".into()); }
+    if regions.is_empty() {
+        return Ok(Vec::new());
+    }
+    let root = render_dir
+        .ancestors()
+        .nth(3)
+        .ok_or("Không xác định được thư mục dự án.")?
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let cached_root = root.join("cache/text-removal/v2");
+    fs::create_dir_all(&cached_root).map_err(|e| e.to_string())?;
+    let cached_root = cached_root.canonicalize().map_err(|e| e.to_string())?;
+    if !cached_root.starts_with(&root) {
+        return Err("Cache xóa chữ nằm ngoài dự án.".into());
+    }
+    let project: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("project.json")).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    let meta = fs::metadata(source).map_err(|e| e.to_string())?;
+    let source_key = project["source"]["checksumSha256"]
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{}-{:?}", meta.len(), meta.modified().ok()));
+    let settings = crate::settings_service::get_settings(app)?.settings.asr;
+    let mut patches = Vec::new();
+    for (i, region) in regions.iter().enumerate() {
+        if state.load(Ordering::SeqCst) == 2 {
+            return Err("Đã hủy xóa chữ.".into());
+        }
         let start = (region.start_ms as f64 / 1000.0).clamp(0.0, spec.duration);
-        let end = (region.end_ms.map(|value| value as f64 / 1000.0).unwrap_or(spec.duration)).clamp(start, spec.duration);
-        if end <= start { continue; }
-        let work_dir = render_dir.join(format!("text-removal-{}", region_index + 1));
+        let end = (region
+            .end_ms
+            .map(|n| n as f64 / 1000.0)
+            .unwrap_or(spec.duration))
+        .clamp(start, spec.duration);
+        if end <= start {
+            continue;
+        }
+        if ![1, 2].contains(&region.text_removal_scan_fps) {
+            return Err("Tốc độ quét phải là 1 hoặc 2 khung/giây.".into());
+        }
         let (rect, ocr_rect) = expand_sttn_rect(region.rect, spec.width, spec.height);
-        let scan_fps = match region.text_removal_scan_fps {
-            1 => 1.0,
-            2 => 2.0,
-            _ => return Err("Tốc độ quét RapidOCR phải là 1 hoặc 2 khung hình mỗi giây.".into()),
+        let detect_key = detection_key(
+            &source_key,
+            region.rect,
+            start,
+            end,
+            region.text_removal_scan_fps,
+            &settings.ocr_model,
+            &settings.ocr_device,
+        );
+        let dir = cached_root.join(&detect_key);
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        if !dir
+            .canonicalize()
+            .map_err(|e| e.to_string())?
+            .starts_with(&cached_root)
+        {
+            return Err("Thư mục nhận diện không an toàn.".into());
+        }
+        let detection = dir.join("detection.json");
+        let scan = serde_json::json!({"operation":"text_removal_detect_v2","sourcePath":source,"sourceKey":source_key,
+            "scanRect":region.rect,"startSeconds":start,"endSeconds":end,"scanFps":region.text_removal_scan_fps,
+            "cacheDir":app_models_dir(app)?,"ocrModel":settings.ocr_model,"ocrDevice":settings.ocr_device,
+            "detectionPath":detection,"detectionKey":detect_key});
+        let detection_valid = crate::audio::signal::regular_file(&detection)
+            .ok()
+            .and_then(|_| fs::read(&detection).ok())
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .filter(|v| valid_detection(v, &detect_key, start, end));
+        if detection_valid.is_none() {
+            require_effects_ready(app, &[], true)?;
+            run_worker(
+                &crate::runtime_paths::ocr_worker_dir()?,
+                &scan,
+                state,
+                |p, m| progress((i as f64 + p * 0.35) / regions.len() as f64 * 0.15, m),
+            )?;
+        } else {
+            progress(
+                i as f64 / regions.len() as f64 * 0.15,
+                "Đã dùng lại kết quả nhận diện phụ đề.".into(),
+            );
+        }
+        let detection_bytes = fs::read(&detection).map_err(|e| e.to_string())?;
+        let detection_fingerprint = format!("{:x}", Sha256::digest(&detection_bytes));
+        let detection_json: serde_json::Value =
+            serde_json::from_slice(&detection_bytes).map_err(|_| "Cache nhận diện bị hỏng.")?;
+        if detection_json["intervals"]
+            .as_array()
+            .is_none_or(|a| a.is_empty())
+        {
+            progress(
+                (i + 1) as f64 / regions.len() as f64 * 0.15,
+                "Không phát hiện phụ đề trong vùng đã chọn; giữ nguyên video.".into(),
+            );
+            continue;
+        }
+        if detect_only {
+            progress(
+                (i + 1) as f64 / regions.len() as f64,
+                format!(
+                    "Đã nhận diện {} đoạn có phụ đề.",
+                    detection_json["intervals"].as_array().unwrap().len()
+                ),
+            );
+            continue;
+        }
+        let mode = match region.text_removal_mode {
+            TextRemovalMode::OcrGuided => "ocrGuided",
+            TextRemovalMode::FullRegion => "fullRegion",
         };
-        let scan_frames_dir = work_dir.join("scan-frames");
-        progress(0.01 + 0.06 * region_index as f64 / regions.len() as f64,
-            format!("Đang quét RapidOCR ở {scan_fps} khung/giây · vùng {}/{}", region_index + 1, regions.len()));
-        extract_frames(source, start, end, rect, scan_fps, &scan_frames_dir, state)?;
-        let worker = crate::runtime_paths::ocr_worker_dir()?;
-        let scan_request = serde_json::json!({
-            "operation": "text_removal_scan",
-            "framesDir": scan_frames_dir,
-            "cacheDir": cache_dir,
-            "ocrModel": ocr_model,
-            "ocrDevice": ocr_device,
-            "ocrRect": { "x": ocr_rect.x, "y": ocr_rect.y, "width": ocr_rect.width, "height": ocr_rect.height },
-            "scanFps": scan_fps,
-            "startSeconds": start,
-            "endSeconds": end,
-        });
-        let scan_result = run_worker(&worker, &scan_request, state, |value, message| {
-            let all = (region_index as f64 + value.clamp(0.0, 1.0)) / regions.len() as f64;
-            progress(0.01 + 0.06 * all, message);
-        })?;
-        let intervals: Vec<_> = scan_result.intervals.unwrap_or_default().into_iter()
-            .filter_map(|interval| {
-                let span_start = interval.start_seconds.max(start);
-                let span_end = interval.end_seconds.min(end);
-                (span_start.is_finite() && span_end.is_finite() && span_end > span_start)
-                    .then_some(RemovalInterval { start_seconds: span_start, end_seconds: span_end })
-            }).collect();
-        log::info!("RapidOCR sparse scan for region {} detected {} frames across {} sampled frames and {} intervals (mode={:?})",
-            region.id, scan_result.detected_frames.unwrap_or(0), scan_result.sampled_frames.unwrap_or(0), intervals.len(), region.text_removal_mode);
-        if !intervals.is_empty() {
-            scans.push(RegionScan { region_id: region.id.clone(), mask_mode: region.text_removal_mode, rect, ocr_rect, work_dir, intervals });
+        let paint_key = painting_key(mode, rect);
+        let output_dir = dir.join(paint_key);
+        fs::create_dir_all(&output_dir).map_err(|e| e.to_string())?;
+        if !output_dir
+            .canonicalize()
+            .map_err(|e| e.to_string())?
+            .starts_with(&cached_root)
+        {
+            return Err("Thư mục phục hồi không an toàn.".into());
         }
-    }
-
-    let interval_count = scans.iter().map(|scan| scan.intervals.len()).sum::<usize>();
-    if interval_count == 0 {
-        return Err("RapidOCR không phát hiện phụ đề trong khoảng thời gian của vùng đã chọn.".into());
-    }
-
-    let mut region_work = Vec::with_capacity(scans.len());
-    let mut extracted_intervals = 0usize;
-    for scan in scans {
-        let mut sequences = Vec::with_capacity(scan.intervals.len());
-        for (local_index, interval) in scan.intervals.iter().enumerate() {
-            if state.load(Ordering::SeqCst) == 2 { return Err("Đã hủy export.".into()); }
-            let work_dir = scan.work_dir.join(format!("interval-{:04}", local_index + 1));
-            let frames_dir = work_dir.join("frames");
-            let masks_dir = work_dir.join("masks");
-            let output_dir = work_dir.join("clean");
-            let stage = if scan.mask_mode == TextRemovalMode::FullRegion { "Đang lấy khung hình phục hồi toàn vùng tại đoạn có phụ đề" } else { "Đang lấy khung hình có chữ" };
-            progress(0.07 + 0.03 * extracted_intervals as f64 / interval_count as f64,
-                format!("{stage} · đoạn {}/{}", extracted_intervals + 1, interval_count));
-            extract_frames(source, interval.start_seconds, interval.end_seconds, scan.rect, frame_rate, &frames_dir, state)?;
-            sequences.push(RemovalFrameSequence { interval: *interval, frames_dir, masks_dir, output_dir });
-            extracted_intervals += 1;
-        }
-        region_work.push(RemovalRegionWork {
-            region_id: scan.region_id,
-            mask_mode: scan.mask_mode,
-            rect: scan.rect,
-            ocr_rect: scan.ocr_rect,
-            sequences,
-        });
-    }
-
-    let mut patches = Vec::with_capacity(interval_count);
-    let mut processed_intervals = 0usize;
-    for work in region_work {
-        let sequence_count = work.sequences.len();
-        let worker_intervals: Vec<_> = work.sequences.iter().map(|sequence| serde_json::json!({
-            "framesDir": sequence.frames_dir.to_string_lossy(),
-            "masksDir": sequence.masks_dir.to_string_lossy(),
-            "outputDir": sequence.output_dir.to_string_lossy(),
-        })).collect();
-        let worker = crate::runtime_paths::ai_worker_dir_for("sttn")?;
-        let request = serde_json::json!({
-            "operation": "text_removal_process_intervals",
-            "engine": "sttn",
-            "maskMode": match work.mask_mode { TextRemovalMode::OcrGuided => "ocrGuided", TextRemovalMode::FullRegion => "fullRegion" },
-            "intervals": worker_intervals,
-            "cacheDir": cache_dir,
-            "modelPath": &sttn_path,
-            "ocrModel": ocr_model,
-            "ocrDevice": ocr_device,
-            "ocrRect": { "x": work.ocr_rect.x, "y": work.ocr_rect.y, "width": work.ocr_rect.width, "height": work.ocr_rect.height },
-        });
-        let region_start = processed_intervals;
-        let local_start = Instant::now();
-        let output = run_worker(&worker, &request, state, |value, message| {
-            let all = (region_start as f64 + value.clamp(0.0, 1.0) * sequence_count as f64) / interval_count as f64;
-            progress(0.1 + 0.05 * all, message);
-        })?;
-        let results = output.interval_results.unwrap_or_default();
-        if results.len() != sequence_count {
-            return Err("Python worker không trả đủ kết quả xóa chữ cho các đoạn OCR.".into());
-        }
-        for (sequence, result) in work.sequences.into_iter().zip(results) {
-            if result.masked_pixels > 0 {
-                let image_pattern = sequence.output_dir.join("clean_%08d.png");
-                let has_output = fs::read_dir(&sequence.output_dir).map_err(|error| error.to_string())?
-                    .filter_map(Result::ok)
-                    .any(|entry| entry.path().file_name().is_some_and(|name| name.to_string_lossy().starts_with("clean_") && entry.path().extension().is_some_and(|extension| extension == "png")));
-                if has_output {
-                    patches.push(AiTextRemovalPatch {
-                        image_pattern,
-                        rect: work.rect,
-                        fps: frame_rate,
-                        start_seconds: sequence.interval.start_seconds,
-                        end_seconds: sequence.interval.end_seconds,
-                    });
+        let result_path = output_dir.join("result.json");
+        let completed = crate::audio::signal::regular_file(&result_path)
+            .ok()
+            .and_then(|_| fs::read(&result_path).ok())
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+        let mut cached = Vec::new();
+        if let Some(result) = completed.as_ref().filter(|v| {
+            v["version"] == 2
+                && v["complete"] == true
+                && v["detectionKey"] == detect_key
+                && v["detectionFingerprint"] == detection_fingerprint
+        }) {
+            if let Some(files) = result["files"].as_array() {
+                for name in files {
+                    let Some(name) = name
+                        .as_str()
+                        .filter(|s| !s.contains(['/', '\\']) && s.ends_with(".pack"))
+                    else {
+                        cached.clear();
+                        break;
+                    };
+                    let path = output_dir.join(name);
+                    if crate::text_removal_cache::Reader::open(&path)
+                        .and_then(|mut r| r.verify())
+                        .is_err()
+                    {
+                        cached.clear();
+                        break;
+                    }
+                    cached.push(path);
                 }
-                log::info!("AI text removal processed region {} in {:.1}s", work.region_id, local_start.elapsed().as_secs_f64());
-            } else {
-                log::debug!("Skipping false-positive text-removal interval for region {}", work.region_id);
             }
         }
-        processed_intervals += sequence_count;
-    }
-    if patches.is_empty() {
-        return Err("Không tạo được khung hình phục hồi trong vùng đã chọn. Hãy kiểm tra thời gian và kích thước vùng.".into());
+        let paths = if !cached.is_empty() {
+            progress(
+                (i + 1) as f64 / regions.len() as f64 * 0.15,
+                "Đã dùng lại vùng phục hồi; không chạy STTN lại.".into(),
+            );
+            cached
+        } else {
+            require_effects_ready(app, &[BlurEffect::Sttn], false)?;
+            let request = serde_json::json!({"operation":"text_removal_inpaint_v2","sourcePath":source,"sourceKey":source_key,
+                "detectionPath":detection,"detectionKey":detect_key,"processingRect":rect,"ocrRect":ocr_rect,"maskMode":mode,
+                "outputDir":output_dir,"modelPath":sttn_model_path(app)?,"modelHash":STTN_MODEL_SHA256,
+                "videoHeight":spec.height,"videoDuration":spec.duration,"engine":"sttn","inpaintDevice":"auto","ocrDevice":"cpu"});
+            let result = run_worker(
+                &crate::runtime_paths::ai_worker_dir_for("sttn")?,
+                &request,
+                state,
+                |p, m| {
+                    progress(
+                        (i as f64 + 0.35 + p * 0.65) / regions.len() as f64 * 0.15,
+                        m,
+                    )
+                },
+            )?;
+            result
+                .interval_results
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|r| r.masked_pixels > 0)
+                .filter_map(|r| r.path.map(PathBuf::from))
+                .collect()
+        };
+        for path in paths {
+            let path = path.canonicalize().map_err(|_| "Thiếu cache phục hồi.")?;
+            if !path.starts_with(&output_dir.canonicalize().map_err(|e| e.to_string())?) {
+                return Err("Kết quả phục hồi nằm ngoài dự án.".into());
+            }
+            let reader = crate::text_removal_cache::Reader::open(&path)?;
+            if let (Some(first), Some(last)) = (
+                reader.metadata.frames.first(),
+                reader.metadata.frames.last(),
+            ) {
+                patches.push(AiTextRemovalPatch {
+                    image_pattern: path,
+                    rect,
+                    fps: spec.fps.unwrap_or(30.0),
+                    start_seconds: first.pts,
+                    end_seconds: last.end,
+                });
+            }
+        }
     }
     Ok(patches)
+}
+
+pub fn compatibility_patch_path(
+    _app: &AppHandle,
+    patch: &AiTextRemovalPatch,
+    state: &AtomicU8,
+) -> Result<PathBuf, String> {
+    if patch.image_pattern.extension().is_none_or(|e| e != "pack") {
+        return Ok(patch.image_pattern.clone());
+    }
+    let dest = patch.image_pattern.with_extension("nut");
+    if !dest.is_file() {
+        run_worker(
+            &crate::runtime_paths::ocr_worker_dir()?,
+            &serde_json::json!({"operation":"text_removal_patch_video","patchPath":patch.image_pattern,"ocrDevice":"cpu"}),
+            state,
+            |_, _| {},
+        )?;
+    }
+    crate::audio::signal::regular_file(&dest)?;
+    Ok(dest)
 }
 
 pub fn start_preview(
@@ -549,41 +1025,60 @@ pub fn start_preview(
     project_id: String,
     region_id: String,
     current_time: f64,
+    detect_only: bool,
 ) -> Result<String, String> {
     if !current_time.is_finite() || current_time < 0.0 {
         return Err("Thời điểm preview không hợp lệ.".into());
     }
     let project = store.get(&project_id)?;
-    let duration = project.source.duration.ok_or("Video chưa có thời lượng hợp lệ.")?;
-    let region = project.blur_regions.iter()
+    let duration = project
+        .source
+        .duration
+        .ok_or("Video chưa có thời lượng hợp lệ.")?;
+    let region = project
+        .blur_regions
+        .iter()
         .find(|region| region.id == region_id)
         .ok_or("Không tìm thấy vùng xóa chữ đang chọn.")?;
     if !region.enabled || region.effect != BlurEffect::Sttn {
         return Err("Hãy bật và chọn vùng AI Remove · STTN trước khi xử lý preview.".into());
     }
     let needs_ocr = true;
-    require_effects_ready(&app, &[region.effect], needs_ocr)?;
+    if detect_only {
+        require_effects_ready(&app, &[], true)?;
+    }
     let settings = crate::settings_service::get_settings(&app)?;
     let ocr_device = settings.settings.asr.ocr_device.as_str();
     let ocr_environment = if needs_ocr {
         Some(crate::asr_service::get_ocr_environment(
-            app.clone(), settings.settings.asr.ocr_model.clone()
+            app.clone(),
+            settings.settings.asr.ocr_model.clone(),
         )?)
     } else {
         None
     };
-    if needs_ocr && matches!(ocr_device, "cuda" | "openvino")
-        && !ocr_environment.as_ref().is_some_and(|value| value.backend_available(ocr_device)) {
+    if needs_ocr
+        && matches!(ocr_device, "cuda" | "openvino")
+        && !ocr_environment
+            .as_ref()
+            .is_some_and(|value| value.backend_available(ocr_device))
+    {
         return Err("Thiết bị đọc chữ chưa sẵn sàng. Mở Cài đặt → Nhận dạng lời thoại để kiểm tra hoặc chọn Tự động/CPU.".into());
     }
     let runtime = crate::optional_runtime::status();
     let runtime_feature = "sttn";
-    let ocr_uses_gpu = ocr_environment.as_ref().is_some_and(|value| value.uses_gpu(ocr_device));
+    let ocr_uses_gpu = ocr_environment
+        .as_ref()
+        .is_some_and(|value| value.uses_gpu(ocr_device));
     let full_region_uses_cuda = runtime.profile.as_deref() == Some("cuda")
-        && runtime.installed_features.iter().any(|feature| feature == runtime_feature);
-    let uses_gpu = ocr_uses_gpu || full_region_uses_cuda;
+        && runtime
+            .installed_features
+            .iter()
+            .any(|feature| feature == runtime_feature);
+    let uses_gpu = ocr_uses_gpu || (!detect_only && full_region_uses_cuda);
     let window_length = duration.min(3.0);
-    let start = (current_time - window_length * 0.45).clamp(0.0, (duration - window_length).max(0.0));
+    let start =
+        (current_time - window_length * 0.45).clamp(0.0, (duration - window_length).max(0.0));
     let end = (start + window_length).min(duration);
     if end <= start {
         return Err("Không thể xác định đoạn video để preview.".into());
@@ -597,7 +1092,11 @@ pub fn start_preview(
         project_id.clone(),
         project.name.clone(),
         "text_removal_preview",
-        if uses_gpu { &["gpu", "ffmpeg", "python", "disk"] } else { &["cpu", "ffmpeg", "python", "disk"] },
+        if uses_gpu {
+            &["gpu", "ffmpeg", "python", "disk"]
+        } else {
+            &["cpu", "ffmpeg", "python", "disk"]
+        },
         state.clone(),
     )?;
     let worker_jobs = jobs.clone();
@@ -617,6 +1116,7 @@ pub fn start_preview(
             start,
             end,
             state,
+            detect_only,
         );
     });
     Ok(id)
@@ -632,10 +1132,15 @@ fn run_preview_job(
     start: f64,
     end: f64,
     state: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    detect_only: bool,
 ) {
     use std::sync::atomic::Ordering;
     let started = Instant::now();
-    let fps = 8.0;
+    let fps = store
+        .get(&project_id)
+        .ok()
+        .and_then(|p| p.source.fps)
+        .unwrap_or(30.0);
     let output = run_preview_pipeline(
         &app,
         &store,
@@ -646,25 +1151,30 @@ fn run_preview_job(
         end,
         fps,
         &state,
-        |progress, message| emit_preview_event(
-            &app,
-            TextRemovalPreviewEvent {
-                project_id: project_id.clone(),
-                job_id: job_id.clone(),
-                status: "running".into(),
-                progress: progress.clamp(0.0, 0.99),
-                message,
-                output: None,
-                start_seconds: start,
-                end_seconds: end,
-                region_id: region_id.clone(),
-                fps,
-            },
-        ),
+        detect_only,
+        |progress, message| {
+            emit_preview_event(
+                &app,
+                TextRemovalPreviewEvent {
+                    project_id: project_id.clone(),
+                    job_id: job_id.clone(),
+                    status: "running".into(),
+                    progress: progress.clamp(0.0, 0.99),
+                    message,
+                    output: None,
+                    start_seconds: start,
+                    end_seconds: end,
+                    region_id: region_id.clone(),
+                    fps,
+                },
+            )
+        },
     );
     let cancelled = state.load(Ordering::SeqCst) == 2;
     let output = if cancelled {
-        if let Ok(path) = &output { let _ = fs::remove_file(path); }
+        if let Ok(Some(path)) = &output {
+            let _ = fs::remove_file(path);
+        }
         Err("Đã hủy xử lý preview.".to_string())
     } else {
         output
@@ -675,8 +1185,15 @@ fn run_preview_job(
             job_id: job_id.clone(),
             status: "completed".into(),
             progress: 1.0,
-            message: format!("Đã xử lý preview vùng chữ trong {:.1} giây.", started.elapsed().as_secs_f64()),
-            output: Some(path.to_string_lossy().into_owned()),
+            message: if detect_only {
+                "Đã nhận diện phụ đề. Có thể bắt đầu xóa mà không quét OCR lại.".into()
+            } else {
+                format!(
+                    "Đã xử lý vùng chữ trong {:.1} giây; kết quả được lưu để dùng khi export.",
+                    started.elapsed().as_secs_f64()
+                )
+            },
+            output: path.map(|p| p.to_string_lossy().into_owned()),
             start_seconds: start,
             end_seconds: end,
             region_id: region_id.clone(),
@@ -687,7 +1204,11 @@ fn run_preview_job(
             job_id: job_id.clone(),
             status: if cancelled { "cancelled" } else { "failed" }.into(),
             progress: 0.0,
-            message: if cancelled { "Đã hủy xử lý preview.".into() } else { error },
+            message: if cancelled {
+                "Đã hủy xử lý preview.".into()
+            } else {
+                error
+            },
             output: None,
             start_seconds: start,
             end_seconds: end,
@@ -712,22 +1233,28 @@ fn run_preview_pipeline<F>(
     end: f64,
     fps: f64,
     state: &std::sync::Arc<std::sync::atomic::AtomicU8>,
+    detect_only: bool,
     mut progress: F,
-) -> Result<PathBuf, String>
+) -> Result<Option<PathBuf>, String>
 where
     F: FnMut(f64, String),
 {
     use std::sync::atomic::Ordering;
     let mut project = store.get(project_id)?;
-    let duration = project.source.duration.ok_or("Video chưa có thời lượng hợp lệ.")?;
+    let duration = project
+        .source
+        .duration
+        .ok_or("Video chưa có thời lượng hợp lệ.")?;
     let project_root = store.project_directory(project_id)?;
     let source = crate::video_service::resolve_video(store, project_id)?;
-    let mut region = project.blur_regions.iter()
+    let region = project
+        .blur_regions
+        .iter()
         .find(|region| region.id == region_id)
         .cloned()
         .ok_or("Không tìm thấy vùng xóa chữ đang chọn.")?;
-    region.start_ms = (start * 1000.0).round() as u64;
-    region.end_ms = Some((end * 1000.0).round() as u64);
+    let original_region = region.clone();
+    let source_checksum = project.source.checksum_sha256.clone();
     project.blur_regions = vec![region];
     project.subtitle.enabled = false;
     project.logos.clear();
@@ -745,44 +1272,94 @@ where
     options.include_original_audio = false;
     options.include_dubbing = false;
     options.apply_logos = false;
-    let mut spec = crate::render_spec::build_render_specification(&project, &transcript, duration, &options)?;
+    let mut spec =
+        crate::render_spec::build_render_specification(&project, &transcript, duration, &options)?;
     spec.fps = Some(fps);
 
     let render_dir = project_root.join("cache").join("render").join(job_id);
-    fs::create_dir_all(&render_dir).map_err(|error| format!("Không thể tạo thư mục preview tạm: {error}"))?;
+    fs::create_dir_all(&render_dir)
+        .map_err(|error| format!("Không thể tạo thư mục preview tạm: {error}"))?;
     let canonical_project = fs::canonicalize(&project_root).map_err(|error| error.to_string())?;
     let canonical_render = fs::canonicalize(&render_dir).map_err(|error| error.to_string())?;
     if !canonical_render.starts_with(&canonical_project) {
         return Err("Đường dẫn preview vượt khỏi thư mục dự án.".into());
     }
-    let preview_dir = project_root.join("cache").join("preview").join("ai-removal");
-    fs::create_dir_all(&preview_dir).map_err(|error| format!("Không thể tạo thư mục lưu preview: {error}"))?;
+    let preview_dir = project_root
+        .join("cache")
+        .join("preview")
+        .join("ai-removal");
+    fs::create_dir_all(&preview_dir)
+        .map_err(|error| format!("Không thể tạo thư mục lưu preview: {error}"))?;
     let canonical_preview = fs::canonicalize(&preview_dir).map_err(|error| error.to_string())?;
     if !canonical_preview.starts_with(&canonical_project) {
         return Err("Thư mục lưu preview nằm ngoài dự án.".into());
     }
     let output = canonical_preview.join(format!("{job_id}.mp4"));
-    progress(0.04, "Đang lấy khung hình quanh vị trí phát…".into());
-    let patches = prepare_export_patches(app, &spec, &source, &render_dir, state, |value, message| {
-        progress((value / 0.15 * 0.76).clamp(0.06, 0.80), message);
-    })?;
-    if patches.is_empty() { return Err("RapidOCR không tìm thấy chữ trong vùng preview đã chọn.".into()); }
-    if state.load(Ordering::SeqCst) == 2 { return Err("Đã hủy xử lý preview.".into()); }
+    progress(
+        0.04,
+        "Đang kiểm tra kết quả nhận diện và phục hồi đã lưu…".into(),
+    );
+    let patches = prepare_patches(
+        app,
+        &spec,
+        &source,
+        &render_dir,
+        state,
+        detect_only,
+        |value, message| {
+            progress((value / 0.15 * 0.76).clamp(0.06, 0.80), message);
+        },
+    )?;
+    let latest = store.get(project_id)?;
+    if latest.source.checksum_sha256 != source_checksum
+        || latest
+            .blur_regions
+            .iter()
+            .find(|r| r.id == region_id)
+            .is_none_or(|r| removal_region_identity(r) != removal_region_identity(&original_region))
+    {
+        return Err("Video hoặc vùng xử lý đã thay đổi. Kết quả cũ được giữ riêng; hãy chạy lại vùng hiện tại.".into());
+    }
+    if detect_only {
+        return Ok(None);
+    }
+    if patches.is_empty() {
+        return Err("RapidOCR không tìm thấy chữ trong vùng preview đã chọn.".into());
+    }
+    if state.load(Ordering::SeqCst) == 2 {
+        return Err("Đã hủy xử lý preview.".into());
+    }
     progress(0.84, "Đang ghép clip preview để xem kết quả…".into());
-    render_preview_clip(app, &source, &patches, start, end, &output, state, &mut progress)?;
-    if !output.is_file() || fs::metadata(&output).map(|metadata| metadata.len()).unwrap_or(0) == 0 {
+    render_preview_clip(
+        app,
+        &source,
+        &patches,
+        start,
+        end,
+        &output,
+        state,
+        &mut progress,
+    )?;
+    if !output.is_file()
+        || fs::metadata(&output)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0)
+            == 0
+    {
         let _ = fs::remove_file(&output);
         return Err("Clip preview xóa chữ không hợp lệ.".into());
     }
-    let canonical_output = fs::canonicalize(&output).map_err(|error| format!("Không thể xác minh clip preview: {error}"))?;
+    let canonical_output = fs::canonicalize(&output)
+        .map_err(|error| format!("Không thể xác minh clip preview: {error}"))?;
     if !canonical_output.starts_with(&canonical_preview) {
         return Err("Clip preview nằm ngoài phạm vi thư mục dự án.".into());
     }
-    app.asset_protocol_scope().allow_file(&canonical_output)
+    app.asset_protocol_scope()
+        .allow_file(&canonical_output)
         .map_err(|error| format!("Không thể mở clip preview trong ứng dụng: {error}"))?;
     let _ = fs::remove_dir_all(&render_dir);
     progress(0.99, "Preview đã sẵn sàng.".into());
-    Ok(canonical_output)
+    Ok(Some(canonical_output))
 }
 
 fn render_preview_clip<F>(
@@ -800,6 +1377,10 @@ where
 {
     use std::sync::atomic::Ordering;
     let duration = end - start;
+    let patches: Vec<_> = patches
+        .iter()
+        .filter(|p| p.start_seconds < end && p.end_seconds > start)
+        .collect();
     let mut graph = String::new();
     let mut current = "0:v:0".to_string();
     for (index, patch) in patches.iter().enumerate() {
@@ -816,29 +1397,71 @@ where
     command
         .args(["-hide_banner", "-loglevel", "error", "-y", "-ss"])
         .arg(format!("{start:.6}"))
-        .arg("-i").arg(source);
+        .arg("-i")
+        .arg(source);
     for patch in patches {
+        let path = compatibility_patch_path(_app, patch, state)?;
         command
             .args(["-itsoffset"])
-            .arg(format!("{:.6}", (patch.start_seconds - start).max(0.0)))
-            .args(["-framerate"])
-            .arg(format!("{:.6}", patch.fps))
-            .arg("-start_number").arg("1")
-            .arg("-i").arg(&patch.image_pattern);
+            .arg(format!("{:.6}", (patch.start_seconds - start).max(0.0)));
+        if start > patch.start_seconds {
+            command
+                .arg("-ss")
+                .arg(format!("{:.6}", start - patch.start_seconds));
+        }
+        if path.extension().is_none_or(|e| e != "nut") {
+            command
+                .arg("-framerate")
+                .arg(format!("{:.6}", patch.fps))
+                .args(["-start_number", "1"]);
+        }
+        command.arg("-i").arg(path);
     }
     command
         .args(["-filter_complex", &graph, "-map", "[vout]", "-map", "0:a?"])
-        .args(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p"])
-        .args(["-c:a", "aac", "-b:a", "96k", "-progress", "pipe:1", "-nostats", "-t"])
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .args([
+            "-c:a",
+            "aac",
+            "-b:a",
+            "96k",
+            "-progress",
+            "pipe:1",
+            "-nostats",
+            "-t",
+        ])
         .arg(format!("{duration:.6}"))
         .arg(output)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|error| format!("Không thể tạo video preview: {error}"))?;
-    let stdout = child.stdout.take().ok_or("Không đọc được tiến trình tạo preview.")?;
-    let stderr = child.stderr.take().ok_or("Không đọc được lỗi FFmpeg khi tạo preview.")?;
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Không thể tạo video preview: {error}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("Không đọc được tiến trình tạo preview.")?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or("Không đọc được lỗi FFmpeg khi tạo preview.")?;
     let (sender, receiver) = mpsc::channel::<String>();
-    thread::spawn(move || for line in BufReader::new(stdout).lines().flatten() { if sender.send(line).is_err() { break; } });
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().flatten() {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
     let stderr_thread = thread::spawn(move || {
         let mut message = String::new();
         let _ = BufReader::new(stderr).read_to_string(&mut message);
@@ -849,7 +1472,9 @@ where
     let mut last_emit = Instant::now();
     loop {
         if state.load(Ordering::SeqCst) == 2 {
-            let _ = child.kill(); let _ = child.wait(); let _ = stderr_thread.join();
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stderr_thread.join();
             let _ = fs::remove_file(output);
             return Err("Đã hủy xử lý preview.".into());
         }
@@ -859,23 +1484,47 @@ where
                     out_seconds = value.parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
                 }
                 if key == "progress" && last_emit.elapsed() >= Duration::from_millis(250) {
-                    progress(0.84 + (out_seconds / duration).clamp(0.0, 1.0) * 0.14, "Đang mã hóa clip preview…".into());
+                    progress(
+                        0.84 + (out_seconds / duration).clamp(0.0, 1.0) * 0.14,
+                        "Đang mã hóa clip preview…".into(),
+                    );
                     last_emit = Instant::now();
                 }
             }
         }
-        if let Some(status) = child.try_wait().map_err(|error| format!("Không thể theo dõi FFmpeg preview: {error}"))? {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("Không thể theo dõi FFmpeg preview: {error}"))?
+        {
             let details = stderr_thread.join().unwrap_or_default();
             if !status.success() {
                 let _ = fs::remove_file(output);
-                let detail = details.lines().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" ");
-                return Err(if detail.is_empty() { "FFmpeg không tạo được clip preview.".into() } else { format!("FFmpeg không tạo được clip preview: {detail}") });
+                let detail = details
+                    .lines()
+                    .rev()
+                    .take(4)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                return Err(if detail.is_empty() {
+                    "FFmpeg không tạo được clip preview.".into()
+                } else {
+                    format!("FFmpeg không tạo được clip preview: {detail}")
+                });
             }
             progress(0.98, "Đang hoàn tất clip preview…".into());
             return Ok(());
         }
         if last_emit.elapsed() >= Duration::from_millis(500) {
-            progress(0.84 + (out_seconds / duration).clamp(0.0, 1.0) * 0.14, format!("Đang mã hóa clip preview · {:.1}s", started.elapsed().as_secs_f64()));
+            progress(
+                0.84 + (out_seconds / duration).clamp(0.0, 1.0) * 0.14,
+                format!(
+                    "Đang mã hóa clip preview · {:.1}s",
+                    started.elapsed().as_secs_f64()
+                ),
+            );
             last_emit = Instant::now();
         }
         thread::sleep(Duration::from_millis(80));
@@ -890,12 +1539,21 @@ fn emit_preview_event(app: &AppHandle, event: TextRemovalPreviewEvent) {
 fn worker_failure_message(message: Option<String>, stderr: &str) -> String {
     match message.as_deref() {
         Some("Unsupported worker operation") => {
-            "Bộ xử lý AI trong bản cài này đã cũ. Hãy cập nhật JC AI để dùng tính năng xóa chữ.".into()
+            "Bộ xử lý AI trong bản cài này đã cũ. Hãy cập nhật JC AI để dùng tính năng xóa chữ."
+                .into()
         }
         Some(message) => message.to_string(),
         None if !stderr.trim().is_empty() => format!(
             "AI xóa chữ gặp lỗi: {}",
-            stderr.lines().rev().take(8).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | ")
+            stderr
+                .lines()
+                .rev()
+                .take(8)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join(" | ")
         ),
         None => "Không thể xóa chữ bằng AI.".into(),
     }
@@ -910,20 +1568,35 @@ fn run_worker<F>(
 where
     F: FnMut(f64, String),
 {
-    let operation = request.get("operation").and_then(|value| value.as_str()).unwrap_or("unknown");
+    let operation = request
+        .get("operation")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
     // Serialize potentially accelerated OCR/STTN with ASR/TTS and the new visual renderer.
     // The permit is released before subsequent FFmpeg work; model inference is unchanged.
-    let _gpu_permit = if request.get("engine").and_then(|value| value.as_str()) == Some("sttn")
-        || request.get("ocrDevice").and_then(|value| value.as_str()) != Some("cpu") {
+    let _gpu_permit = if (request.get("engine").and_then(|value| value.as_str()) == Some("sttn")
+        && request
+            .get("inpaintDevice")
+            .and_then(|value| value.as_str())
+            != Some("cpu")
+        && crate::optional_runtime::status().profile.as_deref() == Some("cuda"))
+        || request.get("ocrDevice").and_then(|value| value.as_str()) != Some("cpu")
+    {
         Some(loop {
-            if state.load(Ordering::SeqCst) == 2 { return Err("Đã hủy khi đang chờ GPU.".into()); }
+            if state.load(Ordering::SeqCst) == 2 {
+                return Err("Đã hủy khi đang chờ GPU.".into());
+            }
             match crate::resource_scheduler::ai_gpu_slot().try_lock() {
                 Ok(permit) => break permit,
                 Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
-                Err(std::sync::TryLockError::WouldBlock) => thread::sleep(Duration::from_millis(50)),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    thread::sleep(Duration::from_millis(50))
+                }
             }
         })
-    } else { None };
+    } else {
+        None
+    };
     log::info!(
         "Starting AI text-removal worker: operation={}, engine={}, requested_ocr_device={}, ocr_model={}",
         operation,
@@ -931,20 +1604,44 @@ where
         request.get("ocrDevice").and_then(|value| value.as_str()).unwrap_or("auto"),
         request.get("ocrModel").and_then(|value| value.as_str()).unwrap_or("unknown"),
     );
-    let mut command = if request.get("operation").and_then(|value| value.as_str()) == Some("text_removal_scan") {
+    let mut command = if matches!(
+        operation,
+        "text_removal_scan" | "text_removal_detect_v2" | "text_removal_patch_video"
+    ) {
         crate::runtime_paths::ocr_worker_command(worker)
-    } else { crate::runtime_paths::worker_command(worker) };
+    } else {
+        crate::runtime_paths::worker_command(worker)
+    };
     let mut child = command
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
-        .spawn().map_err(|error| format!("Không thể khởi chạy xử lý AI xóa chữ: {error}"))?;
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Không thể khởi chạy xử lý AI xóa chữ: {error}"))?;
     let mut input = serde_json::to_vec(request).map_err(|error| error.to_string())?;
     input.push(b'\n');
-    child.stdin.take().ok_or("Python worker không mở stdin.")?
-        .write_all(&input).map_err(|error| format!("Không thể gửi yêu cầu xóa chữ: {error}"))?;
-    let stdout = child.stdout.take().ok_or("Python worker không mở stdout.")?;
-    let stderr_pipe = child.stderr.take().ok_or("Python worker không mở stderr.")?;
+    child
+        .stdin
+        .take()
+        .ok_or("Python worker không mở stdin.")?
+        .write_all(&input)
+        .map_err(|error| format!("Không thể gửi yêu cầu xóa chữ: {error}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("Python worker không mở stdout.")?;
+    let stderr_pipe = child
+        .stderr
+        .take()
+        .ok_or("Python worker không mở stderr.")?;
     let (sender, receiver) = mpsc::channel::<String>();
-    thread::spawn(move || for line in BufReader::new(stdout).lines().flatten() { if sender.send(line).is_err() { break; } });
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().flatten() {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
     let stderr_thread = thread::spawn(move || {
         let mut text = String::new();
         let _ = BufReader::new(stderr_pipe).read_to_string(&mut text);
@@ -954,56 +1651,125 @@ where
     let mut final_result = None;
     loop {
         if state.load(Ordering::SeqCst) == 2 {
-            let _ = child.kill(); let _ = child.wait(); let _ = stderr_thread.join();
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stderr_thread.join();
             return Err("Đã hủy export.".into());
         }
         if started.elapsed() > WORKER_TIMEOUT {
-            let _ = child.kill(); let _ = child.wait(); let _ = stderr_thread.join();
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stderr_thread.join();
             return Err("Quá trình xóa chữ bằng AI vượt quá giới hạn 12 giờ và đã dừng.".into());
         }
         match receiver.recv_timeout(Duration::from_millis(120)) {
-            Ok(line) => if let Ok(event) = serde_json::from_str::<WorkerEvent>(&line) {
-                match event.kind.as_str() {
-                    "progress" => on_progress(event.progress.unwrap_or(0.0), event.message.unwrap_or_else(|| "Đang xử lý vùng chữ…".into())),
-                    "completed" | "failed" => final_result = Some(event),
-                    _ => {}
+            Ok(line) => {
+                if let Ok(event) = serde_json::from_str::<WorkerEvent>(&line) {
+                    match event.kind.as_str() {
+                        "progress" => on_progress(
+                            event.progress.unwrap_or(0.0),
+                            event
+                                .message
+                                .unwrap_or_else(|| "Đang xử lý vùng chữ…".into()),
+                        ),
+                        "completed" | "failed" => final_result = Some(event),
+                        _ => {}
+                    }
                 }
-            },
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                if let Some(status) = child.try_wait().map_err(|error| format!("Không thể theo dõi Python worker: {error}"))? {
+                if let Some(status) = child
+                    .try_wait()
+                    .map_err(|error| format!("Không thể theo dõi Python worker: {error}"))?
+                {
                     if let Some(event) = final_result.take() {
                         let stderr = stderr_thread.join().unwrap_or_default();
-                        log_worker_stderr(operation, &stderr, !(status.success() && event.kind == "completed"));
-                        if status.success() && event.kind == "completed" { return Ok(event); }
+                        log_worker_stderr(
+                            operation,
+                            &stderr,
+                            !(status.success() && event.kind == "completed"),
+                        );
+                        if status.success() && event.kind == "completed" {
+                            return Ok(event);
+                        }
                         return Err(worker_failure_message(event.message, &stderr));
                     }
                     let stderr = stderr_thread.join().unwrap_or_default();
                     log_worker_stderr(operation, &stderr, true);
-                    return Err(if stderr.trim().is_empty() { "AI xóa chữ đã dừng mà không trả kết quả.".into() } else { format!("AI xóa chữ gặp lỗi: {}", stderr.lines().rev().take(8).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | ")) });
+                    return Err(if stderr.trim().is_empty() {
+                        "AI xóa chữ đã dừng mà không trả kết quả.".into()
+                    } else {
+                        format!(
+                            "AI xóa chữ gặp lỗi: {}",
+                            stderr
+                                .lines()
+                                .rev()
+                                .take(8)
+                                .collect::<Vec<_>>()
+                                .into_iter()
+                                .rev()
+                                .collect::<Vec<_>>()
+                                .join(" | ")
+                        )
+                    });
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
-        if let Some(status) = child.try_wait().map_err(|error| format!("Không thể theo dõi Python worker: {error}"))? {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("Không thể theo dõi Python worker: {error}"))?
+        {
             while let Ok(line) = receiver.try_recv() {
                 if let Ok(event) = serde_json::from_str::<WorkerEvent>(&line) {
-                    if matches!(event.kind.as_str(), "completed" | "failed") { final_result = Some(event); }
+                    if matches!(event.kind.as_str(), "completed" | "failed") {
+                        final_result = Some(event);
+                    }
                 }
             }
             let stderr = stderr_thread.join().unwrap_or_default();
-            log_worker_stderr(operation, &stderr, !matches!(final_result.as_ref(), Some(event) if status.success() && event.kind == "completed"));
+            log_worker_stderr(
+                operation,
+                &stderr,
+                !matches!(final_result.as_ref(), Some(event) if status.success() && event.kind == "completed"),
+            );
             return match final_result {
                 Some(event) if status.success() && event.kind == "completed" => Ok(event),
                 Some(event) => Err(worker_failure_message(event.message, &stderr)),
-                None => Err(if stderr.trim().is_empty() { "Python worker xử lý xóa chữ không trả kết quả.".into() } else { format!("Python worker xử lý xóa chữ thất bại: {}", stderr.lines().rev().take(8).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | ")) }),
+                None => Err(if stderr.trim().is_empty() {
+                    "Python worker xử lý xóa chữ không trả kết quả.".into()
+                } else {
+                    format!(
+                        "Python worker xử lý xóa chữ thất bại: {}",
+                        stderr
+                            .lines()
+                            .rev()
+                            .take(8)
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect::<Vec<_>>()
+                            .join(" | ")
+                    )
+                }),
             };
         }
     }
 }
 
 fn log_worker_stderr(operation: &str, stderr: &str, failed: bool) {
-    let tail = stderr.lines().rev().take(40).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | ");
-    if tail.is_empty() { return; }
+    let tail = stderr
+        .lines()
+        .rev()
+        .take(40)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join(" | ");
+    if tail.is_empty() {
+        return;
+    }
     if failed {
         log::error!("AI text-removal worker ({operation}) stderr: {tail}");
     } else {
@@ -1014,6 +1780,21 @@ fn log_worker_stderr(operation: &str, stderr: &str, failed: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn detection_cache_rejects_matching_key_with_invalid_intervals() {
+        let valid = serde_json::json!({"version":2,"key":"k","complete":true,"intervals":[
+            {"startSeconds":0.2,"endSeconds":0.8,"boxes":[[[0,0],[20,0],[20,10],[0,10]]]}]});
+        assert!(valid_detection(&valid, "k", 0., 1.));
+        let mut bad = valid.clone();
+        bad["intervals"] = serde_json::json!("broken");
+        assert!(!valid_detection(&bad, "k", 0., 1.));
+        let mut bad = valid.clone();
+        bad["intervals"][0]["endSeconds"] = serde_json::json!(2.);
+        assert!(!valid_detection(&bad, "k", 0., 1.));
+        let mut bad = valid.clone();
+        bad["intervals"][0]["boxes"] = serde_json::json!([[[0, 0]]]);
+        assert!(!valid_detection(&bad, "k", 0., 1.));
+    }
 
     #[test]
     fn worker_scan_and_interval_events_keep_their_typed_results() {
@@ -1031,5 +1812,50 @@ mod tests {
             r#"{"type":"completed","maskedPixels":120,"intervalResults":[{"frames":10,"maskedPixels":120,"device":"cpu"}]}"#,
         ).unwrap();
         assert_eq!(processed.interval_results.unwrap()[0].masked_pixels, 120);
+    }
+    #[test]
+    fn roi_keeps_mask_local_context_and_model_aspect_ratio() {
+        for (width, height) in [(1920, 1080), (1080, 1920), (1080, 1080)] {
+            let roi = PixelRect {
+                x: 100,
+                y: height - 160,
+                width: width - 200,
+                height: 100,
+            };
+            let (crop, local) = expand_sttn_rect(roi, width, height);
+            assert_eq!(crop.x + local.x, roi.x);
+            assert_eq!(crop.y + local.y, roi.y);
+            assert!(local.x + local.width <= crop.width && local.y + local.height <= crop.height);
+            assert!(crop.x + crop.width <= width && crop.y + crop.height <= height);
+            assert!((crop.width as f64 / crop.height as f64 - 1.8).abs() < 0.02);
+        }
+    }
+    #[test]
+    fn cache_identity_ignores_translation_but_changes_with_roi_and_scan() {
+        let rect = PixelRect {
+            x: 0,
+            y: 10,
+            width: 100,
+            height: 30,
+        };
+        let key = detection_key("source", rect, 0., 5., 2, "tiny", "cpu");
+        assert_eq!(key, detection_key("source", rect, 0., 5., 2, "tiny", "cpu"));
+        assert_ne!(key, detection_key("source", rect, 0., 5., 1, "tiny", "cpu"));
+        assert_ne!(
+            key,
+            detection_key(
+                "source",
+                PixelRect { x: 1, ..rect },
+                0.,
+                5.,
+                2,
+                "tiny",
+                "cpu"
+            )
+        );
+        assert_ne!(
+            painting_key("fullRegion", rect),
+            painting_key("ocrGuided", rect)
+        );
     }
 }
