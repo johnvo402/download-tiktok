@@ -1,3 +1,5 @@
+trait BoundedOutput { fn pipe_output_timeout(&mut self) -> std::io::Result<std::process::Output>; }
+impl BoundedOutput for std::process::Command { fn pipe_output_timeout(&mut self) -> std::io::Result<std::process::Output> { crate::worker_manager::output_timeout(self, std::time::Duration::from_secs(10)) } }
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -40,6 +42,13 @@ pub fn optional_installer() -> Option<PathBuf> {
     }
     let path = resource_dir()?.join("optional-runtime").join("uv.exe");
     path.is_file().then_some(path)
+}
+
+pub fn optional_wheelhouse() -> Option<PathBuf> {
+    let path = if cfg!(debug_assertions) {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/optional-runtime/wheels")
+    } else { resource_dir()?.join("optional-runtime/wheels") };
+    path.join("manifest.json").is_file().then_some(path)
 }
 
 pub fn resolve_ffmpeg() -> Result<PathBuf, String> {
@@ -113,6 +122,30 @@ pub fn development_worker_dir() -> Option<PathBuf> {
     root.join("worker").is_dir().then_some(root)
 }
 
+pub fn downloader_worker_dir() -> Result<PathBuf, String> {
+    if cfg!(debug_assertions) {
+        if let Some(source) = development_worker_dir() {
+            if source.join("downloader_worker").join("__main__.py").is_file() { return Ok(source); }
+        }
+    }
+    let root = resource_dir().ok_or("Không tìm thấy thư mục ứng dụng.")?.join("downloader-worker");
+    let executable = root.join(if cfg!(windows) { "downloader-worker.exe" } else { "downloader-worker" });
+    if executable.is_file() { Ok(root) } else { Err("Thiếu thành phần tải video. Hãy cập nhật hoặc cài lại JC AI.".into()) }
+}
+
+pub fn downloader_command(root: &Path) -> Command {
+    if cfg!(debug_assertions) && root.join("downloader_worker").is_dir() {
+        if let Ok(mut command) = development_python_command() {
+            command.args(["-m", "downloader_worker"]).current_dir(root).env("PYTHONPATH", root);
+            return command;
+        }
+    }
+    let mut command = Command::new(root.join(if cfg!(windows) { "downloader-worker.exe" } else { "downloader-worker" }));
+    command.current_dir(root).env_remove("PYTHONPATH").env("JC_AI_GPU_RUNTIME", "0");
+    hide_console(&mut command);
+    command
+}
+
 pub fn worker_dir() -> Result<PathBuf, String> {
     let worker = if cfg!(debug_assertions) {
         development_worker_dir().or_else(packaged_worker_dir)
@@ -128,9 +161,10 @@ pub fn ai_worker_dir() -> Result<PathBuf, String> {
 
 pub fn ai_worker_dir_for(feature: &str) -> Result<PathBuf, String> {
     if crate::optional_runtime::feature_installed(feature) {
-        let (_, source, _) = crate::optional_runtime::active_runtime()
+        let (python, _, _) = crate::optional_runtime::active_runtime_for(feature)
             .ok_or("Thành phần AI bổ sung chưa sẵn sàng.")?;
-        return Ok(source);
+        return python.parent().and_then(Path::parent).map(Path::to_path_buf)
+            .ok_or_else(|| "Đường dẫn bộ xử lý không hợp lệ.".into());
     }
     worker_dir()
 }
@@ -143,44 +177,44 @@ pub fn asr_worker_command(worker_root: &Path) -> Command {
 }
 
 pub fn ocr_worker_dir() -> Result<PathBuf, String> {
-    if crate::optional_runtime::feature_installed("ocr_openvino") {
-        return ai_worker_dir_for("ocr_openvino");
-    }
     ai_worker_dir()
+}
+
+pub fn ocr_command_for(worker_root: &Path, device: &str) -> Command {
+    let feature = if device == "openvino" || device == "auto"
+        && !crate::optional_runtime::feature_installed("acceleration") {
+        "ocr_openvino"
+    } else { "acceleration" };
+    let selected = if device == "cpu" { worker_dir() } else { ai_worker_dir_for(feature) };
+    worker_command(&selected.unwrap_or_else(|_| worker_root.to_path_buf()))
 }
 
 pub fn worker_command(worker_root: &Path) -> Command {
     worker_command_scoped(worker_root, false)
 }
 
-pub fn ocr_worker_command(worker_root: &Path) -> Command {
-    worker_command_scoped(worker_root, true)
-}
-
-fn worker_command_scoped(worker_root: &Path, ocr: bool) -> Command {
-    if let Some((python, source, profile)) = crate::optional_runtime::active_runtime() {
-        let has_other_features = ["acceleration", "whisperx", "bandit", "sttn"]
-            .iter()
-            .any(|feature| crate::optional_runtime::feature_installed(feature));
+fn worker_command_scoped(worker_root: &Path, _ocr: bool) -> Command {
+    for feature in ["acceleration", "whisperx", "bandit", "sttn", "ocr_openvino", "whisper_openvino"] {
+    if let Some((python, source, profile)) = crate::optional_runtime::active_runtime_for(feature) {
         // In development the source path is shared. Installing only Intel OCR
         // must not redirect speech/TTS to this deliberately lightweight venv.
-        if worker_root == source && (ocr || has_other_features) {
+        let directory = python.parent().and_then(Path::parent);
+        if Some(worker_root) == directory {
             let mut command = Command::new(python);
             command
                 .arg("-m")
                 .arg("worker")
-                .current_dir(worker_root)
-                .env("PYTHONPATH", worker_root)
+                .current_dir(&source)
+                .env("PYTHONPATH", &source)
                 .env("PYTHONUNBUFFERED", "1")
                 .env("PYTHONDONTWRITEBYTECODE", "1")
                 .env("PYTHONUTF8", "1")
                 .env("PYTHONIOENCODING", "utf-8:backslashreplace");
-            if profile == "cuda" {
-                command.env("JC_AI_GPU_RUNTIME", "1");
-            }
+            command.env("JC_AI_GPU_RUNTIME", if profile == "cuda" {"1"} else {"0"});
             hide_console(&mut command);
             return command;
         }
+    }
     }
     // Development settings install Python extras into the selected Python
     // environment. Run that same interpreter for the source worker so newly
@@ -193,6 +227,7 @@ fn worker_command_scoped(worker_root: &Path, ocr: bool) -> Command {
                 .current_dir(worker_root)
                 .env("PYTHONPATH", worker_root)
                 .env("PYTHONUNBUFFERED", "1")
+                .env("JC_AI_GPU_RUNTIME", "0")
                 .env("PYTHONUTF8", "1")
                 .env("PYTHONIOENCODING", "utf-8:backslashreplace");
             return command;
@@ -206,7 +241,13 @@ fn worker_command_scoped(worker_root: &Path, ocr: bool) -> Command {
     });
     if executable.is_file() {
         let mut command = Command::new(executable);
-        command.current_dir(worker_root);
+        command.current_dir(worker_root).env_remove("PYTHONPATH").env("JC_AI_GPU_RUNTIME", "0");
+        hide_console(&mut command);
+        return command;
+    }
+
+    if !cfg!(debug_assertions) {
+        let mut command = Command::new(executable);
         hide_console(&mut command);
         return command;
     }
@@ -268,7 +309,7 @@ pub fn binary_available(path: Result<PathBuf, String>) -> bool {
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
-                    .output()
+                    .pipe_output_timeout()
                     .is_ok_and(|output| output.status.success())
             })
             .unwrap_or(false)
@@ -282,7 +323,7 @@ pub fn program_version(path: &Path) -> Option<String> {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .output()
+        .pipe_output_timeout()
         .ok()?;
     if !output.status.success() {
         return None;

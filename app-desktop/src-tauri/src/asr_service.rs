@@ -1,3 +1,4 @@
+use crate::worker_manager::WorkerCommandExt;
 use crate::commands::projects_root;
 use crate::project_service::ProjectStore;
 use crate::transcript_service::{
@@ -238,8 +239,41 @@ pub fn get_asr_environment(
     let request = serde_json::json!({ "operation": "inspect", "model": model, "cacheDir": root, "legacyCacheDir": legacy_root, "alignmentLanguage": alignment_language, "engine": engine.unwrap_or_else(default_asr_engine), "device": device.unwrap_or_else(|| "cpu".into()) });
     let response = inspect_worker(&worker, &request)?;
     let mut response = response;
+    if request["device"] == "openvino" || request["engine"] == "openVinoWhisper" {
+        let mut core_request = request.clone();
+        core_request["device"] = serde_json::json!("cpu");
+        core_request["engine"] = serde_json::json!("fasterWhisper");
+        if let Ok(core) = inspect_worker(&worker, &core_request) {
+            merge_core_asr_capabilities(&mut response, &core);
+        }
+    }
+    // Separate packs expose only their own backend. Merge capability reports,
+    // never import Intel/WhisperX into the other runtime to inspect it.
+    if crate::optional_runtime::feature_installed("whisper_openvino") {
+        let intel_root = crate::runtime_paths::ai_worker_dir_for("whisper_openvino")?;
+        if let Ok(extra) = inspect_worker(&intel_root, &serde_json::json!({
+            "operation":"inspect", "model":model, "cacheDir":root, "device":"openvino", "engine":"openVinoWhisper"
+        })) {
+            for (key, value) in extra.as_object().into_iter().flatten() {
+                if key.starts_with("intel") { response[key] = value.clone(); }
+            }
+            response["backends"]["openvino"] = extra["backends"]["openvino"].clone();
+        }
+    }
     response["model"] = serde_json::json!(model);
     serde_json::from_value(response).map_err(|error| format!("Trạng thái nhận dạng không hợp lệ: {error}"))
+}
+
+fn merge_core_asr_capabilities(selected: &mut serde_json::Value, core: &serde_json::Value) {
+    for key in ["cudaAvailable", "whisperXInstalled", "alignmentModelCached",
+        "alignmentLanguage", "ctranslateModelCached"] {
+        if let Some(value) = core.get(key) { selected[key] = value.clone(); }
+    }
+    for key in ["cpu", "cuda"] {
+        if let Some(value) = core.get("backends").and_then(|v| v.get(key)) {
+            selected["backends"][key] = value.clone();
+        }
+    }
 }
 
 fn ocr_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -253,11 +287,22 @@ fn ocr_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
 pub fn get_ocr_environment(app: AppHandle, model: String) -> Result<OcrEnvironment, String> {
     validate_ocr_options(&model, "auto")?;
     let worker = ocr_worker_root(&app)?;
-    let response = inspect_worker(&worker, &serde_json::json!({
+    let mut response = inspect_worker(&worker, &serde_json::json!({
         "operation": "ocr_inspect",
         "cacheDir": ocr_cache_dir(&app)?,
         "model": model,
     }))?;
+    if crate::optional_runtime::feature_installed("ocr_openvino") {
+        let intel = crate::runtime_paths::ai_worker_dir_for("ocr_openvino")?;
+        if let Ok(extra) = inspect_worker(&intel, &serde_json::json!({"operation":"ocr_inspect","cacheDir":ocr_cache_dir(&app)?,"model":model})) {
+            response["backends"]["openvino"] = extra["backends"]["openvino"].clone();
+            if response["cudaAvailable"] != true && extra["backends"]["openvino"]["available"] == true {
+                response["recommendedBackend"] = serde_json::json!("openvino");
+                response["activeDevice"] = serde_json::json!("openvino");
+                response["resolvedLabel"] = extra["resolvedLabel"].clone();
+            }
+        }
+    }
     let providers = response.get("executionProviders").and_then(|value| value.as_array())
         .map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect::<Vec<_>>())
         .unwrap_or_default();
@@ -1132,7 +1177,7 @@ fn run_worker_request(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
+        .spawn_worker()
         .map_err(|error| format!("Không thể bắt đầu nhận dạng lời thoại: {error}"))?;
     if let Some(mut stdin) = child.stdin.take() {
         let mut line = serde_json::to_vec(request)
@@ -1282,7 +1327,7 @@ fn inspect_worker(worker: &Path, request: &serde_json::Value) -> Result<serde_js
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
+        .spawn_worker()
         .map_err(|error| format!("Không thể kiểm tra bộ nhận dạng lời thoại: {error}"))?;
     let mut input = serde_json::to_vec(request).map_err(|error| error.to_string())?;
     input.push(b'\n');
@@ -1321,7 +1366,7 @@ fn run_install_worker(worker: &Path, request: &serde_json::Value) -> Result<(), 
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
+        .spawn_worker()
         .map_err(|error| format!("Không thể khởi chạy Python worker để cài model: {error}"))?;
     let mut input = serde_json::to_vec(request).map_err(|error| error.to_string())?;
     input.push(b'\n');
@@ -1332,7 +1377,7 @@ fn run_install_worker(worker: &Path, request: &serde_json::Value) -> Result<(), 
         .write_all(&input)
         .map_err(|error| format!("Không thể gửi yêu cầu cài model: {error}"))?;
     let output = child
-        .wait_with_output()
+        .wait_with_output_timeout(Duration::from_secs(2*3600))
         .map_err(|error| format!("Không thể chờ Python worker cài model: {error}"))?;
     let response = output
         .stdout
@@ -1378,7 +1423,7 @@ fn run_ocr_install_worker(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
+        .spawn_worker()
         .map_err(|error| format!("Không thể khởi chạy Python worker để tải model OCR: {error}"))?;
     let mut input = serde_json::to_vec(request).map_err(|error| error.to_string())?;
     input.push(b'\n');
@@ -1467,8 +1512,23 @@ fn remember_protocol_noise(lines: &mut Vec<String>, value: &str) {
 }
 
 fn worker_request_command(worker: &Path, request: &serde_json::Value) -> Command {
+    let operation = request.get("operation").and_then(|v| v.as_str()).unwrap_or("");
+    let device = request.get("device").and_then(|v| v.as_str()).unwrap_or("cpu");
+    let engine = request.get("engine").and_then(|v| v.as_str()).unwrap_or("fasterWhisper");
+    if matches!(operation, "transcribe" | "inspect" | "asr_install") {
+        let intel = device == "openvino" || engine == "openVinoWhisper" || request["backend"] == "openvino";
+        let feature = if intel { "whisper_openvino" } else if engine == "whisperX" || crate::optional_runtime::feature_installed("whisperx") { "whisperx" } else { "acceleration" };
+        let selected = crate::runtime_paths::ai_worker_dir_for(feature).unwrap_or_else(|_| worker.to_path_buf());
+        return crate::runtime_paths::worker_command(&selected);
+    }
+    if operation == "whisperx_alignment_install" {
+        let selected = crate::runtime_paths::ai_worker_dir_for("whisperx").unwrap_or_else(|_| worker.to_path_buf());
+        return crate::runtime_paths::worker_command(&selected);
+    }
     if request.get("operation").and_then(|value| value.as_str()).is_some_and(|value| value.starts_with("ocr_")) {
-        crate::runtime_paths::ocr_worker_command(worker)
+        // Inspection uses the supplied pack so independent reports can be merged.
+        if operation == "ocr_inspect" { crate::runtime_paths::worker_command(worker) }
+        else { crate::runtime_paths::ocr_command_for(worker, request["device"].as_str().unwrap_or("cpu")) }
     } else if request.get("operation").and_then(|value| value.as_str()).is_some_and(|value| matches!(value, "inspect" | "transcribe" | "asr_install")) {
         crate::runtime_paths::asr_worker_command(worker)
     } else {
@@ -1477,9 +1537,7 @@ fn worker_request_command(worker: &Path, request: &serde_json::Value) -> Command
 }
 
 fn worker_root(_app: &AppHandle) -> Result<PathBuf, String> {
-    if crate::optional_runtime::feature_installed("whisper_openvino") {
-        crate::runtime_paths::ai_worker_dir_for("whisper_openvino")
-    } else if crate::optional_runtime::feature_installed("whisperx") {
+    if crate::optional_runtime::feature_installed("whisperx") {
         crate::runtime_paths::ai_worker_dir_for("whisperx")
     } else {
         crate::runtime_paths::ai_worker_dir()
@@ -1608,6 +1666,20 @@ fn validate_ocr_options(model: &str, device: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn independent_core_capabilities_preserve_selected_intel_backend() {
+        let mut selected = serde_json::json!({"resolvedBackend":"openvino", "modelCached":true,
+            "intelModelCached":true, "whisperXInstalled":false, "backends":{"openvino":true}});
+        let core = serde_json::json!({"resolvedBackend":"cpu", "modelCached":false,
+            "whisperXInstalled":true, "cudaAvailable":true, "ctranslateModelCached":false,
+            "backends":{"cpu":true,"cuda":true,"openvino":false}});
+        super::merge_core_asr_capabilities(&mut selected, &core);
+        assert_eq!(selected["resolvedBackend"], "openvino");
+        assert_eq!(selected["modelCached"], true);
+        assert_eq!(selected["whisperXInstalled"], true);
+        assert_eq!(selected["backends"]["openvino"], true);
+        assert_eq!(selected["backends"]["cuda"], true);
+    }
     use super::*;
     use tempfile::tempdir;
 

@@ -23,7 +23,7 @@ class WorkerProtocolTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         self.assertEqual(json.loads(result.stdout.splitlines()[0])["type"], "failed")
-        self.assertIn("Unsupported worker operation", result.stderr)
+        self.assertIn("Worker request failed", result.stderr)
 
 
 if __name__ == "__main__":

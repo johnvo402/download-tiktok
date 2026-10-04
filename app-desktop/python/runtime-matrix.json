@@ -1,0 +1,198 @@
+{
+  "schemaVersion": 1,
+  "runtimeVersion": 7,
+  "protocolVersion": 2,
+  "pythonVersion": "3.12.10",
+  "uvVersion": "0.11.12",
+  "components": {
+    "torch_cpu": {
+      "label": "Bộ tính toán CPU dùng chung",
+      "downloadBytes": 630000000,
+      "installedBytes": 3300000000,
+      "packages": [
+        "torch",
+        "torchaudio"
+      ],
+      "dependsOn": []
+    },
+    "torch_cuda": {
+      "label": "Bộ tính toán NVIDIA dùng chung",
+      "downloadBytes": 3000000000,
+      "installedBytes": 5200000000,
+      "packages": [
+        "torch",
+        "torchaudio"
+      ],
+      "dependsOn": []
+    },
+    "whisperx": {
+      "label": "Căn thời gian WhisperX",
+      "downloadBytes": 180000000,
+      "installedBytes": 450000000,
+      "packages": [
+        "whisperx",
+        "torchvision",
+        "torchcodec",
+        "transformers",
+        "huggingface-hub",
+        "faster-whisper"
+      ],
+      "dependsOn": [
+        "torch"
+      ]
+    },
+    "bandit": {
+      "label": "Tách thoại BandIt",
+      "downloadBytes": 5000000,
+      "installedBytes": 12000000,
+      "packages": [
+        "bandit-infer",
+        "soundfile"
+      ],
+      "dependsOn": [
+        "torch"
+      ]
+    },
+    "acceleration": {
+      "label": "Nhận dạng, OCR và TTS trên NVIDIA",
+      "downloadBytes": 360000000,
+      "installedBytes": 650000000,
+      "packages": [
+        "faster-whisper",
+        "rapidocr",
+        "vieneu",
+        "onnxruntime-gpu",
+        "transformers",
+        "huggingface-hub"
+      ],
+      "dependsOn": [
+        "torch"
+      ]
+    },
+    "sttn": {
+      "label": "Phục hồi nền STTN",
+      "downloadBytes": 90000000,
+      "installedBytes": 260000000,
+      "packages": [
+        "rapidocr",
+        "onnxruntime",
+        "av"
+      ],
+      "dependsOn": [
+        "torch"
+      ]
+    },
+    "openvino": {
+      "label": "Bộ tính toán Intel dùng chung",
+      "downloadBytes": 110000000,
+      "installedBytes": 340000000,
+      "packages": [
+        "openvino",
+        "openvino-telemetry"
+      ],
+      "dependsOn": []
+    },
+    "ocr_openvino": {
+      "label": "Đọc chữ trên Intel",
+      "downloadBytes": 60000000,
+      "installedBytes": 140000000,
+      "packages": [
+        "rapidocr",
+        "onnxruntime",
+        "opencv-python"
+      ],
+      "dependsOn": [
+        "openvino"
+      ]
+    },
+    "whisper_openvino": {
+      "label": "Nhận dạng lời thoại trên Intel",
+      "downloadBytes": 120000000,
+      "installedBytes": 380000000,
+      "packages": [
+        "openvino-genai",
+        "openvino-tokenizers",
+        "faster-whisper"
+      ],
+      "dependsOn": [
+        "openvino"
+      ]
+    }
+  },
+  "features": {
+    "whisperx": {
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "components": [
+        "whisperx"
+      ],
+      "requirements": "requirements-optional-whisperx.in"
+    },
+    "bandit": {
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "components": [
+        "bandit"
+      ],
+      "requirements": "requirements-optional-bandit.in"
+    },
+    "acceleration": {
+      "backends": [
+        "cuda"
+      ],
+      "components": [
+        "acceleration"
+      ],
+      "requirements": "requirements-optional-acceleration.in"
+    },
+    "sttn": {
+      "backends": [
+        "cpu",
+        "cuda"
+      ],
+      "components": [
+        "sttn"
+      ],
+      "requirements": "requirements-optional-sttn.in"
+    },
+    "ocr_openvino": {
+      "backends": [
+        "openvino"
+      ],
+      "components": [
+        "ocr_openvino"
+      ],
+      "requirements": "requirements-optional-ocr-openvino.in"
+    },
+    "whisper_openvino": {
+      "backends": [
+        "openvino"
+      ],
+      "components": [
+        "whisper_openvino"
+      ],
+      "requirements": "requirements-optional-whisper-openvino.in"
+    }
+  },
+  "pins": {
+    "torch": "2.8.0",
+    "torchaudio": "2.8.0",
+    "torchvision": "0.23.0",
+    "torchcodec": "0.7.0",
+    "whisperx": "3.8.6",
+    "transformers": "4.57.6",
+    "huggingface-hub": "0.36.2",
+    "onnxruntime": "1.30.0",
+    "onnxruntime-gpu": "1.26.0",
+    "rapidocr": "3.9.2",
+    "vieneu": "3.8.3",
+    "openvino": "2026.4.0",
+    "openvino-genai": "2026.4.0.0",
+    "openvino-tokenizers": "2026.4.0.0"
+  },
+  "estimateNote": "Approximate compressed download and installed package sizes. Models excluded; cache hits reduce download. Atomic staging temporarily needs another copy of the active pack."
+}

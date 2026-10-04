@@ -1,0 +1,76 @@
+{
+  "legacy": {
+    "asr": {
+      "seconds": 46.18898009999975,
+      "messages": 5,
+      "output": {
+        "language": "vi",
+        "segments": [
+          {
+            "start": 0.0,
+            "end": 2.0,
+            "text": "Cô đang làm thế nào hôm nay?",
+            "_confidence": -0.4967787265777588
+          }
+        ]
+      }
+    },
+    "ocr": {
+      "seconds": 7.6401144999981625,
+      "messages": 3,
+      "output": {
+        "language": "zh",
+        "segments": [
+          {
+            "start": 0.0,
+            "end": 1.0,
+            "text": "我带着袁英修为回来了\n这是中文字幕"
+          }
+        ]
+      }
+    },
+    "tts": {
+      "seconds": 11.975154299998394,
+      "messages": 4,
+      "sampleRate": 48000,
+      "duration": 2.88
+    }
+  },
+  "frozen": {
+    "asr": {
+      "seconds": 13.839229900000646,
+      "messages": 4,
+      "output": {
+        "language": "vi",
+        "segments": [
+          {
+            "start": 0.0,
+            "end": 2.0,
+            "text": "Cô đang làm thế nào hôm nay?",
+            "_confidence": -0.4967787265777588
+          }
+        ]
+      }
+    },
+    "ocr": {
+      "seconds": 2.275407900000573,
+      "messages": 3,
+      "output": {
+        "language": "zh",
+        "segments": [
+          {
+            "start": 0.0,
+            "end": 1.0,
+            "text": "我带着袁英修为回来了\n这是中文字幕"
+          }
+        ]
+      }
+    },
+    "tts": {
+      "seconds": 7.454901400000381,
+      "messages": 4,
+      "sampleRate": 48000,
+      "duration": 2.96
+    }
+  }
+}

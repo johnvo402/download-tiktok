@@ -132,7 +132,7 @@ def main() -> int:
         json.dumps(inventory, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     (output_dir / "THIRD_PARTY_DEPENDENCY_LICENSES.txt").write_text(
-        "\n".join(notice_sections) + "\n", encoding="utf-8"
+        "\n".join(line.rstrip() for line in "\n".join(notice_sections).splitlines()) + "\n", encoding="utf-8"
     )
     print(json.dumps({"packageCount": len(packages), "output": str(output_dir)}))
     return 0

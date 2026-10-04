@@ -1,3 +1,4 @@
+use crate::worker_manager::WorkerCommandExt;
 use crate::project_service::ProjectStore;
 use crate::settings_service::{self, TtsSettings, TtsVoiceProfile};
 use crate::transcript_service::{
@@ -12,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, Metadata};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -1769,12 +1770,12 @@ fn worker_root(_app: &AppHandle) -> Result<PathBuf, String> {
     crate::runtime_paths::ai_worker_dir()
 }
 
-fn launch_worker(worker: &Path) -> Result<Child, String> {
+fn launch_worker(worker: &Path) -> Result<crate::worker_manager::ManagedWorker, String> {
     crate::runtime_paths::worker_command(worker)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
+        .spawn_worker()
         .map_err(|error| {
             format!(
                 "Không thể khởi chạy bộ xử lý âm thanh. Kiểm tra thành phần ứng dụng trong Cài đặt rồi thử lại: {error}"

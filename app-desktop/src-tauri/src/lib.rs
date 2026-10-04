@@ -1,3 +1,5 @@
+mod worker_manager;
+mod runtime_registry;
 mod asr_service;
 mod audio;
 mod batch_service;
@@ -47,6 +49,9 @@ pub fn run() {
                 std::env::var_os("JC_QA_DATA_DIR").map(std::path::PathBuf::from).unwrap_or(app.path().app_data_dir()?)
             } else { app.path().app_data_dir()? };
             runtime_paths::initialize(resource_dir, app_data.clone());
+            if let Err(error)=optional_runtime::recover_installations() {
+                log::warn!("Optional runtime recovery deferred: {error}");
+            }
             std::fs::create_dir_all(app_data.join("projects"))?;
             if let Err(error) = settings_service::migrate_legacy_custom_prompt(app.handle()) {
                 log::warn!("Could not migrate legacy project translation prompt: {error}");
@@ -91,6 +96,9 @@ pub fn run() {
             preview::commands::preview_update_scene,
             preview::commands::preview_status,
             commands::get_optional_runtime_status,
+            commands::get_optional_runtime_plan,
+            commands::check_optional_runtime_feature,
+            commands::uninstall_optional_runtime,
             commands::open_ai_components_folder,
             commands::install_optional_runtime,
             commands::clear_ai_installation_cache,
@@ -182,5 +190,5 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build JC AI")
-        .run(|app,event| { if matches!(event,tauri::RunEvent::Exit) { app.state::<preview::PreviewManager>().close(None,None); app.state::<audio::transport::AudioManager>().close(None); } });
+        .run(|app,event| { if matches!(event,tauri::RunEvent::Exit) { app.state::<preview::PreviewManager>().close(None,None); app.state::<audio::transport::AudioManager>().close(None); worker_manager::shutdown(); } });
 }

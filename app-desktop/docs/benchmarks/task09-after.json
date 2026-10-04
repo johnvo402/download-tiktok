@@ -1,0 +1,1394 @@
+{
+  "measuredAt": "2026-10-04T10:15:31.218127+00:00",
+  "artifacts": {
+    "ai-worker": {
+      "bytes": 441930221,
+      "files": 1496,
+      "nativeFiles": 194,
+      "top50": [
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\cv2\\cv2.pyd",
+          "bytes": 85848064
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\sea_g2p\\sea_g2p.bin",
+          "bytes": 62829820
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\ctranslate2\\ctranslate2.dll",
+          "bytes": 59296256
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\numpy.libs\\libscipy_openblas64_-ed4f167a5330424524f45258e7ca2c8d.dll",
+          "bytes": 20589056
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\avcodec-62-984de33114b7fa384296817dec999c9d.dll",
+          "bytes": 19266048
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\onnxruntime\\capi\\onnxruntime_pybind11_state.pyd",
+          "bytes": 19112248
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\onnxruntime\\capi\\onnxruntime.dll",
+          "bytes": 18446176
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libx265-efe48a158520a59ef99c0a0b3eb835ae.dll",
+          "bytes": 12746240
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\ai-worker.exe",
+          "bytes": 12355573
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\hf_xet\\hf_xet.pyd",
+          "bytes": 9499136
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\PIL\\_avif.cp312-win_amd64.pyd",
+          "bytes": 7893504
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\tokenizers\\tokenizers.pyd",
+          "bytes": 7847936
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libSvtAv1Enc-c4dd99c98ddcdb013e820dbd68a30e26.dll",
+          "bytes": 7673344
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\python312.dll",
+          "bytes": 6945272
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\avfilter-11-aef80fc767dc77e0319469b5bdcdf998.dll",
+          "bytes": 5890560
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\sea_g2p\\sea_g2p_rs.pyd",
+          "bytes": 5722624
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\libcrypto-3.dll",
+          "bytes": 5231472
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\numpy\\_core\\_multiarray_umath.cp312-win_amd64.pyd",
+          "bytes": 3854848
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\avformat-62-b6d6bb16ff0b7753371e2d0b285c9dc0.dll",
+          "bytes": 2845184
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libstdc++-6-2d5c346d47ad531ef9f5185db0e8cef3.dll",
+          "bytes": 2660352
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\PIL\\_imaging.cp312-win_amd64.pyd",
+          "bytes": 2632704
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libvpx-1-d869f8b2cb42d58b35545ffbfb0f7509.dll",
+          "bytes": 2600960
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\Shapely.libs\\geos-ae6efa0782962b98e358f10ea539ae5f.dll",
+          "bytes": 2564608
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\_soundfile_data\\libsndfile_x64.dll",
+          "bytes": 2364416
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\vieneu\\assets\\voices_v3_nano.json",
+          "bytes": 2316799
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libx264-165-f3a909470ddc2d85ed21eda3d0fb7954.dll",
+          "bytes": 2267648
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\PIL\\_imagingft.cp312-win_amd64.pyd",
+          "bytes": 2174976
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libdav1d-959ebc1340f7dfcbcf8e299a26281738.dll",
+          "bytes": 2139136
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\swscale-9-0c9886c118598c54e159ef2267ff99f3.dll",
+          "bytes": 2022912
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\ctranslate2\\libiomp5md.dll",
+          "bytes": 1614192
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\sqlite3.dll",
+          "bytes": 1583608
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\ucrtbase.dll",
+          "bytes": 1362264
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\base_library.zip",
+          "bytes": 1333717
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\faster_whisper\\assets\\silero_vad_v6.onnx",
+          "bytes": 1245151
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\avutil-60-cc1777f859dcfd98b8019bdf459e774e.dll",
+          "bytes": 1145856
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libiconv-2-6ce5f4ff92ada49d6f23a8e413455502.dll",
+          "bytes": 1141248
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\unicodedata.pyd",
+          "bytes": 1140592
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\libssl-3.dll",
+          "bytes": 794992
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libwebp-4bf4e57964c7a01c09ce39470d6b67ca.dll",
+          "bytes": 759296
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\ctranslate2\\_ext.cp312-win_amd64.pyd",
+          "bytes": 715776
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\huggingface_hub\\hf_api.py",
+          "bytes": 687318
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\msvcp140.dll",
+          "bytes": 643512
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\numpy\\random\\_generator.cp312-win_amd64.pyd",
+          "bytes": 624640
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\numpy.libs\\msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll",
+          "bytes": 575056
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\Shapely.libs\\msvcp140-90bc62d4947a5878f1dc1057312f3be2.dll",
+          "bytes": 557704
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\numpy\\random\\mtrand.cp312-win_amd64.pyd",
+          "bytes": 522752
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libopus-0-4369edc456631a3cc933d7918747e5d2.dll",
+          "bytes": 482816
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\Shapely.libs\\geos_c-072b7a9224d16d3e4ab2395bb855b2d3.dll",
+          "bytes": 451072
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libvpl-969a52d626b0390fc34f6a4fb0b08d7e.dll",
+          "bytes": 444416
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libmp3lame-0-da02696cc34a9bbc1d1d4f67a85cfbef.dll",
+          "bytes": 425472
+        }
+      ],
+      "duplicateNativeFiles": [],
+      "packageInventory": {
+        "schemaVersion": 1,
+        "sourceLockFile": "python/requirements-release.txt + python/requirements-sdk.txt",
+        "inventoryScope": "distributions used by PyInstaller Analysis plus the shipped bootloader; metadata and license files included",
+        "packages": [
+          {
+            "name": "antlr4-python3-runtime",
+            "version": "4.9.3",
+            "license": "BSD",
+            "licenseFiles": []
+          },
+          {
+            "name": "anyio",
+            "version": "4.15.1",
+            "license": "MIT",
+            "licenseFiles": [
+              "_internal/anyio-4.15.1.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "av",
+            "version": "18.1.0",
+            "license": "BSD-3-Clause",
+            "licenseFiles": [
+              "_internal/av-18.1.0.dist-info/licenses/LICENSE.txt"
+            ]
+          },
+          {
+            "name": "certifi",
+            "version": "2026.7.22",
+            "license": "MPL-2.0",
+            "licenseFiles": [
+              "_internal/certifi-2026.7.22.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "cffi",
+            "version": "2.1.1",
+            "license": "MIT-0",
+            "licenseFiles": [
+              "_internal/cffi-2.1.1.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "charset-normalizer",
+            "version": "3.5.1",
+            "license": "MIT",
+            "licenseFiles": [
+              "_internal/charset_normalizer-3.5.1.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "click",
+            "version": "8.5.0",
+            "license": "BSD-3-Clause",
+            "licenseFiles": [
+              "_internal/click-8.5.0.dist-info/licenses/LICENSE.txt"
+            ]
+          },
+          {
+            "name": "colorama",
+            "version": "0.4.6",
+            "license": "See included package metadata",
+            "licenseFiles": [
+              "_internal/colorama-0.4.6.dist-info/licenses/LICENSE.txt"
+            ]
+          },
+          {
+            "name": "colorlog",
+            "version": "6.12.0",
+            "license": "MIT License",
+            "licenseFiles": [
+              "_internal/colorlog-6.12.0.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "ctranslate2",
+            "version": "4.8.2",
+            "license": "MIT",
+            "licenseFiles": []
+          },
+          {
+            "name": "faster-whisper",
+            "version": "1.2.1",
+            "license": "MIT",
+            "licenseFiles": [
+              "_internal/faster_whisper-1.2.1.dist-info/LICENSE"
+            ]
+          },
+          {
+            "name": "filelock",
+            "version": "4.0.1",
+            "license": "MIT",
+            "licenseFiles": [
+              "_internal/filelock-4.0.1.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "flatbuffers",
+            "version": "25.12.19",
+            "license": "Apache 2.0",
+            "licenseFiles": []
+          },
+          {
+            "name": "fsspec",
+            "version": "2026.9.0",
+            "license": "BSD-3-Clause",
+            "licenseFiles": [
+              "_internal/fsspec-2026.9.0.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "h11",
+            "version": "0.16.0",
+            "license": "MIT",
+            "licenseFiles": [
+              "_internal/h11-0.16.0.dist-info/licenses/LICENSE.txt"
+            ]
+          },
+          {
+            "name": "hf-xet",
+            "version": "1.6.0",
+            "license": "Apache-2.0",
+            "licenseFiles": [
+              "_internal/hf_xet-1.6.0.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "httpcore",
+            "version": "1.0.9",
+            "license": "BSD-3-Clause",
+            "licenseFiles": [
+              "_internal/httpcore-1.0.9.dist-info/licenses/LICENSE.md"
+            ]
+          },
+          {
+            "name": "httpx",
+            "version": "0.28.1",
+            "license": "BSD-3-Clause",
+            "licenseFiles": [
+              "_internal/httpx-0.28.1.dist-info/licenses/LICENSE.md"
+            ]
+          },
+          {
+            "name": "huggingface_hub",
+            "version": "1.32.0",
+            "license": "Apache-2.0",
+            "licenseFiles": [
+              "_internal/huggingface_hub-1.32.0.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "idna",
+            "version": "3.20",
+            "license": "BSD-3-Clause",
+            "licenseFiles": [
+              "_internal/idna-3.20.dist-info/licenses/LICENSE.md"
+            ]
+          },
+          {
+            "name": "kaldi-native-fbank",
+            "version": "1.22.3",
+            "license": "Apache-2.0",
+            "licenseFiles": [
+              "_internal/kaldi_native_fbank-1.22.3.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "numpy",
+            "version": "2.5.3",
+            "license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+            "licenseFiles": [
+              "_internal/numpy-2.5.3.dist-info/licenses/LICENSE.txt",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/_core/include/numpy/libdivide/LICENSE.txt",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/_core/src/common/pythoncapi-compat/COPYING",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/_core/src/highway/LICENSE",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/_core/src/npysort/x86-simd-sort/LICENSE.md",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/_core/src/umath/svml/LICENSE",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/fft/pocketfft/LICENSE.md",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/linalg/lapack_lite/LICENSE.txt",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/ma/LICENSE",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/random/LICENSE.md",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/random/src/distributions/LICENSE.md",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/random/src/mt19937/LICENSE.md",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/random/src/pcg64/LICENSE.md",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/random/src/philox/LICENSE.md",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/random/src/sfc64/LICENSE.md",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/random/src/splitmix64/LICENSE.md"
+            ]
+          },
+          {
+            "name": "omegaconf",
+            "version": "2.3.1",
+            "license": "See included package metadata",
+            "licenseFiles": [
+              "_internal/omegaconf-2.3.1.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "onnxruntime",
+            "version": "1.30.0",
+            "license": "MIT License",
+            "licenseFiles": []
+          },
+          {
+            "name": "opencv-python-headless",
+            "version": "5.0.0.93",
+            "license": "Apache 2.0",
+            "licenseFiles": [
+              "_internal/opencv_python_headless-5.0.0.93.dist-info/LICENSE-3RD-PARTY.txt",
+              "_internal/opencv_python_headless-5.0.0.93.dist-info/LICENSE.txt"
+            ]
+          },
+          {
+            "name": "packaging",
+            "version": "26.3",
+            "license": "Apache-2.0 OR BSD-2-Clause",
+            "licenseFiles": [
+              "_internal/packaging-26.3.dist-info/licenses/LICENSE",
+              "_internal/packaging-26.3.dist-info/licenses/LICENSE.APACHE",
+              "_internal/packaging-26.3.dist-info/licenses/LICENSE.BSD"
+            ]
+          },
+          {
+            "name": "pillow",
+            "version": "12.3.0",
+            "license": "MIT-CMU",
+            "licenseFiles": [
+              "_internal/pillow-12.3.0.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "pyclipper",
+            "version": "1.4.0",
+            "license": "MIT",
+            "licenseFiles": [
+              "_internal/pyclipper-1.4.0.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "pyinstaller",
+            "version": "6.22.3",
+            "license": "GPLv2-or-later with a special exception which allows to use PyInstaller to build and distribute non-free programs (including commercial ones)",
+            "licenseFiles": [
+              "_internal/pyinstaller-6.22.3.dist-info/licenses/COPYING.txt"
+            ]
+          },
+          {
+            "name": "PyYAML",
+            "version": "6.0.3",
+            "license": "MIT",
+            "licenseFiles": [
+              "_internal/pyyaml-6.0.3.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "rapidocr",
+            "version": "3.9.2",
+            "license": "Apache-2.0",
+            "licenseFiles": []
+          },
+          {
+            "name": "requests",
+            "version": "2.34.2",
+            "license": "Apache-2.0",
+            "licenseFiles": [
+              "_internal/requests-2.34.2.dist-info/licenses/LICENSE",
+              "_internal/requests-2.34.2.dist-info/licenses/NOTICE"
+            ]
+          },
+          {
+            "name": "sea-g2p",
+            "version": "0.10.0",
+            "license": "See included package metadata",
+            "licenseFiles": [
+              "_internal/sea_g2p-0.10.0.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "setuptools",
+            "version": "84.0.0",
+            "license": "MIT",
+            "licenseFiles": [
+              "_internal/setuptools-84.0.0.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "shapely",
+            "version": "2.1.2",
+            "license": "BSD 3-Clause",
+            "licenseFiles": [
+              "_internal/shapely-2.1.2.dist-info/licenses/LICENSE.txt",
+              "_internal/shapely-2.1.2.dist-info/licenses/LICENSE_GEOS",
+              "_internal/shapely-2.1.2.dist-info/licenses/LICENSE_win32"
+            ]
+          },
+          {
+            "name": "soundfile",
+            "version": "0.14.0",
+            "license": "BSD 3-Clause License",
+            "licenseFiles": [
+              "_internal/soundfile-0.14.0.dist-info/LICENSE"
+            ]
+          },
+          {
+            "name": "soxr",
+            "version": "1.1.0",
+            "license": "LGPL-2.1-or-later",
+            "licenseFiles": [
+              "_internal/soxr-1.1.0.dist-info/licenses/COPYING.LGPL",
+              "_internal/soxr-1.1.0.dist-info/licenses/LICENSE-libsoxr.txt",
+              "_internal/soxr-1.1.0.dist-info/licenses/LICENSE-PFFFT.txt",
+              "_internal/soxr-1.1.0.dist-info/licenses/LICENSE.txt"
+            ]
+          },
+          {
+            "name": "tokenizers",
+            "version": "0.23.2",
+            "license": "See included package metadata",
+            "licenseFiles": []
+          },
+          {
+            "name": "tqdm",
+            "version": "4.70.1",
+            "license": "MPL-2.0 AND MIT",
+            "licenseFiles": []
+          },
+          {
+            "name": "typing_extensions",
+            "version": "4.16.0",
+            "license": "PSF-2.0",
+            "licenseFiles": [
+              "_internal/typing_extensions-4.16.0.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "urllib3",
+            "version": "2.8.0",
+            "license": "MIT",
+            "licenseFiles": [
+              "_internal/urllib3-2.8.0.dist-info/licenses/LICENSE.txt"
+            ]
+          },
+          {
+            "name": "vieneu",
+            "version": "3.8.3",
+            "license": "Apache License\n                                   Version 2.0, January 2004\n                                http://www.apache.org/licenses/\n        \n           TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION\n        \n           1. Definitions.\n        \n              \"License\" shall mean the terms and conditions for use, reproduction,\n              and distribution as defined by Sections 1 through 9 of this document.\n        \n              \"Licensor\" shall mean the copyright owner or entity authorized by\n              the copyright owner that is granting the License.\n        \n              \"Legal Entity\" shall mean the union of the acting entity and all\n              other entities that control, are controlled by, or are under common\n              control with that entity. For the purposes of this definition,\n              \"control\" means (i) the power, direct or indirect, to cause the\n              direction or management of such entity, whether by contract or\n              otherwise, or (ii) ownership of fifty percent (50%) or more of the\n              outstanding shares, or (iii) beneficial ownership of such entity.\n        \n              \"You\" (or \"Your\") shall mean an individual or Legal Entity\n              exercising permissions granted by this License.\n        \n              \"Source\" form shall mean the preferred form for making modifications,\n              including but not limited to software source code, documentation\n              source, and configuration files.\n        \n              \"Object\" form shall mean any form resulting from mechanical\n              transformation or translation of a Source form, including but\n              not limited to compiled object code, generated documentation,\n              and conversions to other media types.\n        \n              \"Work\" shall mean the work of authorship, whether in Source or\n              Object form, made available under the License, as indicated by a\n              copyright notice that is included in or attached to the work\n              (an example is provided in the Appendix below).\n        \n              \"Derivative Works\" shall mean any work, whether in Source or Object\n              form, that is based on (or derived from) the Work and for which the\n              editorial revisions, annotations, elaborations, or other modifications\n              represent, as a whole, an original work of authorship. For the purposes\n              of this License, Derivative Works shall not include works that remain\n              separable from, or merely link (or bind by name) to the interfaces of,\n              the Work and Derivative Works thereof.\n        \n              \"Contribution\" shall mean any work of authorship, including\n              the original version of the Work and any modifications or additions\n              to that Work or Derivative Works thereof, that is intentionally\n              submitted to Licensor for inclusion in the Work by the copyright owner\n              or by an individual or Legal Entity authorized to submit on behalf of\n              the copyright owner. For the purposes of this definition, \"submitted\"\n              means any form of electronic, verbal, or written communication sent\n              to the Licensor or its representatives, including but not limited to\n              communication on electronic mailing lists, source code control systems,\n              and issue tracking systems that are managed by, or on behalf of, the\n              Licensor for the purpose of discussing and improving the Work, but\n              excluding communication that is conspicuously marked or otherwise\n              designated in writing by the copyright owner as \"Not a Contribution.\"\n        \n              \"Contributor\" shall mean Licensor and any individual or Legal Entity\n              on behalf of whom a Contribution has been received by Licensor and\n              subsequently incorporated within the Work.\n        \n           2. Grant of Copyright License. Subject to the terms and conditions of\n              this License, each Contributor hereby grants to You a perpetual,\n              worldwide, non-exclusive, no-charge, royalty-free, irrevocable\n              copyright license to reproduce, prepare Derivative Works of,\n              publicly display, publicly perform, sublicense, and distribute the\n              Work and such Derivative Works in Source or Object form.\n        \n           3. Grant of Patent License. Subject to the terms and conditions of\n              this License, each Contributor hereby grants to You a perpetual,\n              worldwide, non-exclusive, no-charge, royalty-free, irrevocable\n              (except as stated in this section) patent license to make, have made,\n              use, offer to sell, sell, import, and otherwise transfer the Work,\n              where such license applies only to those patent claims licensable\n              by such Contributor that are necessarily infringed by their\n              Contribution(s) alone or by combination of their Contribution(s)\n              with the Work to which such Contribution(s) was submitted. If You\n              institute patent litigation against any entity (including a\n              cross-claim or counterclaim in a lawsuit) alleging that the Work\n              or a Contribution incorporated within the Work constitutes direct\n              or contributory patent infringement, then any patent licenses\n              granted to You under this License for that Work shall terminate\n              as of the date such litigation is filed.\n        \n           4. Redistribution. You may reproduce and distribute copies of the\n              Work or Derivative Works thereof in any medium, with or without\n              modifications, and in Source or Object form, provided that You\n              meet the following conditions:\n        \n              (a) You must give any other recipients of the Work or\n                  Derivative Works a copy of this License; and\n        \n              (b) You must cause any modified files to carry prominent notices\n                  stating that You changed the files; and\n        \n              (c) You must retain, in the Source form of any Derivative Works\n                  that You distribute, all copyright, patent, trademark, and\n                  attribution notices from the Source form of the Work,\n                  excluding those notices that do not pertain to any part of\n                  the Derivative Works; and\n        \n              (d) If the Work includes a \"NOTICE\" text file as part of its\n                  distribution, then any Derivative Works that You distribute must\n                  include a readable copy of the attribution notices contained\n                  within such NOTICE file, excluding those notices that do not\n                  pertain to any part of the Derivative Works, in at least one\n                  of the following places: within a NOTICE text file distributed\n                  as part of the Derivative Works; within the Source form or\n                  documentation, if provided along with the Derivative Works; or,\n                  within a display generated by the Derivative Works, if and\n                  wherever such third-party notices normally appear. The contents\n                  of the NOTICE file are for informational purposes only and\n                  do not modify the License. You may add Your own attribution\n                  notices within Derivative Works that You distribute, alongside\n                  or as an addendum to the NOTICE text from the Work, provided\n                  that such additional attribution notices cannot be construed\n                  as modifying the License.\n        \n              You may add Your own copyright statement to Your modifications and\n              may provide additional or different license terms and conditions\n              for use, reproduction, or distribution of Your modifications, or\n              for any such Derivative Works as a whole, provided Your use,\n              reproduction, and distribution of the Work otherwise complies with\n              the conditions stated in this License.\n        \n           5. Submission of Contributions. Unless You explicitly state otherwise,\n              any Contribution intentionally submitted for inclusion in the Work\n              by You to the Licensor shall be under the terms and conditions of\n              this License, without any additional terms or conditions.\n              Notwithstanding the above, nothing herein shall supersede or modify\n              the terms of any separate license agreement you may have executed\n              with Licensor regarding such Contributions.\n        \n           6. Trademarks. This License does not grant permission to use the trade\n              names, trademarks, service marks, or product names of the Licensor,\n              except as required for reasonable and customary use in describing the\n              origin of the Work and reproducing the content of the NOTICE file.\n        \n           7. Disclaimer of Warranty. Unless required by applicable law or\n              agreed to in writing, Licensor provides the Work (and each\n              Contributor provides its Contributions) on an \"AS IS\" BASIS,\n              WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or\n              implied, including, without limitation, any warranties or conditions\n              of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A\n              PARTICULAR PURPOSE. You are solely responsible for determining the\n              appropriateness of using or redistributing the Work and assume any\n              risks associated with Your exercise of permissions under this License.\n        \n           8. Limitation of Liability. In no event and under no legal theory,\n              whether in tort (including negligence), contract, or otherwise,\n              unless required by applicable law (such as deliberate and grossly\n              negligent acts) or agreed to in writing, shall any Contributor be\n              liable to You for damages, including any direct, indirect, special,\n              incidental, or consequential damages of any character arising as a\n              result of this License or out of the use or inability to use the\n              Work (including but not limited to damages for loss of goodwill,\n              work stoppage, computer failure or malfunction, or any and all\n              other commercial damages or losses), even if such Contributor\n              has been advised of the possibility of such damages.\n        \n           9. Accepting Warranty or Additional Liability. While redistributing\n              the Work or Derivative Works thereof, You may choose to offer,\n              and charge a fee for, acceptance of support, warranty, indemnity,\n              or other liability obligations and/or rights consistent with this\n              License. However, in accepting such obligations, You may act only\n              on Your own behalf and on Your sole responsibility, not on behalf\n              of any other Contributor, and only if You agree to indemnify,\n              defend, and hold each Contributor harmless for any liability\n              incurred by, or claims asserted against, such Contributor by reason\n              of your accepting any such warranty or additional liability.\n        \n           END OF TERMS AND CONDITIONS\n        \n           APPENDIX: How to apply the Apache License to your work.\n        \n              To apply the Apache License to your work, attach the following\n              boilerplate notice, with the fields enclosed by brackets \"[]\"\n              replaced with your own identifying information. (Don't include\n              the brackets!)  The text should be enclosed in the appropriate\n              comment syntax for the file format. We also recommend that a\n              file or class name and description of purpose be included on the\n              same \"printed page\" as the copyright notice for easier\n              identification within third-party archives.\n        \n           Copyright [yyyy] [name of copyright owner]\n        \n           Licensed under the Apache License, Version 2.0 (the \"License\");\n           you may not use this file except in compliance with the License.\n           You may obtain a copy of the License at\n        \n               http://www.apache.org/licenses/LICENSE-2.0\n        \n           Unless required by applicable law or agreed to in writing, software\n           distributed under the License is distributed on an \"AS IS\" BASIS,\n           WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n           See the License for the specific language governing permissions and\n           limitations under the License.\n        ",
+            "licenseFiles": [
+              "_internal/vieneu-3.8.3.dist-info/licenses/LICENSE"
+            ]
+          }
+        ]
+      },
+      "startup": {
+        "definition": "Launch with closed stdin; no model or capability probe. OS file cache not flushed.",
+        "samples": [
+          {
+            "seconds": 0.3457162000013341,
+            "peakTreeRssBytes": 44474368,
+            "exitCode": 0
+          },
+          {
+            "seconds": 0.30777709999892977,
+            "peakTreeRssBytes": 44584960,
+            "exitCode": 0
+          },
+          {
+            "seconds": 0.28806600000098115,
+            "peakTreeRssBytes": 44748800,
+            "exitCode": 0
+          }
+        ],
+        "medianSeconds": 0.30777709999892977
+      }
+    },
+    "downloader-worker": {
+      "bytes": 138065572,
+      "files": 352,
+      "nativeFiles": 70,
+      "top50": [
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\node.exe",
+          "bytes": 93580104
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\python312.dll",
+          "bytes": 6945272
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\libcrypto-3.dll",
+          "bytes": 5231472
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\curl_cffi.libs\\libcurl-impersonate-1172405423dc93b7aeed557f2a2ca325.dll",
+          "bytes": 3885056
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\downloader-worker.exe",
+          "bytes": 3559932
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\coreBundle.js",
+          "bytes": 3477183
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\utilsBundle.js",
+          "bytes": 3048692
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\ucrtbase.dll",
+          "bytes": 1362264
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\base_library.zip",
+          "bytes": 1333717
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\unicodedata.pyd",
+          "bytes": 1140592
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\types\\types.d.ts",
+          "bytes": 1131883
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\sync_api\\_generated.py",
+          "bytes": 972691
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\async_api\\_generated.py",
+          "bytes": 972025
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\types\\protocol.d.ts",
+          "bytes": 814210
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\libssl-3.dll",
+          "bytes": 794992
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\vite\\traceViewer\\assets\\defaultSettingsView-Ds6CBOo0.js",
+          "bytes": 654294
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\webp_codec.wasm",
+          "bytes": 565369
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\vite\\htmlReport\\report.js",
+          "bytes": 415864
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\vite\\recorder\\assets\\index-hrlLqLtq.js",
+          "bytes": 358603
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\vite\\dashboard\\assets\\index-hRvO4yU2.js",
+          "bytes": 336491
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\vite\\traceViewer\\assets\\codeMirrorModule-BbkfBe3n.js",
+          "bytes": 307393
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\vite\\dashboard\\assets\\codeMirrorModule-CQ8RZGBm.js",
+          "bytes": 307374
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\vite\\recorder\\assets\\codeMirrorModule-CVQWJZAA.js",
+          "bytes": 307374
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\vite\\traceViewer\\assets\\xtermModule-DywYcAf8.js",
+          "bytes": 288730
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\_decimal.pyd",
+          "bytes": 262000
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\certifi\\cacert.pem",
+          "bytes": 240216
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\greenlet\\_greenlet.cp312-win_amd64.pyd",
+          "bytes": 221696
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\pyexpat.pyd",
+          "bytes": 205304
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\_cffi_backend.cp312-win_amd64.pyd",
+          "bytes": 181248
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\_ssl.pyd",
+          "bytes": 179432
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\_lzma.pyd",
+          "bytes": 161136
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\LICENSE",
+          "bytes": 160555
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\vite\\dashboard\\assets\\index-AwgwcYie.css",
+          "bytes": 139111
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\_ctypes.pyd",
+          "bytes": 127480
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\VCRUNTIME140.dll",
+          "bytes": 120400
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\vite\\traceViewer\\defaultSettingsView.Bqk9acqE.css",
+          "bytes": 107049
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\utilsBundle.js.LICENSE",
+          "bytes": 106591
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\pyinstaller-6.22.3.dist-info\\RECORD",
+          "bytes": 101641
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\vite\\htmlReport\\report.css",
+          "bytes": 100452
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\vite\\traceViewer\\sw.bundle.js",
+          "bytes": 95459
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\_bz2.pyd",
+          "bytes": 86896
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\vite\\recorder\\assets\\index-BZpYJZ-P.css",
+          "bytes": 85502
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\_socket.pyd",
+          "bytes": 85496
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\vite\\traceViewer\\codicon.DCmgc-ay.ttf",
+          "bytes": 80340
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\vite\\dashboard\\assets\\codicon-DCmgc-ay.ttf",
+          "bytes": 80340
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\playwright\\driver\\package\\lib\\vite\\recorder\\assets\\codicon-DCmgc-ay.ttf",
+          "bytes": 80340
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\curl_cffi\\requests\\websockets.py",
+          "bytes": 74717
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\_asyncio.pyd",
+          "bytes": 74096
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\python3.dll",
+          "bytes": 70376
+        },
+        {
+          "path": "src-tauri\\resources\\downloader-worker\\_internal\\_hashlib.pyd",
+          "bytes": 68976
+        }
+      ],
+      "duplicateNativeFiles": [],
+      "packageInventory": {
+        "schemaVersion": 1,
+        "sourceLockFile": "python/requirements-downloader.txt",
+        "inventoryScope": "distributions used by PyInstaller Analysis plus the shipped bootloader; metadata and license files included",
+        "packages": [
+          {
+            "name": "certifi",
+            "version": "2026.7.22",
+            "license": "MPL-2.0",
+            "licenseFiles": [
+              "_internal/certifi-2026.7.22.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "cffi",
+            "version": "2.1.1",
+            "license": "MIT-0",
+            "licenseFiles": [
+              "_internal/cffi-2.1.1.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "curl_cffi",
+            "version": "0.16.3",
+            "license": "MIT",
+            "licenseFiles": [
+              "_internal/curl_cffi-0.16.3.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "greenlet",
+            "version": "3.5.6",
+            "license": "MIT AND PSF-2.0",
+            "licenseFiles": [
+              "_internal/greenlet-3.5.6.dist-info/licenses/LICENSE",
+              "_internal/greenlet-3.5.6.dist-info/licenses/LICENSE.PSF"
+            ]
+          },
+          {
+            "name": "playwright",
+            "version": "1.63.0",
+            "license": "Apache-2.0",
+            "licenseFiles": [
+              "_internal/playwright-1.63.0.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "pyee",
+            "version": "13.0.1",
+            "license": "MIT",
+            "licenseFiles": [
+              "_internal/pyee-13.0.1.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "pyinstaller",
+            "version": "6.22.3",
+            "license": "GPLv2-or-later with a special exception which allows to use PyInstaller to build and distribute non-free programs (including commercial ones)",
+            "licenseFiles": [
+              "_internal/pyinstaller-6.22.3.dist-info/licenses/COPYING.txt"
+            ]
+          },
+          {
+            "name": "typing_extensions",
+            "version": "4.16.0",
+            "license": "PSF-2.0",
+            "licenseFiles": [
+              "_internal/typing_extensions-4.16.0.dist-info/licenses/LICENSE"
+            ]
+          }
+        ]
+      },
+      "startup": {
+        "definition": "Launch with closed stdin; no model or capability probe. OS file cache not flushed.",
+        "samples": [
+          {
+            "seconds": 0.25123399999938556,
+            "peakTreeRssBytes": 29761536,
+            "exitCode": 0
+          },
+          {
+            "seconds": 0.17860129999826313,
+            "peakTreeRssBytes": 29945856,
+            "exitCode": 0
+          },
+          {
+            "seconds": 0.15640710000297986,
+            "peakTreeRssBytes": 29753344,
+            "exitCode": 0
+          }
+        ],
+        "medianSeconds": 0.17860129999826313
+      }
+    },
+    "ffmpeg": {
+      "bytes": 325572617,
+      "files": 4,
+      "nativeFiles": 0,
+      "top50": [
+        {
+          "path": "src-tauri\\resources\\ffmpeg\\ffmpeg.exe",
+          "bytes": 162888704
+        },
+        {
+          "path": "src-tauri\\resources\\ffmpeg\\ffprobe.exe",
+          "bytes": 162682880
+        },
+        {
+          "path": "src-tauri\\resources\\ffmpeg\\ffmpeg-build.json",
+          "bytes": 1032
+        },
+        {
+          "path": "src-tauri\\resources\\ffmpeg\\.gitkeep",
+          "bytes": 1
+        }
+      ],
+      "duplicateNativeFiles": []
+    },
+    "optional-runtime": {
+      "bytes": 68262663,
+      "files": 49,
+      "nativeFiles": 0,
+      "top50": [
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\uv.exe",
+          "bytes": 67852288
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\wheels\\antlr4_python3_runtime-4.9.3-py3-none-any.whl",
+          "bytes": 144613
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\wheels\\bandit_infer-0.1.0-py3-none-any.whl",
+          "bytes": 55838
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\asr\\service.py",
+          "bytes": 28561
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\ocr\\service.py",
+          "bytes": 28160
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\text_removal\\service.py",
+          "bytes": 11965
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\LICENSE-APACHE",
+          "bytes": 11357
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\text_removal\\pipeline.py",
+          "bytes": 9698
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\text_removal\\sttn_engine.py",
+          "bytes": 9004
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\tts\\service.py",
+          "bytes": 8815
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\ocr\\openvino_engine.py",
+          "bytes": 7852
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\asr\\openvino_backend.py",
+          "bytes": 6414
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\text_removal\\patch_cache.py",
+          "bytes": 6353
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\ocr\\backends.py",
+          "bytes": 6173
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\text_removal\\detection.py",
+          "bytes": 6142
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\text_removal\\sttn_model.py",
+          "bytes": 5751
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\model_manifest.py",
+          "bytes": 5548
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\asr\\openvino-models.json",
+          "bytes": 5281
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\__main__.py",
+          "bytes": 4967
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\asr\\openvino_models.py",
+          "bytes": 4952
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\text_removal\\masks.py",
+          "bytes": 4715
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\runtime-matrix.json",
+          "bytes": 4688
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\text_removal\\frames.py",
+          "bytes": 4523
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\asr\\backends.py",
+          "bytes": 4511
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\THIRD_PARTY_NOTICES.txt",
+          "bytes": 4456
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\text_removal\\inpainting.py",
+          "bytes": 4125
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\dialogue\\service.py",
+          "bytes": 3271
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\jc_worker_protocol.py",
+          "bytes": 3128
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\runtime_dependencies.py",
+          "bytes": 2563
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\text_removal\\intervals.py",
+          "bytes": 2226
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\tts\\providers.py",
+          "bytes": 1299
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\LICENSE-MIT",
+          "bytes": 1077
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\protocol.py",
+          "bytes": 408
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\wheels\\bandit-manifest.json",
+          "bytes": 325
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\requirements-optional-bandit.in",
+          "bytes": 223
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\requirements-optional-whisper-openvino.in",
+          "bytes": 217
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\README.txt",
+          "bytes": 189
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\requirements-optional-whisperx.in",
+          "bytes": 162
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\wheels\\manifest.json",
+          "bytes": 155
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\requirements-optional-ocr-openvino.in",
+          "bytes": 152
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\requirements-optional-acceleration.in",
+          "bytes": 151
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\requirements-optional-sttn.in",
+          "bytes": 78
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\__init__.py",
+          "bytes": 57
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\dialogue\\__init__.py",
+          "bytes": 53
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\text_removal\\__init__.py",
+          "bytes": 46
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\ocr\\__init__.py",
+          "bytes": 40
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\tts\\__init__.py",
+          "bytes": 36
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\asr\\__init__.py",
+          "bytes": 34
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\_version.py",
+          "bytes": 23
+        }
+      ],
+      "duplicateNativeFiles": []
+    }
+  },
+  "crossWorkerNativeDuplicates": {
+    "redundantBytes": 18235720,
+    "files": [
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-console-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-console-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-datetime-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-datetime-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-debug-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-debug-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-errorhandling-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-errorhandling-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-fibers-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-fibers-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-fibers-l1-1-1.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-fibers-l1-1-1.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-file-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-file-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-file-l1-2-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-file-l1-2-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-file-l2-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-file-l2-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-handle-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-handle-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-heap-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-heap-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-interlocked-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-interlocked-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-kernel32-legacy-l1-1-1.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-kernel32-legacy-l1-1-1.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-libraryloader-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-libraryloader-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-localization-l1-2-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-localization-l1-2-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-memory-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-memory-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-namedpipe-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-namedpipe-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-processenvironment-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-processenvironment-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-processthreads-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-processthreads-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-processthreads-l1-1-1.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-processthreads-l1-1-1.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-profile-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-profile-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-rtlsupport-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-rtlsupport-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-string-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-string-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-synch-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-synch-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-synch-l1-2-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-synch-l1-2-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-sysinfo-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-sysinfo-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-sysinfo-l1-2-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-sysinfo-l1-2-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-timezone-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-timezone-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-core-util-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-core-util-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-crt-conio-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-crt-conio-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-crt-convert-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-crt-convert-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-crt-environment-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-crt-environment-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-crt-filesystem-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-crt-filesystem-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-crt-heap-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-crt-heap-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-crt-locale-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-crt-locale-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-crt-math-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-crt-math-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-crt-process-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-crt-process-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-crt-runtime-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-crt-runtime-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-crt-stdio-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-crt-stdio-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-crt-string-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-crt-string-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-crt-time-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-crt-time-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\api-ms-win-crt-utility-l1-1-0.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\api-ms-win-crt-utility-l1-1-0.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\libcrypto-3.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\libcrypto-3.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\libffi-8.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\libffi-8.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\libssl-3.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\libssl-3.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\pyexpat.pyd",
+        "src-tauri\\resources\\downloader-worker\\_internal\\pyexpat.pyd"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\python3.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\python3.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\python312.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\python312.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\select.pyd",
+        "src-tauri\\resources\\downloader-worker\\_internal\\select.pyd"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\ucrtbase.dll",
+        "src-tauri\\resources\\downloader-worker\\_internal\\ucrtbase.dll"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\unicodedata.pyd",
+        "src-tauri\\resources\\downloader-worker\\_internal\\unicodedata.pyd"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\_asyncio.pyd",
+        "src-tauri\\resources\\downloader-worker\\_internal\\_asyncio.pyd"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\_bz2.pyd",
+        "src-tauri\\resources\\downloader-worker\\_internal\\_bz2.pyd"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\_cffi_backend.cp312-win_amd64.pyd",
+        "src-tauri\\resources\\downloader-worker\\_internal\\_cffi_backend.cp312-win_amd64.pyd"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\_ctypes.pyd",
+        "src-tauri\\resources\\downloader-worker\\_internal\\_ctypes.pyd"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\_decimal.pyd",
+        "src-tauri\\resources\\downloader-worker\\_internal\\_decimal.pyd"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\_hashlib.pyd",
+        "src-tauri\\resources\\downloader-worker\\_internal\\_hashlib.pyd"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\_lzma.pyd",
+        "src-tauri\\resources\\downloader-worker\\_internal\\_lzma.pyd"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\_multiprocessing.pyd",
+        "src-tauri\\resources\\downloader-worker\\_internal\\_multiprocessing.pyd"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\_overlapped.pyd",
+        "src-tauri\\resources\\downloader-worker\\_internal\\_overlapped.pyd"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\_queue.pyd",
+        "src-tauri\\resources\\downloader-worker\\_internal\\_queue.pyd"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\_socket.pyd",
+        "src-tauri\\resources\\downloader-worker\\_internal\\_socket.pyd"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\_ssl.pyd",
+        "src-tauri\\resources\\downloader-worker\\_internal\\_ssl.pyd"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\_uuid.pyd",
+        "src-tauri\\resources\\downloader-worker\\_internal\\_uuid.pyd"
+      ],
+      [
+        "src-tauri\\resources\\ai-worker\\_internal\\_wmi.pyd",
+        "src-tauri\\resources\\downloader-worker\\_internal\\_wmi.pyd"
+      ]
+    ],
+    "note": "Intentional independent frozen environments; not removed without ABI/loader verification."
+  },
+  "installer": {
+    "path": "D:\\Tiktok\\tool-dowload\\app-desktop\\src-tauri\\target\\release\\bundle\\nsis\\JC AI_0.1.13-preview_x64-setup.exe",
+    "bytes": 368267204,
+    "modifiedAt": "2026-10-04T10:14:47.231438+00:00",
+    "sha256": "e41dff580f5c05bfc077ba8957b0ce5216abeb9baf174dfb15dd8c1aea455741"
+  },
+  "installedResourceBytes": 973831073,
+  "limitations": [
+    "Installer may predate current source; timestamp/hash establish provenance.",
+    "Resource bytes exclude app executable, WebView and user models; not total installed disk usage.",
+    "No visible-window/first-project timing in this command."
+  ]
+}

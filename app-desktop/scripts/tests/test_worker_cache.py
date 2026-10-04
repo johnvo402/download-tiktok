@@ -31,6 +31,18 @@ class WorkerCacheTests(unittest.TestCase):
                 file.write_text("initial")
         self.assertNotEqual(key, cache.fingerprint(self.root, "python-two"))
 
+    def test_downloader_and_ai_sources_are_fingerprinted_independently(self):
+        ai_key = cache.fingerprint(self.root, "python-one", "ai")
+        file = self.root / "python/downloader_worker/__main__.py"
+        file.parent.mkdir(parents=True)
+        file.write_text("downloader")
+        self.assertEqual(ai_key, cache.fingerprint(self.root, "python-one", "ai"))
+        downloader_key = cache.fingerprint(self.root, "python-one", "downloader")
+        (self.root / "python/worker/__main__.py").write_text("changed AI")
+        self.assertEqual(downloader_key, cache.fingerprint(self.root, "python-one", "downloader"))
+        file.write_text("changed downloader")
+        self.assertNotEqual(downloader_key, cache.fingerprint(self.root, "python-one", "downloader"))
+
     def test_app_version_and_bytecode_do_not_change_key(self):
         key = cache.fingerprint(self.root, "python-one")
         (self.root / "package.json").write_text('{"version":"2.0.0"}')

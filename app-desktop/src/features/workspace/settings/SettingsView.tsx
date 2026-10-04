@@ -1,5 +1,5 @@
 import IntelWhisperCard from "./IntelWhisperCard";
-import { createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createResource, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { useNavigate, useSearchParams } from '@solidjs/router';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -102,6 +102,9 @@ export default function SettingsView() {
   const [showRemoveDialogueModelConfirm, setShowRemoveDialogueModelConfirm] = createSignal(false);
   const [dialogueModelProgress, setDialogueModelProgress] = createSignal<DialogueModelProgress>({ progress: 0, downloadedBytes: 0, totalBytes: 446_680_129, message: 'Đang chuẩn bị tải model…' });
   const [cudaInstallTarget, setCudaInstallTarget] = createSignal<'asr' | 'ocr' | 'tts'>();
+  const [cudaPlan] = createResource(() => cudaInstallTarget()
+    ? { feature: cudaInstallTarget() === 'asr' && settings()?.asr.engine === 'whisperX' ? 'whisperx' as const : 'acceleration' as const }
+    : undefined, ({ feature }) => optionalRuntimeService.plan(feature, 'cuda'));
   const [cudaInstalling, setCudaInstalling] = createSignal(false);
   const [cudaInstallProgress, setCudaInstallProgress] = createSignal('');
   const [cudaInstallError, setCudaInstallError] = createSignal('');
@@ -1030,10 +1033,10 @@ export default function SettingsView() {
         <Modal title={`Dùng NVIDIA cho ${target() === 'tts' ? 'giọng đọc' : target() === 'ocr' ? 'đọc chữ' : 'nhận dạng lời thoại'}?`}
           description="Ứng dụng sẽ cài thành phần CUDA và model đang chọn trong cùng một lượt. Thành phần đã có được dùng lại. Cần Internet và đủ dung lượng trống."
           onClose={() => { if (!cudaInstalling()) setCudaInstallTarget(undefined); }}>
-          <div class="model-confirm-card"><div class="job-banner-icon"><Sparkles size={17} /></div><div><strong>{target() === 'tts' ? 'VieNeu-TTS v3 Turbo' : target() === 'ocr' ? `RapidOCR · ${settings()?.asr.ocrModel}` : `${settings()?.asr.engine === 'whisperX' ? 'WhisperX' : 'faster-whisper'} · ${settings()?.asr.model}`}</strong><p>Phần CUDA dùng chung có thể cần khoảng 6–7 GB khi cài lần đầu. Model đã tải sẽ không bị tải lại.</p></div></div>
+          <div class="model-confirm-card"><div class="job-banner-icon"><Sparkles size={17} /></div><div><strong>{target() === 'tts' ? 'VieNeu-TTS v3 Turbo' : target() === 'ocr' ? `RapidOCR · ${settings()?.asr.ocrModel}` : `${settings()?.asr.engine === 'whisperX' ? 'WhisperX' : 'faster-whisper'} · ${settings()?.asr.model}`}</strong><Show when={cudaPlan()} fallback={<p>{cudaPlan.error ? 'Không xác định được các thành phần cần cài. Hãy thử lại.' : 'Đang kiểm tra các phần đã có…'}</p>}>{plan => <><p>Tải mới khoảng {formatBytes(plan().estimatedDownloadBytes)} · lưu thêm khoảng {formatBytes(plan().estimatedInstalledBytes)}. Model đã tải được dùng lại.</p><Show when={plan().stagingBytes}><p>Cần thêm tạm thời khoảng {formatBytes(plan().stagingBytes)} để bảo vệ bản cài đang dùng.</p></Show><Show when={plan().reusedComponents.length}><p>Dùng lại: {plan().reusedComponents.join(', ')}</p></Show><small>Dung lượng chưa gồm model; các gói còn trong cache có thể không cần tải lại.</small></>}</Show></div></div>
           <Show when={cudaInstalling()}><p class="provider-help" role="status"><span class="spin status-spinner" /> {cudaInstallProgress()}</p></Show>
           <Show when={cudaInstallError()}><div class="provider-feedback provider-feedback-error" role="alert">{cudaInstallError()}</div></Show>
-          <footer class="modal-actions"><button class="button button-quiet" type="button" disabled={cudaInstalling()} onClick={() => setCudaInstallTarget(undefined)}>Hủy</button><button class="button button-primary" type="button" disabled={cudaInstalling()} onClick={() => void installCudaFor()}>{cudaInstalling() ? 'Đang cài…' : 'Tải và dùng CUDA'}</button></footer>
+          <footer class="modal-actions"><button class="button button-quiet" type="button" disabled={cudaInstalling()} onClick={() => setCudaInstallTarget(undefined)}>Hủy</button><button class="button button-primary" type="button" disabled={cudaInstalling() || cudaPlan.loading || !!cudaPlan.error || !cudaPlan()} onClick={() => void installCudaFor()}>{cudaInstalling() ? 'Đang cài…' : 'Tải và dùng CUDA'}</button></footer>
         </Modal>
       }</Show>
       <Show when={showAsrModelConfirm()}>

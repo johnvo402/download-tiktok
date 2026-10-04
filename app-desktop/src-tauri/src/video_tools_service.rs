@@ -1,3 +1,4 @@
+use crate::worker_manager::WorkerCommandExt;
 use crate::hardware_acceleration::{self, EncodingProfile, VideoCodec, VideoEncoder};
 use crate::project_service::ProjectStore;
 use chrono::Utc;
@@ -320,7 +321,7 @@ pub fn start_tiktok_browser_login(
     let profile_directory = tiktok_browser_profile_directory(&app)?;
     fs::create_dir_all(&profile_directory)
         .map_err(|error| format!("Không thể chuẩn bị hồ sơ trình duyệt TikTok: {error}"))?;
-    let worker = crate::runtime_paths::worker_dir()?;
+    let worker = crate::runtime_paths::downloader_worker_dir()?;
     let request = json!({
         "operation": "tiktok_browser_login",
         "profileDirectory": profile_directory,
@@ -545,7 +546,7 @@ pub fn start_tiktok_download(
         None
     };
     let job_id = Uuid::new_v4().to_string();
-    let worker = crate::runtime_paths::worker_dir()?;
+    let worker = crate::runtime_paths::downloader_worker_dir()?;
     let request = json!({ "operation": "tiktok_drama_download", "url": url, "outputDirectory": destination, "cookieFile": cookie_file, "browserProfileDirectory": browser_profile, "useBrowserCookies": use_browser_cookies });
     let cancelled = Arc::new(AtomicBool::new(false));
     insert_job(jobs, &job_id, &project_id, cancelled.clone())?;
@@ -732,9 +733,9 @@ fn run_tiktok_worker(
     project_id: &str,
     cancelled: &AtomicBool,
 ) -> Result<(), String> {
-    let mut child = crate::runtime_paths::worker_command(worker)
+    let mut child = crate::runtime_paths::downloader_command(worker)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
-        .spawn().map_err(|error| format!("Không thể khởi chạy downloader worker: {error}. Hãy kiểm tra Python worker và dependencies TikTok."))?;
+        .spawn_worker().map_err(|error| format!("Không thể khởi chạy downloader worker: {error}. Hãy kiểm tra thành phần tải video trong ứng dụng."))?;
     let stdout = child.stdout.take().ok_or_else(|| "Không mở được output của downloader.".to_string())?;
     let (tx, rx) = mpsc::channel::<String>();
     thread::spawn(move || for line in BufReader::new(stdout).lines().flatten() { if tx.send(line).is_err() { break; } });
@@ -743,8 +744,14 @@ fn run_tiktok_worker(
     bytes.push(b'\n');
     stdin.write_all(&bytes).map_err(|error| format!("Không thể gửi yêu cầu tải TikTok: {error}"))?;
     drop(stdin);
+    let started = std::time::Instant::now();
     let mut terminal_received = false;
     loop {
+        if started.elapsed() > Duration::from_secs(12 * 3600) {
+            kill_process_tree(&mut child);
+            cleanup_tiktok_download_partials(request);
+            return Err("Tải video vượt thời gian cho phép; hãy thử lại.".into());
+        }
         if cancelled.load(Ordering::SeqCst) {
             kill_process_tree(&mut child);
             cleanup_tiktok_download_partials(request);
@@ -787,8 +794,8 @@ fn run_tiktok_worker(
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
-    let _ = child.wait();
-    Err("Không nhận được kết quả tải video.".into())
+    let status = child.wait().map_err(|error| error.to_string())?;
+    if terminal_received && status.success() { Ok(()) } else { Err("Không nhận được kết quả tải video.".into()) }
 }
 
 fn cleanup_tiktok_download_partials(request: &Value) {

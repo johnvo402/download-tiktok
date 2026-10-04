@@ -1,4 +1,6 @@
-@import "tailwindcss";
+/* Scan UI sources only, not Python runtimes, media fixtures or build resources. */
+@import "tailwindcss" source(none);
+@source "./";
 
 /* Native visuals share Export; DOM nodes beneath the HWND supply hit testing only. */
 .native-interaction-only .overlay-blur::before,

@@ -22,6 +22,6 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 }
 
 export const runtimeService = {
-  health: () => call<RuntimeHealth>('get_runtime_health'),
+  health: (deep = true) => call<RuntimeHealth>('get_runtime_health', { deep }),
   exportDiagnostics: (destination: string) => call<string>('export_diagnostics', { destination }),
 };

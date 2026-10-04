@@ -10,6 +10,8 @@ scripts/**/__pycache__/
 .release-cache/
 release/
 python/.release-venv/
+python/.release-ai-venv/
+python/.release-downloader-venv/
 python/build/
 python/dist/
 python/*.spec.bak
@@ -18,7 +20,11 @@ src-tauri/resources/ffmpeg/*.dll
 src-tauri/resources/ffmpeg/ffmpeg-build.json
 src-tauri/resources/ai-worker/*
 !src-tauri/resources/ai-worker/.gitkeep
+src-tauri/resources/downloader-worker/*
+!src-tauri/resources/downloader-worker/.gitkeep
 src-tauri/resources/optional-runtime/uv.exe
 src-tauri/resources/optional-runtime/source/
+src-tauri/resources/optional-runtime/wheels/
+src-tauri/resources/optional-runtime/THIRD_PARTY_NOTICES.txt
 .DS_Store
 Thumbs.db

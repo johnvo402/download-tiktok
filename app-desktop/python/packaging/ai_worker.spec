@@ -1,8 +1,11 @@
 # PyInstaller onedir spec for the stdin/stdout JSONL AI worker.
-from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files
 from pathlib import Path
 
 ROOT = Path(SPECPATH).parent.resolve()
+import sys
+sys.path.insert(0, str(ROOT / "packaging"))
+from bundle_helpers import dynamic_package, attach_licenses
 datas = [(str(ROOT / "worker/asr/openvino-models.json"), "worker/asr")]
 binaries = []
 hiddenimports = []
@@ -20,14 +23,12 @@ for package in (
     "omegaconf",
     "pyclipper",
     "colorlog",
-    "playwright",
-    "curl_cffi",
+    "sea_g2p",
 ):
-    package_datas, package_binaries, package_hiddenimports = collect_all(package)
+    package_datas, package_binaries, package_hiddenimports = dynamic_package(package)
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_hiddenimports
-    hiddenimports += collect_submodules(package)
 
 datas += collect_data_files("vieneu", includes=["assets/**"])
 
@@ -53,13 +54,6 @@ hiddenimports += [
     "worker.text_removal.inpainting",
     "worker.tts.providers",
     "worker.dialogue.service",
-    "worker.tiktok_drama.service",
-    "worker.tiktok_drama.browser",
-    "worker.tiktok_drama.browser_session",
-    "worker.tiktok_drama.config",
-    "worker.tiktok_drama.cookies",
-    "worker.tiktok_drama.metadata",
-    "worker.tiktok_drama.urls",
 ]
 
 a = Analysis(
@@ -78,10 +72,14 @@ a = Analysis(
         "numba", "llvmlite", "scipy", "pandas",
         "vieneu.fast", "vieneu.turbo", "vieneu.core_xpu", "vieneu.standard",
         "vieneu.remote", "vieneu.serve", "vieneu.v3nano", "vieneu.v3_turbo_serve",
-        "jupyter", "IPython",
+        "jupyter", "IPython", "pytest", "tkinter", "playwright", "curl_cffi", "downloader_worker",
     ],
     noarchive=False,
 )
+attach_licenses(a)
+# Video decoding uses PyAV/FFmpeg, never OpenCV VideoCapture/VideoWriter.
+# Keep cv2 itself for OCR/masks; its unused video plugin duplicates FFmpeg.
+a.binaries = [row for row in a.binaries if not Path(row[0]).name.lower().startswith("opencv_videoio_ffmpeg")]
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz,

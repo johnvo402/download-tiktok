@@ -14,8 +14,9 @@ use transcript_service::Transcript;
 static PROJECT_JOB_START_LOCK: Mutex<()> = Mutex::new(());
 
 #[tauri::command]
-pub fn get_optional_runtime_status() -> optional_runtime::RuntimeStatus {
-    optional_runtime::status()
+pub async fn get_optional_runtime_status() -> Result<optional_runtime::RuntimeStatus, String> {
+    tauri::async_runtime::spawn_blocking(optional_runtime::status)
+        .await.map_err(|error|format!("Không kiểm tra được các thành phần đã cài: {error}"))
 }
 
 #[tauri::command]
@@ -75,8 +76,8 @@ pub fn list_projects(app: tauri::AppHandle) -> Result<ProjectListResponse, Strin
 }
 
 #[tauri::command]
-pub fn get_runtime_health(app: tauri::AppHandle) -> crate::runtime_health::RuntimeHealth {
-    crate::runtime_health::check(&app)
+pub async fn get_runtime_health(app: tauri::AppHandle, deep: Option<bool>) -> Result<crate::runtime_health::RuntimeHealth, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::runtime_health::check_scoped(&app,deep.unwrap_or(true))).await.map_err(|e|e.to_string())
 }
 
 #[tauri::command]
@@ -1204,6 +1205,19 @@ pub async fn get_text_removal_environment(app: tauri::AppHandle) -> Result<crate
     tauri::async_runtime::spawn_blocking(move || crate::text_removal_service::environment(app))
         .await
         .map_err(|error| format!("Không thể kiểm tra mô hình xóa chữ: {error}"))?
+}
+
+#[tauri::command]
+pub async fn get_optional_runtime_plan(feature: String, profile: String) -> Result<crate::runtime_registry::InstallPlan, String> {
+    tauri::async_runtime::spawn_blocking(move || optional_runtime::plan(&feature, &profile)).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
+pub async fn check_optional_runtime_feature(app: tauri::AppHandle, feature: String) -> Result<optional_runtime::FeatureHealth, String> {
+    tauri::async_runtime::spawn_blocking(move || optional_runtime::check_feature(&app, &feature)).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
+pub async fn uninstall_optional_runtime(app: tauri::AppHandle, feature: String) -> Result<optional_runtime::RuntimeStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || optional_runtime::uninstall(&app, &feature)).await.map_err(|e|e.to_string())?
 }
 
 #[tauri::command]

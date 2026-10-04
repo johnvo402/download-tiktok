@@ -38,8 +38,8 @@ def main() -> int:
 
     payload = {
         "schemaVersion": 1,
-        "sourceLockFile": "python/requirements-release.txt",
-        "inventoryScope": "distributions with metadata bundled in this PyInstaller worker",
+        "sourceLockFile": "python/requirements-downloader.txt" if root.name == "downloader-worker" else "python/requirements-release.txt + python/requirements-sdk.txt",
+        "inventoryScope": "distributions used by PyInstaller Analysis plus the shipped bootloader; metadata and license files included",
         "packages": sorted(packages, key=lambda item: str(item["name"]).casefold()),
     }
     (root / "python-packages.json").write_text(

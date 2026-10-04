@@ -64,11 +64,12 @@ if ($Package.version -ne $Tauri.version -or $Package.version -ne $CargoVersion -
 
 Invoke-ReleaseStage "Verify and stage FFmpeg" { & (Join-Path $PSScriptRoot "build-ffmpeg.ps1") -Force }
 Invoke-ReleaseStage "Build or reuse Python worker" { & (Join-Path $PSScriptRoot "build-worker.ps1") -Python $Python }
-Invoke-ReleaseStage "Stage optional runtime installer" { & (Join-Path $PSScriptRoot "build-optional-runtime.ps1") }
+Invoke-ReleaseStage "Stage optional runtime installer" { & (Join-Path $PSScriptRoot "build-optional-runtime.ps1") -Python $Python }
 foreach ($path in @(
     (Join-Path $Root "src-tauri\resources\ffmpeg\ffmpeg.exe"),
     (Join-Path $Root "src-tauri\resources\ffmpeg\ffprobe.exe"),
     (Join-Path $Root "src-tauri\resources\ai-worker\ai-worker.exe"),
+    (Join-Path $Root "src-tauri\resources\downloader-worker\downloader-worker.exe"),
     (Join-Path $Root "src-tauri\resources\optional-runtime\uv.exe"),
     (Join-Path $Root "src-tauri\resources\optional-runtime\source\worker\__main__.py"),
     (Join-Path $Root "src-tauri\resources\optional-runtime\source\requirements-optional-whisperx.in"),
@@ -155,6 +156,9 @@ Copy-Item -LiteralPath (Join-Path $Root "src-tauri\resources\THIRD_PARTY_LICENSE
 Copy-Item -LiteralPath (Join-Path $Root "src-tauri\resources\ffmpeg\ffmpeg-build.json") -Destination $Release -Force
 Copy-Item -LiteralPath (Join-Path $Root "src-tauri\resources\ai-worker\THIRD_PARTY_NOTICES.txt") -Destination $Release -Force
 Copy-Item -LiteralPath (Join-Path $Root "src-tauri\resources\ai-worker\python-packages.json") -Destination $Release -Force
+Copy-Item -LiteralPath (Join-Path $Root "src-tauri\resources\downloader-worker\python-packages.json") -Destination (Join-Path $Release "downloader-python-packages.json") -Force
+Copy-Item -LiteralPath (Join-Path $Root "src-tauri\resources\downloader-worker\THIRD_PARTY_NOTICES.txt") -Destination (Join-Path $Release "DOWNLOADER_THIRD_PARTY_NOTICES.txt") -Force
+Copy-Item -LiteralPath (Join-Path $Root "python\runtime-matrix.json") -Destination $Release -Force
 Copy-Item -LiteralPath (Join-Path $Root "src-tauri\resources\dependency-license-inventory.json") -Destination $Release -Force
 Copy-Item -LiteralPath (Join-Path $Root "src-tauri\resources\THIRD_PARTY_DEPENDENCY_LICENSES.txt") -Destination $Release -Force
 Copy-Item -LiteralPath (Join-Path $Root "docs\RELEASE_NOTES.md") -Destination $Release -Force
@@ -165,6 +169,7 @@ $signature = Get-AuthenticodeSignature -LiteralPath $Artifact
     version = $Package.version
     workerVersion = $WorkerVersion
     workerFingerprint = (Get-Content (Join-Path $Root "src-tauri\resources\ai-worker\worker-build.json") -Raw | ConvertFrom-Json).fingerprint
+    downloaderFingerprint = (Get-Content (Join-Path $Root "src-tauri\resources\downloader-worker\worker-build.json") -Raw | ConvertFrom-Json).fingerprint
     installerCompression = $Compression
     installerBytes = $Setup.Length
     target = "windows-x64"
@@ -174,6 +179,8 @@ $signature = Get-AuthenticodeSignature -LiteralPath $Artifact
     builtAtUtc = [DateTime]::UtcNow.ToString("o")
     ffmpeg = Get-Content (Join-Path $Root "src-tauri\resources\ffmpeg\ffmpeg-build.json") -Raw | ConvertFrom-Json
     pythonPackages = Get-Content (Join-Path $Root "src-tauri\resources\ai-worker\python-packages.json") -Raw | ConvertFrom-Json
+    downloaderPackages = Get-Content (Join-Path $Root "src-tauri\resources\downloader-worker\python-packages.json") -Raw | ConvertFrom-Json
+    runtimeMatrix = Get-Content (Join-Path $Root "python\runtime-matrix.json") -Raw | ConvertFrom-Json
 } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $Release "release-manifest.json") -Encoding utf8
 $Timings | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $Release "build-timings.json") -Encoding utf8
 if ($env:GITHUB_STEP_SUMMARY) {

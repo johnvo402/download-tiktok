@@ -1,5 +1,5 @@
 import { Route, Router } from '@solidjs/router';
-import { createEffect, createSignal, onCleanup, onMount } from 'solid-js';
+import { createEffect, createSignal, lazy, onCleanup, onMount } from 'solid-js';
 import type { JSX } from 'solid-js';
 import { listen } from '@tauri-apps/api/event';
 import {
@@ -7,8 +7,8 @@ import {
 } from './project-state';
 import type { TranscriptionEvent, TranslationJobEvent, TtsJobEvent } from '../features/transcript/types';
 import StartPage from '../features/projects/StartPage';
-import WorkspaceLayout from '../features/workspace/WorkspaceLayout';
-import SettingsView from '../features/workspace/settings/SettingsView';
+const WorkspaceLayout = lazy(() => import('../features/workspace/WorkspaceLayout'));
+const SettingsView = lazy(() => import('../features/workspace/settings/SettingsView'));
 import StartupSplash from './StartupSplash';
 import Toast from '../shared/components/Toast';
 import JobsDock from '../shared/components/JobsDock';

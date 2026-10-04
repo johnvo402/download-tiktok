@@ -1,7 +1,7 @@
 # Windows release build
 
 The Windows release is a per-user NSIS installer for Windows 10/11 x64. The
-installer includes the Tauri application, the frozen Python AI worker, FFmpeg,
+installer includes the Tauri application, the frozen Python AI worker, a separate browser downloader worker, FFmpeg,
 FFprobe, and third-party notices. End users do not need Node.js, Rust, Python,
 or FFmpeg on `PATH`. Windows WebView2 is installed by the official bootstrapper
 when it is not already available.
@@ -228,3 +228,8 @@ exporter. See `src-tauri/resources/THIRD_PARTY_LICENSES.txt`,
 `docs/THIRD_PARTY_NOTICES.md`, and the generated `release/ffmpeg-build.json` for
 the exact pinned build and source references. Obtain legal review and meet the
 GPL corresponding-source obligations before public or commercial distribution.
+
+## Runtime packaging audit
+
+See [Task 9 runtime report](TASK_09_RUNTIME_PACKAGING.md) for the worker split,
+optional dependency graph, install/uninstall safety and measured artifact sizes.

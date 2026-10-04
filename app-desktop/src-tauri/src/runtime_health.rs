@@ -24,6 +24,9 @@ pub struct RuntimeHealth {
 }
 
 pub fn check(app: &AppHandle) -> RuntimeHealth {
+    check_scoped(app, true)
+}
+pub fn check_scoped(app: &AppHandle, deep: bool) -> RuntimeHealth {
     let projects = app
         .path()
         .app_data_dir()
@@ -32,10 +35,10 @@ pub fn check(app: &AppHandle) -> RuntimeHealth {
     let storage_available = projects.as_ref().is_some_and(storage_writable);
     let ffmpeg = runtime_paths::resolve_ffmpeg();
     let ffprobe = runtime_paths::resolve_ffprobe();
-    let ffmpeg_version = ffmpeg
+    let ffmpeg_version = if deep { ffmpeg
         .as_ref()
         .ok()
-        .and_then(|path| runtime_paths::program_version(path));
+        .and_then(|path| runtime_paths::program_version(path)) } else { None };
     let bundled_worker = runtime_paths::packaged_worker_dir().is_some();
     let worker_available = bundled_worker || runtime_paths::development_worker_dir().is_some();
     RuntimeHealth {
@@ -44,9 +47,9 @@ pub fn check(app: &AppHandle) -> RuntimeHealth {
         os: std::env::consts::OS.to_string(),
         architecture: std::env::consts::ARCH.to_string(),
         project_storage_available: storage_available,
-        ffmpeg_available: runtime_paths::binary_available(ffmpeg),
+        ffmpeg_available: if deep { runtime_paths::binary_available(ffmpeg) } else { ffmpeg.is_ok_and(|p|p.is_file()) },
         ffmpeg_version,
-        ffprobe_available: runtime_paths::binary_available(ffprobe),
+        ffprobe_available: if deep { runtime_paths::binary_available(ffprobe) } else { ffprobe.is_ok_and(|p|p.is_file()) },
         worker_available,
         worker_mode: if bundled_worker {
             "bundled".into()

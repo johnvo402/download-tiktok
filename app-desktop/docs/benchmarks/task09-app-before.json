@@ -1,0 +1,41 @@
+{
+  "measuredAt": "2026-10-04T08:19:03.912Z",
+  "projectListReadyMs": 61060.5091,
+  "projectReadMs": 12.257699999994657,
+  "treeRssBytes": 636559360,
+  "processes": [
+    {
+      "name": "ai-video-localization.exe",
+      "rssBytes": 35237888
+    },
+    {
+      "name": "conhost.exe",
+      "rssBytes": 8876032
+    },
+    {
+      "name": "msedgewebview2.exe",
+      "rssBytes": 167538688
+    },
+    {
+      "name": "msedgewebview2.exe",
+      "rssBytes": 16756736
+    },
+    {
+      "name": "msedgewebview2.exe",
+      "rssBytes": 172515328
+    },
+    {
+      "name": "msedgewebview2.exe",
+      "rssBytes": 58298368
+    },
+    {
+      "name": "msedgewebview2.exe",
+      "rssBytes": 24215552
+    },
+    {
+      "name": "msedgewebview2.exe",
+      "rssBytes": 153120768
+    }
+  ],
+  "definition": "Debug app + running Vite; disk cache not flushed. Project read measures command, not completed native video load."
+}

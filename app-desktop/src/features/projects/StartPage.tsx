@@ -44,7 +44,7 @@ export default function StartPage() {
 
   onMount(() => {
     void refresh();
-    void runtimeService.health().then(setRuntimeHealth).catch(() => undefined);
+    void runtimeService.health(false).then(setRuntimeHealth).catch(() => undefined);
   });
 
   const filteredProjects = createMemo(() => {

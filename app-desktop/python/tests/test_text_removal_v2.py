@@ -8,8 +8,11 @@ import unittest
 from unittest.mock import patch
 import zlib
 
-import av
-import numpy as np
+try:
+    import av
+    import numpy as np
+except ImportError as error:
+    raise unittest.SkipTest("Install the media fixture dependencies to run ROI integration tests") from error
 
 from worker.text_removal.frames import Frame, FrameSource
 from worker.text_removal.masks import make_mask, plan_windows, scene_ids, context_masks, MaskProfile

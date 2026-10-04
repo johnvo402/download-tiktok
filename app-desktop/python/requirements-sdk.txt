@@ -1,0 +1,2 @@
+rapidocr==3.9.2
+vieneu==3.8.3

@@ -1,0 +1,66 @@
+{
+  "plan": {
+    "feature": "bandit",
+    "backend": "cpu",
+    "runtimeVersion": 7,
+    "missingComponents": [
+      {
+        "label": "Tách thoại BandIt",
+        "downloadBytes": 5000000,
+        "installedBytes": 12000000,
+        "packages": [
+          "bandit-infer",
+          "soundfile"
+        ],
+        "dependsOn": [
+          "torch"
+        ]
+      }
+    ],
+    "reusedComponents": [
+      "Bộ tính toán CPU dùng chung"
+    ],
+    "estimatedDownloadBytes": 5000000,
+    "estimatedInstalledBytes": 12000000,
+    "stagingBytes": 3546747486,
+    "alreadyInstalled": false
+  },
+  "installed": {
+    "profile": "cpu",
+    "installedFeatures": [
+      "bandit",
+      "sttn"
+    ],
+    "nvidiaDetected": false,
+    "featureProfiles": {
+      "bandit": "cpu",
+      "sttn": "cpu"
+    },
+    "runtimeVersion": 7
+  },
+  "checked": {
+    "feature": "bandit",
+    "installed": true,
+    "verified": true,
+    "backend": "cpu",
+    "message": "Bộ xử lý đã sẵn sàng."
+  },
+  "removed": {
+    "profile": "cpu",
+    "installedFeatures": [
+      "sttn"
+    ],
+    "nvidiaDetected": false,
+    "featureProfiles": {
+      "sttn": "cpu"
+    },
+    "runtimeVersion": 7
+  },
+  "survivor": {
+    "feature": "sttn",
+    "installed": true,
+    "verified": true,
+    "backend": "cpu",
+    "message": "Bộ xử lý đã sẵn sàng."
+  }
+}

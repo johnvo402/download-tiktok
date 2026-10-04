@@ -89,9 +89,11 @@ jobs:
         working-directory: app-desktop
         run: npm run build
       - name: Prepare worker resource path for Rust tests
-        run: New-Item -ItemType Directory -Force -Path app-desktop/src-tauri/resources/ai-worker | Out-Null
+        run: New-Item -ItemType Directory -Force -Path app-desktop/src-tauri/resources/ai-worker, app-desktop/src-tauri/resources/downloader-worker | Out-Null
       - name: Run Rust tests
         run: cargo test --locked --manifest-path app-desktop/src-tauri/Cargo.toml --lib
+      - name: Install model-free media fixture dependencies
+        run: python -m pip install "av==18.1.0" "numpy==2.5.3" "packaging==26.3"
       - name: Run Python worker and cache tests
         working-directory: app-desktop
         run: |
@@ -142,21 +144,23 @@ jobs:
         run: |
           npm ci
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          New-Item -ItemType Directory -Force -Path src-tauri/resources/ai-worker | Out-Null
+          New-Item -ItemType Directory -Force -Path src-tauri/resources/ai-worker, src-tauri/resources/downloader-worker | Out-Null
           ./node_modules/.bin/tauri.cmd build --no-bundle -- --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Fingerprint frozen worker inputs
         id: worker
         working-directory: app-desktop
         run: |
-          $key = python scripts/worker-cache.py key
+          $key = python scripts/worker-cache.py key --kind all
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "key=worker-windows-x64-$key" >> $env:GITHUB_OUTPUT
       - name: Look up packaged worker without downloading it
         id: worker-lookup
         uses: actions/cache/restore@v4
         with:
-          path: app-desktop/src-tauri/resources/ai-worker
+          path: |
+            app-desktop/src-tauri/resources/ai-worker
+            app-desktop/src-tauri/resources/downloader-worker
           key: ${{ steps.worker.outputs.key }}
           lookup-only: true
       - name: Build changed worker
@@ -167,7 +171,9 @@ jobs:
         if: steps.worker-lookup.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: app-desktop/src-tauri/resources/ai-worker
+          path: |
+            app-desktop/src-tauri/resources/ai-worker
+            app-desktop/src-tauri/resources/downloader-worker
           key: ${{ steps.worker.outputs.key }}
       - name: Cache pinned FFmpeg download
         id: ffmpeg
@@ -228,13 +234,15 @@ jobs:
         id: worker
         working-directory: app-desktop
         run: |
-          $key = python scripts/worker-cache.py key
+          $key = python scripts/worker-cache.py key --kind all
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "key=worker-windows-x64-$key" >> $env:GITHUB_OUTPUT
       - name: Restore identical packaged worker
         uses: actions/cache@v4
         with:
-          path: app-desktop/src-tauri/resources/ai-worker
+          path: |
+            app-desktop/src-tauri/resources/ai-worker
+            app-desktop/src-tauri/resources/downloader-worker
           key: ${{ steps.worker.outputs.key }}
       - name: Cache pinned FFmpeg archive
         uses: actions/cache@v4

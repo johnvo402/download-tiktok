@@ -1,0 +1,93 @@
+{
+  "before": {
+    "profile": "cpu",
+    "installedFeatures": [
+      "sttn"
+    ],
+    "nvidiaDetected": false,
+    "featureProfiles": {
+      "sttn": "cpu"
+    },
+    "runtimeVersion": 7
+  },
+  "plan": {
+    "feature": "ocr_openvino",
+    "backend": "openvino",
+    "runtimeVersion": 7,
+    "missingComponents": [
+      {
+        "label": "Đọc chữ trên Intel",
+        "downloadBytes": 60000000,
+        "installedBytes": 140000000,
+        "packages": [
+          "rapidocr",
+          "onnxruntime",
+          "opencv-python"
+        ],
+        "dependsOn": [
+          "openvino"
+        ]
+      },
+      {
+        "label": "Bộ tính toán Intel dùng chung",
+        "downloadBytes": 110000000,
+        "installedBytes": 340000000,
+        "packages": [
+          "openvino",
+          "openvino-telemetry"
+        ],
+        "dependsOn": []
+      }
+    ],
+    "reusedComponents": [],
+    "estimatedDownloadBytes": 170000000,
+    "estimatedInstalledBytes": 480000000,
+    "stagingBytes": 0,
+    "alreadyInstalled": false
+  },
+  "installed": {
+    "profile": "cpu",
+    "installedFeatures": [
+      "ocr_openvino",
+      "sttn"
+    ],
+    "nvidiaDetected": false,
+    "featureProfiles": {
+      "ocr_openvino": "openvino",
+      "sttn": "cpu"
+    },
+    "runtimeVersion": 7
+  },
+  "checked": {
+    "feature": "ocr_openvino",
+    "installed": true,
+    "verified": true,
+    "backend": "openvino",
+    "message": "Bộ xử lý đã sẵn sàng."
+  },
+  "duplicate": {
+    "feature": "ocr_openvino",
+    "backend": "openvino",
+    "runtimeVersion": 7,
+    "missingComponents": [],
+    "reusedComponents": [
+      "Đọc chữ trên Intel",
+      "Bộ tính toán Intel dùng chung"
+    ],
+    "estimatedDownloadBytes": 0,
+    "estimatedInstalledBytes": 0,
+    "stagingBytes": 518358680,
+    "alreadyInstalled": true
+  },
+  "removed": {
+    "profile": "cpu",
+    "installedFeatures": [
+      "sttn"
+    ],
+    "nvidiaDetected": false,
+    "featureProfiles": {
+      "sttn": "cpu"
+    },
+    "runtimeVersion": 7
+  }
+}

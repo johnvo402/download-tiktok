@@ -1,0 +1,17 @@
+{
+  "installerSha256": "e41dff580f5c05bfc077ba8957b0ce5216abeb9baf174dfb15dd8c1aea455741",
+  "installerBytes": 368267204,
+  "extractedPayloadBytes": 1008607924,
+  "payloadFiles": 1905,
+  "workerInventoryMatchesBuild": true,
+  "workerCacheSealsVerified": true,
+  "unicodePath": true,
+  "coreInferenceWithoutSystemPython": "ASR/OCR/TTS passed on identical frozen payload; see task09-installer-inference.json",
+  "downloaderCapability": true,
+  "ffmpegExportProbe": true,
+  "definition": "Extracted NSIS payload excluding $PLUGINSDIR; excludes generated uninstaller, WebView2, user models and installed optional packs. Installer UI not exercised.",
+  "appExecutableMatchesBuildExceptBundleMarker": true,
+  "appExecutableSha256": "5cba69b86c89b0263366d430da8023d309b197f3975d7d3ec475a0b1915796d6",
+  "bundleMarkerChange": "Tauri changes UNK to NSS; exactly three bytes, remaining executable identical.",
+  "matrixMatchesBuild": true
+}

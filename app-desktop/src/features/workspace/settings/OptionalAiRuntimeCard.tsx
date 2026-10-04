@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, onMount, Show, type JSX } from 'solid-js';
+import { createResource, createSignal, For, onCleanup, onMount, Show, type JSX } from 'solid-js';
 import { AudioLines, Cpu, Sparkles, Zap } from 'lucide-solid';
 import { listen } from '@tauri-apps/api/event';
 import { optionalRuntimeService, type OptionalFeature, type OptionalRuntimeStatus, type RuntimeProfile } from '../../../app/services/optional-runtime-service';
@@ -28,17 +28,6 @@ const FEATURE_TEXT: Record<OptionalFeature, { title: string; description: string
   },
 };
 
-function estimatedExtra(feature: OptionalFeature, profile: RuntimeProfile, sharedProfile: RuntimeProfile | null): string {
-  if (sharedProfile === profile) {
-    if (feature === 'bandit') return 'khoảng 0,3 GB';
-    if (feature === 'sttn') return 'khoảng 0,2 GB';
-    return 'khoảng 1 GB';
-  }
-  if (feature === 'sttn') return profile === 'cuda' ? 'khoảng 4–6 GB' : 'khoảng 2,5 GB';
-  if (profile === 'cuda') return 'khoảng 6–7 GB';
-  if (feature === 'bandit') return 'khoảng 2,5 GB';
-  return 'khoảng 3,3 GB';
-}
 
 interface OptionalAiRuntimeCardProps {
   feature: OptionalFeature;
@@ -61,6 +50,8 @@ export default function OptionalAiRuntimeCard(props: OptionalAiRuntimeCardProps)
   const [error, setError] = createSignal('');
   const [confirmProfile, setConfirmProfile] = createSignal<RuntimeProfile>();
   const [selectedProfile, setSelectedProfile] = createSignal<RuntimeProfile>();
+  const [confirmRemove, setConfirmRemove] = createSignal(false);
+  const [plan] = createResource(confirmProfile, (profile) => optionalRuntimeService.plan(props.feature, profile));
   let removeProgressListener: (() => void) | undefined;
   let removeModelProgressListener: (() => void) | undefined;
   let disposed = false;
@@ -128,7 +119,16 @@ export default function OptionalAiRuntimeCard(props: OptionalAiRuntimeCardProps)
   };
   const installed = () => props.available || (status()?.installedFeatures.includes(props.feature) ?? false);
   const modelReady = () => props.modelReady ?? true;
-  const activeProfile = (): RuntimeProfile => selectedProfile() ?? props.preferredProfile ?? (status()?.profile === 'openvino' ? 'cpu' : status()?.profile) ?? 'cpu';
+  const activeProfile = (): RuntimeProfile => selectedProfile() ?? status()?.featureProfiles?.[props.feature] ?? props.preferredProfile ?? (status()?.profile === 'openvino' ? 'cpu' : status()?.profile) ?? 'cpu';
+  const manageRuntime = async (remove: boolean) => {
+    setConfirmRemove(false); setInstalling(true); setError(''); setProgress(remove ? 'Đang gỡ bộ xử lý…' : 'Đang kiểm tra tính năng này…');
+    try {
+      if (remove) setStatus(await optionalRuntimeService.uninstall(props.feature));
+      else { const health = await optionalRuntimeService.check(props.feature); if (!health.verified) setError(health.message); else setProgress(health.message); }
+    } catch (cause) { setError(typeof cause === 'string' ? cause : cause instanceof Error ? cause.message : 'Không quản lý được bộ xử lý.'); }
+    finally { setInstalling(false); props.onInstalled(); }
+  };
+  const bytes = (value: number) => value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(1)} GB` : `${Math.ceil(value / 1024 ** 2)} MB`;
   const icon = () => props.feature === 'whisperx' ? <AudioLines size={18} /> : props.feature === 'bandit' || props.feature === 'sttn' ? <Cpu size={18} /> : <Zap size={18} />;
   return <div class="settings-card optional-runtime-card" classList={{ 'optional-runtime-embedded': !!props.embedded }}>
     <Show when={!props.embedded}><div class="tts-model-status-row">
@@ -144,9 +144,9 @@ export default function OptionalAiRuntimeCard(props: OptionalAiRuntimeCardProps)
       <label class="provider-field"><span>Thiết bị xử lý STTN</span><select class="settings-select" value={activeProfile()} onChange={(event) => setSelectedProfile(event.currentTarget.value as RuntimeProfile)}><option value="cpu">CPU</option><option value="cuda" disabled={!status()?.nvidiaDetected}>NVIDIA · CUDA</option></select></label>
     </Show>
     <Show when={props.embedded} fallback={<Show when={installed()} fallback={<div class="optional-runtime-options">
-      <Show when={props.feature !== 'acceleration' && !status()?.installedFeatures.includes('acceleration')}><div><Cpu size={17} /><span><strong>Dùng CPU</strong><small>Phần cài thêm: {estimatedExtra(props.feature, 'cpu', status()?.profile ?? null)}</small></span>
+      <Show when={props.feature !== 'acceleration' && !status()?.installedFeatures.includes('acceleration')}><div><Cpu size={17} /><span><strong>Dùng CPU</strong><small>Phần cài thêm: Xem dung lượng trước khi cài</small></span>
         <button class="button button-quiet" type="button" disabled={loading() || installing() || !!props.installDisabledReason} onClick={() => setConfirmProfile('cpu')}>Cài cho CPU</button></div></Show>
-      <div><Sparkles size={17} /><span><strong>Dùng NVIDIA</strong><small>{status()?.nvidiaDetected ? `Phần cài thêm: ${estimatedExtra(props.feature, 'cuda', status()?.profile ?? null)}` : 'Chưa nhận diện GPU NVIDIA'}</small></span>
+      <div><Sparkles size={17} /><span><strong>Dùng NVIDIA</strong><small>{status()?.nvidiaDetected ? 'Xem dung lượng trước khi cài' : 'Chưa nhận diện GPU NVIDIA'}</small></span>
         <button class="button button-quiet" type="button" disabled={loading() || installing() || !status()?.nvidiaDetected || !!props.installDisabledReason} onClick={() => setConfirmProfile('cuda')}>Cài cho NVIDIA</button></div>
     </div>}>
       <p class="provider-help">{props.available && !status()?.installedFeatures.includes(props.feature) ? 'Bộ xử lý đã có trên máy.' : `Bộ xử lý đã cài cho ${status()?.profile === 'cuda' ? 'NVIDIA' : 'CPU'}.`} {props.installModels ? modelReady() ? 'Model cần thiết đã sẵn sàng.' : props.modelDescription ?? 'Model đang chọn chưa được cài.' : 'Các model đang dùng được giữ nguyên.'}</p>
@@ -165,8 +165,23 @@ export default function OptionalAiRuntimeCard(props: OptionalAiRuntimeCardProps)
     <Show when={status() && !status()!.nvidiaDetected}><p class="provider-help">Nếu máy có NVIDIA, hãy cập nhật driver rồi <button class="optional-runtime-refresh" type="button" disabled={loading() || installing()} onClick={() => void refreshStatus()}>kiểm tra lại</button>.</p></Show>
     <Show when={installing()}><div class="provider-help" role="status"><span class="spin status-spinner" /> {progress()}</div></Show>
     <Show when={error()}><div class="provider-feedback provider-feedback-error" role="alert">{error()}</div></Show>
-    <Show when={confirmProfile()}>{(profile) => <Modal title={`Cài ${FEATURE_TEXT[props.feature].title}?`} description={`Ứng dụng sẽ cài bộ xử lý (${estimatedExtra(props.feature, profile(), status()?.profile ?? null)} dung lượng lưu trữ dự kiến)${props.modelDescription ? ` và ${props.modelDescription.toLowerCase()}` : ''} trong cùng lượt. Những phần đã có được dùng lại. Cần Internet và đủ dung lượng trống.`} onClose={() => setConfirmProfile(undefined)}>
-      <footer class="modal-actions"><button class="button button-quiet" type="button" onClick={() => setConfirmProfile(undefined)}>Hủy</button><button class="button button-primary" type="button" onClick={() => void install(profile())}>Tải và cài</button></footer>
+    <Show when={status()?.installedFeatures.includes(props.feature)}><div class="modal-actions">
+      <button type="button" class="button button-quiet" disabled={installing()} onClick={() => void manageRuntime(false)}>Kiểm tra bộ xử lý</button>
+      <button type="button" class="button button-quiet" disabled={installing()} onClick={() => setConfirmRemove(true)}>Gỡ bộ xử lý</button>
+    </div></Show>
+    <Show when={confirmRemove()}><Modal title="Gỡ bộ xử lý?" description="Tính năng này sẽ ngừng sử dụng bộ xử lý đã cài. Các thành phần dùng chung, model và dữ liệu dự án được giữ nguyên." onClose={() => setConfirmRemove(false)}>
+      <footer class="modal-actions"><button class="button button-quiet" onClick={() => setConfirmRemove(false)}>Hủy</button><button class="button button-primary" onClick={() => void manageRuntime(true)}>Gỡ bộ xử lý</button></footer>
+    </Modal></Show>
+    <Show when={confirmProfile()}>{(profile) => <Modal title={`Cài ${FEATURE_TEXT[props.feature].title}?`} description="Ứng dụng dùng lại các phần đã có và chỉ tải thành phần còn thiếu. Model được quản lý riêng; cần Internet khi có phần chưa tải." onClose={() => setConfirmProfile(undefined)}>
+      <Show when={plan()} fallback={<p role="status">{plan.error ? 'Không xác định được dung lượng cài đặt. Hãy kiểm tra lại.' : 'Đang kiểm tra các thành phần…'}</p>}>{(resolved) => <>
+        <p>Tải mới dự kiến: {bytes(resolved().estimatedDownloadBytes)} · Lưu thêm: {bytes(resolved().estimatedInstalledBytes)}</p>
+        <Show when={resolved().stagingBytes > 0}><p>Cần thêm khoảng {bytes(resolved().stagingBytes)} tạm thời để bảo vệ bản cài đang dùng.</p></Show>
+        <For each={resolved().missingComponents}>{component => <p>{component.label} · khoảng {bytes(component.downloadBytes)}</p>}</For>
+        <Show when={resolved().reusedComponents.length}><p>Dùng lại: {resolved().reusedComponents.join(', ')}</p></Show>
+        <Show when={props.modelDescription}><p>{props.modelDescription}</p></Show>
+        <small>Dung lượng là ước tính. Các gói còn trong cache có thể không cần tải lại.</small>
+      </>}</Show>
+      <footer class="modal-actions"><button class="button button-quiet" type="button" onClick={() => setConfirmProfile(undefined)}>Hủy</button><button class="button button-primary" type="button" disabled={plan.loading || !!plan.error || !plan()} onClick={() => void install(profile())}>Tải và cài</button></footer>
     </Modal>}</Show>
   </div>;
 }

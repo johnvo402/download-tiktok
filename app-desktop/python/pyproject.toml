@@ -4,16 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-video-localization-worker"
-version = "0.1.6"
+version = "0.1.7"
 description = "Local JSON Lines worker for JC AI desktop app"
 requires-python = ">=3.10"
 dependencies = [
     "faster-whisper>=1.1,<2",
-    "playwright>=1.55,<2",
-    "curl-cffi>=0.13,<1",
 ]
 
 [project.optional-dependencies]
+downloader = ["playwright==1.63.0", "curl-cffi==0.16.3"]
 # Install only when local VieNeu-TTS is needed: `pip install -e .[tts]`.
 # The SDK's default v3 Turbo CPU path is ONNX and does not require PyTorch.
 tts = [
@@ -49,8 +48,11 @@ dialogue = [
 "worker.asr" = ["openvino-models.json"]
 
 [tool.setuptools.packages.find]
-include = ["worker*"]
+include = ["worker*", "downloader_worker*"]
 exclude = ["tests*", "packaging*"]
+
+[tool.setuptools]
+py-modules = ["jc_worker_protocol"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

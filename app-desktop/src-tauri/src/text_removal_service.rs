@@ -1,3 +1,4 @@
+use crate::worker_manager::WorkerCommandExt;
 use crate::project_service::BlurEffect;
 use crate::project_service::TextRemovalMode;
 use crate::render_spec::{PixelRect, RenderSpecification};
@@ -1608,7 +1609,7 @@ where
         operation,
         "text_removal_scan" | "text_removal_detect_v2" | "text_removal_patch_video"
     ) {
-        crate::runtime_paths::ocr_worker_command(worker)
+        crate::runtime_paths::ocr_command_for(worker, request["ocrDevice"].as_str().unwrap_or("cpu"))
     } else {
         crate::runtime_paths::worker_command(worker)
     };
@@ -1616,7 +1617,7 @@ where
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
+        .spawn_worker()
         .map_err(|error| format!("Không thể khởi chạy xử lý AI xóa chữ: {error}"))?;
     let mut input = serde_json::to_vec(request).map_err(|error| error.to_string())?;
     input.push(b'\n');

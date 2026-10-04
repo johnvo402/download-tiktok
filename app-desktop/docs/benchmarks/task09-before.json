@@ -1,0 +1,640 @@
+{
+  "measuredAt": "2026-10-04T07:56:14.989886+00:00",
+  "artifacts": {
+    "ai-worker": {
+      "bytes": 567975039,
+      "files": 2235,
+      "nativeFiles": 203,
+      "top50": [
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\playwright\\driver\\node.exe",
+          "bytes": 93580104
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\cv2\\cv2.pyd",
+          "bytes": 86293504
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\ctranslate2\\ctranslate2.dll",
+          "bytes": 59296256
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\cv2\\opencv_videoio_ffmpeg500_64.dll",
+          "bytes": 30876160
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\rapidocr\\models\\PP-OCRv6_rec_small.onnx",
+          "bytes": 21234383
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\numpy.libs\\libscipy_openblas64_-ed4f167a5330424524f45258e7ca2c8d.dll",
+          "bytes": 20589056
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\avcodec-62-984de33114b7fa384296817dec999c9d.dll",
+          "bytes": 19266048
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\onnxruntime\\capi\\onnxruntime_pybind11_state.pyd",
+          "bytes": 19112248
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\onnxruntime\\capi\\onnxruntime.dll",
+          "bytes": 18446176
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\ai-worker.exe",
+          "bytes": 17465249
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libx265-efe48a158520a59ef99c0a0b3eb835ae.dll",
+          "bytes": 12746240
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\rapidocr\\models\\PP-OCRv6_det_small.onnx",
+          "bytes": 9929594
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\hf_xet\\hf_xet.pyd",
+          "bytes": 9499136
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\PIL\\_avif.cp312-win_amd64.pyd",
+          "bytes": 7893504
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\tokenizers\\tokenizers.pyd",
+          "bytes": 7847936
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libSvtAv1Enc-c4dd99c98ddcdb013e820dbd68a30e26.dll",
+          "bytes": 7673344
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\python312.dll",
+          "bytes": 6945272
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\avfilter-11-aef80fc767dc77e0319469b5bdcdf998.dll",
+          "bytes": 5890560
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\sea_g2p\\sea_g2p_rs.pyd",
+          "bytes": 5722624
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\libcrypto-3.dll",
+          "bytes": 5231472
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\pydantic_core\\_pydantic_core.cp312-win_amd64.pyd",
+          "bytes": 5157888
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\curl_cffi.libs\\libcurl-impersonate-1172405423dc93b7aeed557f2a2ca325.dll",
+          "bytes": 3885056
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\numpy\\_core\\_multiarray_umath.cp312-win_amd64.pyd",
+          "bytes": 3854848
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\playwright\\driver\\package\\lib\\coreBundle.js",
+          "bytes": 3477183
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\playwright\\driver\\package\\lib\\utilsBundle.js",
+          "bytes": 3048692
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\avformat-62-b6d6bb16ff0b7753371e2d0b285c9dc0.dll",
+          "bytes": 2845184
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libstdc++-6-2d5c346d47ad531ef9f5185db0e8cef3.dll",
+          "bytes": 2660352
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\PIL\\_imaging.cp312-win_amd64.pyd",
+          "bytes": 2632704
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libvpx-1-d869f8b2cb42d58b35545ffbfb0f7509.dll",
+          "bytes": 2600960
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\Shapely.libs\\geos-ae6efa0782962b98e358f10ea539ae5f.dll",
+          "bytes": 2564608
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\_soundfile_data\\libsndfile_x64.dll",
+          "bytes": 2364416
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\vieneu\\assets\\voices_v3_nano.json",
+          "bytes": 2316799
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libx264-165-f3a909470ddc2d85ed21eda3d0fb7954.dll",
+          "bytes": 2267648
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\PIL\\_imagingft.cp312-win_amd64.pyd",
+          "bytes": 2174976
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libdav1d-959ebc1340f7dfcbcf8e299a26281738.dll",
+          "bytes": 2139136
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\swscale-9-0c9886c118598c54e159ef2267ff99f3.dll",
+          "bytes": 2022912
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\ctranslate2\\libiomp5md.dll",
+          "bytes": 1614192
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\sqlite3.dll",
+          "bytes": 1583608
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\ucrtbase.dll",
+          "bytes": 1362264
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\base_library.zip",
+          "bytes": 1333717
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\faster_whisper\\assets\\silero_vad_v6.onnx",
+          "bytes": 1245151
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\avutil-60-cc1777f859dcfd98b8019bdf459e774e.dll",
+          "bytes": 1145856
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\av.libs\\libiconv-2-6ce5f4ff92ada49d6f23a8e413455502.dll",
+          "bytes": 1141248
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\unicodedata.pyd",
+          "bytes": 1140592
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\playwright\\driver\\package\\types\\types.d.ts",
+          "bytes": 1131883
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\playwright\\sync_api\\_generated.py",
+          "bytes": 972691
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\playwright\\async_api\\_generated.py",
+          "bytes": 972025
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\_brotli.cp312-win_amd64.pyd",
+          "bytes": 856576
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\playwright\\driver\\package\\types\\protocol.d.ts",
+          "bytes": 814210
+        },
+        {
+          "path": "src-tauri\\resources\\ai-worker\\_internal\\libssl-3.dll",
+          "bytes": 794992
+        }
+      ],
+      "duplicateNativeFiles": [],
+      "packageInventory": {
+        "schemaVersion": 1,
+        "sourceLockFile": "python/requirements-release.txt",
+        "inventoryScope": "distributions with metadata bundled in this PyInstaller worker",
+        "packages": [
+          {
+            "name": "av",
+            "version": "18.1.0",
+            "license": "BSD-3-Clause",
+            "licenseFiles": [
+              "_internal/av-18.1.0.dist-info/licenses/LICENSE.txt"
+            ]
+          },
+          {
+            "name": "click",
+            "version": "8.5.0",
+            "license": "BSD-3-Clause",
+            "licenseFiles": [
+              "_internal/click-8.5.0.dist-info/licenses/LICENSE.txt"
+            ]
+          },
+          {
+            "name": "colorlog",
+            "version": "6.12.0",
+            "license": "MIT License",
+            "licenseFiles": [
+              "_internal/colorlog-6.12.0.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "ctranslate2",
+            "version": "4.8.2",
+            "license": "MIT",
+            "licenseFiles": []
+          },
+          {
+            "name": "curl_cffi",
+            "version": "0.16.3",
+            "license": "MIT",
+            "licenseFiles": [
+              "_internal/curl_cffi-0.16.3.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "faster-whisper",
+            "version": "1.2.1",
+            "license": "MIT",
+            "licenseFiles": [
+              "_internal/faster_whisper-1.2.1.dist-info/LICENSE"
+            ]
+          },
+          {
+            "name": "huggingface_hub",
+            "version": "1.32.0",
+            "license": "Apache-2.0",
+            "licenseFiles": [
+              "_internal/huggingface_hub-1.32.0.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "MarkupSafe",
+            "version": "3.0.3",
+            "license": "BSD-3-Clause",
+            "licenseFiles": [
+              "_internal/markupsafe-3.0.3.dist-info/licenses/LICENSE.txt"
+            ]
+          },
+          {
+            "name": "numpy",
+            "version": "2.5.3",
+            "license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+            "licenseFiles": [
+              "_internal/numpy-2.5.3.dist-info/licenses/LICENSE.txt",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/_core/include/numpy/libdivide/LICENSE.txt",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/_core/src/common/pythoncapi-compat/COPYING",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/_core/src/highway/LICENSE",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/_core/src/npysort/x86-simd-sort/LICENSE.md",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/_core/src/umath/svml/LICENSE",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/fft/pocketfft/LICENSE.md",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/linalg/lapack_lite/LICENSE.txt",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/ma/LICENSE",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/random/LICENSE.md",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/random/src/distributions/LICENSE.md",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/random/src/mt19937/LICENSE.md",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/random/src/pcg64/LICENSE.md",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/random/src/philox/LICENSE.md",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/random/src/sfc64/LICENSE.md",
+              "_internal/numpy-2.5.3.dist-info/licenses/numpy/random/src/splitmix64/LICENSE.md"
+            ]
+          },
+          {
+            "name": "omegaconf",
+            "version": "2.3.1",
+            "license": "See included package metadata",
+            "licenseFiles": [
+              "_internal/omegaconf-2.3.1.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "onnxruntime",
+            "version": "1.30.0",
+            "license": "MIT License",
+            "licenseFiles": []
+          },
+          {
+            "name": "opencv-python",
+            "version": "5.0.0.93",
+            "license": "Apache 2.0",
+            "licenseFiles": [
+              "_internal/opencv_python-5.0.0.93.dist-info/LICENSE-3RD-PARTY.txt",
+              "_internal/opencv_python-5.0.0.93.dist-info/LICENSE.txt"
+            ]
+          },
+          {
+            "name": "playwright",
+            "version": "1.63.0",
+            "license": "Apache-2.0",
+            "licenseFiles": [
+              "_internal/playwright-1.63.0.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "pyclipper",
+            "version": "1.4.0",
+            "license": "MIT",
+            "licenseFiles": [
+              "_internal/pyclipper-1.4.0.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "pydantic",
+            "version": "2.13.5",
+            "license": "MIT",
+            "licenseFiles": [
+              "_internal/pydantic-2.13.5.dist-info/licenses/LICENSE"
+            ]
+          },
+          {
+            "name": "rapidocr",
+            "version": "3.9.2",
+            "license": "Apache-2.0",
+            "licenseFiles": []
+          },
+          {
+            "name": "shapely",
+            "version": "2.1.2",
+            "license": "BSD 3-Clause",
+            "licenseFiles": [
+              "_internal/shapely-2.1.2.dist-info/licenses/LICENSE.txt",
+              "_internal/shapely-2.1.2.dist-info/licenses/LICENSE_GEOS",
+              "_internal/shapely-2.1.2.dist-info/licenses/LICENSE_win32"
+            ]
+          },
+          {
+            "name": "tokenizers",
+            "version": "0.23.2",
+            "license": "See included package metadata",
+            "licenseFiles": []
+          },
+          {
+            "name": "tqdm",
+            "version": "4.70.1",
+            "license": "MPL-2.0 AND MIT",
+            "licenseFiles": []
+          }
+        ]
+      },
+      "startup": {
+        "definition": "Launch with closed stdin; no model or capability probe. OS file cache not flushed.",
+        "samples": [
+          {
+            "seconds": 0.730179499998485,
+            "peakTreeRssBytes": 45142016,
+            "exitCode": 0
+          },
+          {
+            "seconds": 0.23730710000018007,
+            "peakTreeRssBytes": 45244416,
+            "exitCode": 0
+          },
+          {
+            "seconds": 0.22416019999946002,
+            "peakTreeRssBytes": 44822528,
+            "exitCode": 0
+          }
+        ],
+        "medianSeconds": 0.23730710000018007
+      }
+    },
+    "ffmpeg": {
+      "bytes": 325572617,
+      "files": 4,
+      "nativeFiles": 0,
+      "top50": [
+        {
+          "path": "src-tauri\\resources\\ffmpeg\\ffmpeg.exe",
+          "bytes": 162888704
+        },
+        {
+          "path": "src-tauri\\resources\\ffmpeg\\ffprobe.exe",
+          "bytes": 162682880
+        },
+        {
+          "path": "src-tauri\\resources\\ffmpeg\\ffmpeg-build.json",
+          "bytes": 1032
+        },
+        {
+          "path": "src-tauri\\resources\\ffmpeg\\.gitkeep",
+          "bytes": 1
+        }
+      ],
+      "duplicateNativeFiles": [],
+      "startup": {
+        "definition": "Launch with closed stdin; no model or capability probe. OS file cache not flushed.",
+        "samples": [
+          {
+            "seconds": 1.3093749999970896,
+            "peakTreeRssBytes": 21606400,
+            "exitCode": 1
+          },
+          {
+            "seconds": 0.033138599999801954,
+            "peakTreeRssBytes": 19619840,
+            "exitCode": 1
+          },
+          {
+            "seconds": 0.03235860000131652,
+            "peakTreeRssBytes": 17448960,
+            "exitCode": 1
+          }
+        ],
+        "medianSeconds": 0.033138599999801954
+      }
+    },
+    "optional-runtime": {
+      "bytes": 68083593,
+      "files": 44,
+      "nativeFiles": 0,
+      "top50": [
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\uv.exe",
+          "bytes": 67852288
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\asr\\service.py",
+          "bytes": 28561
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\ocr\\service.py",
+          "bytes": 28160
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\tiktok_drama\\browser.py",
+          "bytes": 27622
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\tiktok_drama\\direct_media.py",
+          "bytes": 18166
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\tiktok_drama\\service.py",
+          "bytes": 13508
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\text_removal\\service.py",
+          "bytes": 11965
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\LICENSE-APACHE",
+          "bytes": 11357
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\text_removal\\sttn_engine.py",
+          "bytes": 8992
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\tts\\service.py",
+          "bytes": 8815
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\ocr\\openvino_engine.py",
+          "bytes": 7852
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\__main__.py",
+          "bytes": 7095
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\asr\\openvino_backend.py",
+          "bytes": 6414
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\ocr\\backends.py",
+          "bytes": 6173
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\text_removal\\sttn_model.py",
+          "bytes": 5751
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\model_manifest.py",
+          "bytes": 5548
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\asr\\openvino-models.json",
+          "bytes": 5281
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\asr\\openvino_models.py",
+          "bytes": 4952
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\tiktok_drama\\browser_session.py",
+          "bytes": 4880
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\asr\\backends.py",
+          "bytes": 4511
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\dialogue\\service.py",
+          "bytes": 3271
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\tiktok_drama\\metadata.py",
+          "bytes": 2836
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\text_removal\\intervals.py",
+          "bytes": 2226
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\tiktok_drama\\cookies.py",
+          "bytes": 1344
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\tts\\providers.py",
+          "bytes": 1299
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\LICENSE-MIT",
+          "bytes": 1077
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\tiktok_drama\\urls.py",
+          "bytes": 974
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\tiktok_drama\\config.py",
+          "bytes": 730
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\protocol.py",
+          "bytes": 408
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\requirements-optional-bandit.in",
+          "bytes": 223
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\requirements-optional-whisper-openvino.in",
+          "bytes": 217
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\README.txt",
+          "bytes": 189
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\requirements-optional-whisperx.in",
+          "bytes": 162
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\requirements-optional-ocr-openvino.in",
+          "bytes": 152
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\requirements-optional-acceleration.in",
+          "bytes": 151
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\tiktok_drama\\__init__.py",
+          "bytes": 88
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\requirements-optional-sttn.in",
+          "bytes": 67
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\__init__.py",
+          "bytes": 57
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\dialogue\\__init__.py",
+          "bytes": 53
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\text_removal\\__init__.py",
+          "bytes": 46
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\ocr\\__init__.py",
+          "bytes": 40
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\tts\\__init__.py",
+          "bytes": 36
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\asr\\__init__.py",
+          "bytes": 34
+        },
+        {
+          "path": "src-tauri\\resources\\optional-runtime\\source\\worker\\_version.py",
+          "bytes": 22
+        }
+      ],
+      "duplicateNativeFiles": []
+    }
+  },
+  "installer": {
+    "path": "D:\\Tiktok\\tool-dowload\\app-desktop\\src-tauri\\target\\release\\bundle\\nsis\\JC AI_0.1.13-preview_x64-setup.exe",
+    "bytes": 389095663
+  },
+  "installedResourceBytes": 961631249,
+  "limitations": [
+    "Installer may predate current source; timestamp/hash establish provenance.",
+    "Resource bytes exclude app executable, WebView and user models; not total installed disk usage.",
+    "No visible-window/first-project timing in this command."
+  ]
+}

@@ -1,3 +1,4 @@
+use crate::worker_manager::WorkerCommandExt;
 use crate::project_service::ProjectStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -390,7 +391,7 @@ pub fn separate(
     }
     let request = json!({"operation":"dialogue_separate","inputPath":source_wav,"outputPath":output_wav,"modelPath":model,"device":"auto"});
     let mut child = crate::runtime_paths::worker_command(&worker)
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn_worker()
         .map_err(|error| format!("Không thể chạy worker tách thoại: {error}"))?;
     let mut input = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
     input.push(b'\n');
@@ -432,7 +433,7 @@ pub fn separate(
 
 fn inspect_worker(worker: &Path) -> Result<Value, String> {
     let mut child = crate::runtime_paths::worker_command(worker)
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn_worker()
         .map_err(|error| format!("Không thể kiểm tra runtime tách thoại: {error}"))?;
     child.stdin.take().ok_or("Worker không mở stdin.")?
         .write_all(b"{\"operation\":\"dialogue_inspect\"}\n")

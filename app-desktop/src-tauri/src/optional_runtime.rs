@@ -1,3 +1,6 @@
+use std::time::Duration;
+trait BoundedOutput { fn pipe_output_timeout(&mut self) -> std::io::Result<std::process::Output>; }
+impl BoundedOutput for Command { fn pipe_output_timeout(&mut self) -> std::io::Result<std::process::Output> { crate::worker_manager::output_timeout(self, Duration::from_secs(300)) } }
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
@@ -34,11 +37,8 @@ fn backend(profile: &str) -> Option<ComputeBackend> {
 }
 
 fn valid_install(feature: &str, profile: &str) -> bool {
-    FEATURES.contains(&feature)
-        && backend(profile).is_some()
-        && (feature != "acceleration" || profile == "cuda")
-        && (!matches!(feature, "ocr_openvino" | "whisper_openvino") || profile == "openvino")
-        && (profile != "openvino" || matches!(feature, "ocr_openvino" | "whisper_openvino"))
+    crate::runtime_registry::registry().features.get(feature)
+        .is_some_and(|f| f.backends.iter().any(|b| b == profile))
 }
 const RUNTIME_VERSION: u32 = 7;
 const CUDA_ONNXRUNTIME_VERSION: &str = "1.26.0";
@@ -58,6 +58,8 @@ pub struct RuntimeStatus {
     pub profile: Option<String>,
     pub installed_features: Vec<String>,
     pub nvidia_detected: bool,
+    pub feature_profiles: std::collections::BTreeMap<String, String>,
+    pub runtime_version: u32,
 }
 
 fn root() -> Result<PathBuf, String> {
@@ -67,8 +69,13 @@ fn root() -> Result<PathBuf, String> {
         .join("advanced"))
 }
 
-fn ensure_runtime_root() -> Result<PathBuf, String> {
-    let root = root()?;
+fn feature_root(feature: &str) -> Result<PathBuf, String> {
+    if matches!(feature, "ocr_openvino" | "whisper_openvino") {
+        Ok(root()?.with_file_name("intel"))
+    } else { root() }
+}
+
+fn ensure_runtime_root_at(root: PathBuf) -> Result<PathBuf, String> {
     let parent = root.parent().ok_or("Thư mục ứng dụng không hợp lệ.")?;
     for directory in [parent, root.as_path()] {
         if !directory.exists() {
@@ -84,12 +91,33 @@ fn ensure_runtime_root() -> Result<PathBuf, String> {
     Ok(root)
 }
 
+fn ensure_runtime_root() -> Result<PathBuf, String> { ensure_runtime_root_at(root()?) }
+
+fn installation_file_lock() -> Result<fs::File, String> {
+    let root = ensure_runtime_root()?;
+    let path = root.join("installation.lock");
+    if let Ok(meta) = fs::symlink_metadata(&path) {
+        if !meta.is_file() || meta.file_type().is_symlink() || is_reparse_point(&meta) {
+            return Err("Tệp khóa cài đặt không an toàn.".into());
+        }
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(false);
+    #[cfg(windows)] {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(0);
+    }
+    options.open(path).map_err(|_|"Một phiên JC AI khác đang cài hoặc gỡ thành phần. Hãy chờ hoàn tất.".into())
+}
+
 fn python_path(directory: &Path) -> PathBuf {
     directory.join("Scripts").join("python.exe")
 }
 
 fn read_marker() -> Option<RuntimeMarker> {
-    let root = root().ok()?;
+    read_marker_at(&root().ok()?)
+}
+fn read_marker_at(root: &Path) -> Option<RuntimeMarker> {
     let mut marker: RuntimeMarker =
         serde_json::from_slice(&fs::read(root.join("current.json")).ok()?).ok()?;
     if backend(&marker.profile).is_none()
@@ -134,30 +162,45 @@ fn installed_marker() -> Option<RuntimeMarker> {
 }
 
 pub fn feature_installed(feature: &str) -> bool {
-    installed_marker()
-        .is_some_and(|marker| marker.features.iter().any(|installed| installed == feature))
+    active_runtime_for(feature).is_some()
 }
 
-pub fn active_runtime() -> Option<(PathBuf, PathBuf, String)> {
-    let marker = installed_marker()?;
-    let source = crate::runtime_paths::optional_worker_source()?;
-    Some((
-        python_path(&root().ok()?.join("current")),
-        source,
-        marker.profile,
-    ))
+pub fn active_runtime_for(feature: &str) -> Option<(PathBuf, PathBuf, String)> {
+    let dedicated = feature_root(feature).ok()?;
+    // Reuse old mixed packs until the user installs an Intel-specific pack.
+    // No copies/downloads or destructive migration happen during startup.
+    let (directory, marker) = read_marker_at(&dedicated)
+        .filter(|m| m.runtime_version == RUNTIME_VERSION && m.features.iter().any(|f| f == feature))
+        .map(|m| (dedicated, m))
+        .or_else(|| {
+            let directory = root().ok()?;
+            installed_marker().filter(|m| m.features.iter().any(|f| f == feature)).map(|m| (directory, m))
+        })?;
+    Some((python_path(&directory.join("current")), crate::runtime_paths::optional_worker_source()?, marker.profile))
 }
 
 pub fn status() -> RuntimeStatus {
     let marker = installed_marker();
+    let mut features = marker.as_ref().map(|value| value.features.clone()).unwrap_or_default();
+    if let Ok(intel) = feature_root("ocr_openvino") {
+        if let Some(m) = read_marker_at(&intel).filter(|m| m.runtime_version == RUNTIME_VERSION) {
+            features.extend(m.features);
+        }
+    }
+    features.sort(); features.dedup();
     RuntimeStatus {
         profile: marker.as_ref().map(|value| value.profile.clone()),
-        installed_features: marker.map(|value| value.features).unwrap_or_default(),
+        installed_features: features,
         nvidia_detected: nvidia_detected(),
+        feature_profiles: FEATURES.iter().filter_map(|f| active_runtime_for(f).map(|(_,_,p)| (f.to_string(), p))).collect(),
+        runtime_version: RUNTIME_VERSION,
     }
 }
 
 fn nvidia_detected() -> bool {
+    trait NvidiaOutput { fn output_nvidia_timeout(&mut self) -> std::io::Result<std::process::Output>; }
+    impl NvidiaOutput for Command { fn output_nvidia_timeout(&mut self) -> std::io::Result<std::process::Output> { crate::worker_manager::output_timeout(self,Duration::from_secs(3)) } }
+
     let mut locations = vec![PathBuf::from("nvidia-smi")];
     if cfg!(windows) {
         locations.push(PathBuf::from(
@@ -172,7 +215,7 @@ fn nvidia_detected() -> bool {
             .args(["--query-gpu=name", "--format=csv,noheader"])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .output()
+            .output_nvidia_timeout()
             .is_ok_and(|output| output.status.success() && !output.stdout.is_empty())
     })
 }
@@ -181,25 +224,55 @@ fn emit(app: &AppHandle, message: &str) {
     let _ = app.emit("optional-runtime-progress", json!({ "message": message }));
 }
 
+fn verified_wheel(wheels: &Path, manifest_file: &str, prefix: &str) -> Result<PathBuf, String> {
+    ensure_plain_tree(wheels)?;
+    let metadata = fs::read(wheels.join(manifest_file)).map_err(|_|"Thiếu thông tin thành phần cài đặt.")?;
+    let manifest: serde_json::Value = serde_json::from_slice(metadata.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&metadata))
+        .map_err(|_|"Thông tin thành phần cài đặt không hợp lệ.")?;
+    let name = manifest["name"].as_str().ok_or("Thiếu tên thành phần cài đặt.")?;
+    if !name.starts_with(prefix) || !name.ends_with(".whl") || Path::new(name).components().count()!=1 || name.contains(['/', '\\', ':']) {
+        return Err("Đường dẫn thành phần cài đặt không hợp lệ.".into());
+    }
+    use sha2::Digest;
+    let file = wheels.join(name);
+    let bytes = fs::read(&file).map_err(|_|"Không đọc được thành phần cài đặt.")?;
+    let hash = format!("{:x}",sha2::Sha256::digest(bytes));
+    if manifest["sha256"].as_str()!=Some(hash.as_str()) { return Err("Thành phần cài đặt bị hỏng. Hãy cài lại JC AI.".into()); }
+    Ok(file)
+}
+
 fn run_uv(
     app: &AppHandle,
     uv: &Path,
-    root: &Path,
+    _root: &Path,
     args: &[&str],
     stage: &str,
 ) -> Result<(), String> {
     emit(app, stage);
     let mut command = Command::new(uv);
     hide_console(&mut command);
-    let output = command
-        .args(args)
-        .env("UV_CACHE_DIR", root.join("cache"))
-        .env("UV_PYTHON_INSTALL_DIR", root.join("python"))
+    let shared = ensure_runtime_root()?;
+    command.args(args);
+    if args.starts_with(&["pip", "install"]) {
+        let wheels = crate::runtime_paths::optional_wheelhouse()
+            .ok_or("Ứng dụng thiếu thành phần cài đặt. Hãy cập nhật JC AI.")?;
+        verified_wheel(&wheels, "manifest.json", "antlr4_python3_runtime-4.9.3-")?;
+        command.arg("--find-links").arg(wheels).args(["--only-binary", "antlr4-python3-runtime"]);
+        let constraints=_root.join("staging/matrix-constraints.txt");
+        if constraints.is_file() {
+            let url=reqwest::Url::from_file_path(constraints).map_err(|_|"Đường dẫn phiên bản cài đặt không hợp lệ.")?;
+            command.args(["--constraint",url.as_str()]);
+        }
+    }
+    command
+        .env("UV_CACHE_DIR", shared.join("cache"))
+        .env("UV_PYTHON_INSTALL_DIR", shared.join("python"))
         .env("UV_NO_PROGRESS", "1")
         .env("UV_LINK_MODE", "copy")
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .output()
+        ;
+    let output = crate::worker_manager::output_timeout(&mut command, Duration::from_secs(2*3600))
         .map_err(|error| format!("Không thể khởi động trình cài: {error}"))?;
     if output.status.success() {
         return Ok(());
@@ -253,7 +326,7 @@ assert available, detail
         .env("JC_AI_GPU_RUNTIME", "1")
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .output()
+        .pipe_output_timeout()
         .map_err(|error| format!("Không thể kiểm tra ONNX Runtime GPU: {error}"))?;
     if output.status.success() {
         Ok(())
@@ -274,7 +347,7 @@ fn is_onnxruntime_gpu_metadata_conflict(line: &str) -> bool {
 fn check_dependencies(
     app: &AppHandle,
     uv: &Path,
-    root: &Path,
+    _root: &Path,
     python: &Path,
     source: &Path,
     features: &[String],
@@ -285,13 +358,13 @@ fn check_dependencies(
     hide_console(&mut command);
     let output = command
         .args(["pip", "check", "--python", python_text, "--color", "never"])
-        .env("UV_CACHE_DIR", root.join("cache"))
-        .env("UV_PYTHON_INSTALL_DIR", root.join("python"))
+        .env("UV_CACHE_DIR", self::root()?.join("cache"))
+        .env("UV_PYTHON_INSTALL_DIR", self::root()?.join("python"))
         .env("UV_NO_PROGRESS", "1")
         .env("UV_LINK_MODE", "copy")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
+        .pipe_output_timeout()
         .map_err(|error| format!("Không thể kiểm tra dependency: {error}"))?;
 
     if output.status.success() {
@@ -387,19 +460,31 @@ fn ensure_plain_tree(directory: &Path) -> Result<(), String> {
 fn rollback_replacement(root: &Path) {
     let _ = safe_remove(&root.join("current"), root);
     if root.join("previous").is_dir() {
-        let _ = fs::rename(root.join("previous"), root.join("current"));
+        let _ = rename_runtime(&root.join("previous"), &root.join("current"));
+    }
+}
+
+fn rename_runtime(source: &Path, destination: &Path) -> std::io::Result<()> {
+    // DLL unload and antivirus scanning can briefly keep a verified Windows
+    // venv open. Retry only sharing/access errors within a bounded deadline;
+    // leave all rollback decisions with the transaction caller.
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        match fs::rename(source, destination) {
+            Ok(()) => return Ok(()),
+            Err(error) if cfg!(windows)
+                && matches!(error.raw_os_error(), Some(5 | 32 | 33))
+                && std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            Err(error) => return Err(error),
+        }
     }
 }
 
 fn requirement_name(feature: &str) -> &'static str {
-    match feature {
-        "whisperx" => "requirements-optional-whisperx.in",
-        "bandit" => "requirements-optional-bandit.in",
-        "acceleration" => "requirements-optional-acceleration.in",
-        "ocr_openvino" => "requirements-optional-ocr-openvino.in",
-        "whisper_openvino" => "requirements-optional-whisper-openvino.in",
-        _ => "requirements-optional-sttn.in",
-    }
+    crate::runtime_registry::registry().features.get(feature)
+        .map(|f| f.requirements.as_str()).unwrap_or("invalid-requirements")
 }
 
 fn copy_runtime(source: &Path, destination: &Path) -> Result<(), String> {
@@ -420,14 +505,14 @@ fn copy_runtime(source: &Path, destination: &Path) -> Result<(), String> {
     }
     // Independent copies: pip in staging must never mutate current via hard links.
     copy_tree(source, destination)
-        .map_err(|error| format!("Không thể chuẩn bị bản cài tăng tốc Intel: {error}"))
+        .map_err(|error| format!("Không thể chuẩn bị bản cài dùng chung: {error}"))
 }
 
 fn frozen_constraints(python: &Path, destination: &Path) -> Result<PathBuf, String> {
     let mut command = Command::new(python);
     hide_console(&mut command);
     let output = command.args(["-c", "from importlib.metadata import distributions; print(chr(10).join(sorted(d.metadata['Name']+'=='+d.version for d in distributions() if d.metadata['Name'])))"])
-        .output().map_err(|error| format!("Không thể kiểm tra các gói đang dùng: {error}"))?;
+        .pipe_output_timeout().map_err(|error| format!("Không thể kiểm tra các gói đang dùng: {error}"))?;
     if !output.status.success() {
         return Err("Không thể bảo vệ các thành phần AI đang dùng.".into());
     }
@@ -442,6 +527,47 @@ fn cleanup_previous_runtime(root: &Path) {
     if let Err(error) = safe_remove(&root.join("previous"), root) {
         log::warn!("Could not remove previous optional runtime: {error}");
     }
+}
+
+fn recover_runtime_at(root: &Path) -> Result<(), String> {
+    let current=root.join("current");
+    let previous=root.join("previous");
+    let marker=root.join("current.json");
+    let old_marker=root.join("previous.json");
+    if !previous.is_dir() { return Ok(()); }
+    ensure_plain_tree(&previous)?;
+    if !current.exists() {
+        rename_runtime(&previous,&current).map_err(|e|e.to_string())?;
+        if !marker.exists() && old_marker.is_file() { fs::rename(&old_marker,&marker).map_err(|e|e.to_string())?; }
+    } else {
+        let metadata=fs::read(&marker).ok().and_then(|b|serde_json::from_slice::<RuntimeMarker>(&b).ok());
+        let manifest=fs::read(current.join("runtime-manifest.json")).ok().and_then(|b|serde_json::from_slice::<serde_json::Value>(&b).ok());
+        let committed=metadata.zip(manifest).is_some_and(|(m,s)|
+            s["runtimeVersion"]==m.runtime_version && s["backend"]==m.profile && s["features"]==json!(m.features));
+        if committed {
+            cleanup_previous_runtime(root);
+            let _=fs::remove_file(old_marker);
+        } else {
+            safe_remove(&current,root)?;
+            rename_runtime(&previous,&current).map_err(|e|e.to_string())?;
+            if old_marker.is_file() {
+                if marker.is_file() { fs::remove_file(&marker).map_err(|e|e.to_string())?; }
+                fs::rename(old_marker,marker).map_err(|e|e.to_string())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn recover_installations() -> Result<(), String> {
+    let directory=root()?;
+    if !directory.exists() { return Ok(()); }
+    let _guard=INSTALL_LOCK.try_lock().map_err(|_|"Đang cài bộ xử lý.")?;
+    let _file_lock=installation_file_lock()?;
+    recover_runtime_at(&directory)?;
+    let intel=feature_root("ocr_openvino")?;
+    if intel.exists() { recover_runtime_at(&intel)?; }
+    Ok(())
 }
 
 fn clear_installation_cache_at(
@@ -486,7 +612,7 @@ pub fn clear_installation_cache() -> Result<u64, String> {
             .env("UV_NO_PROGRESS", "1")
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
-            .output()
+            .pipe_output_timeout()
             .map_err(|error| format!("Không thể mở bộ dọn cache: {error}"))?;
         if !output.status.success() {
             log::warn!(
@@ -511,7 +637,16 @@ fn install_feature(
     profile: &str,
 ) -> Result<(), String> {
     let python = python.to_str().ok_or("Đường dẫn bộ xử lý không hợp lệ.")?;
-    let requirements = source.join(requirement_name(feature));
+    let mut requirements = source.join(requirement_name(feature));
+    if feature == "bandit" {
+        let wheels = crate::runtime_paths::optional_wheelhouse().ok_or("Thiếu thành phần cài đặt BandIt. Hãy cập nhật JC AI.")?;
+        let wheel = verified_wheel(&wheels, "bandit-manifest.json", "bandit_infer-0.1.0-")?;
+        let url = reqwest::Url::from_file_path(wheel).map_err(|_|"Đường dẫn cài BandIt không hợp lệ.")?;
+        let original = fs::read_to_string(&requirements).map_err(|e|e.to_string())?;
+        let contents = original.lines().map(|line|if line.starts_with("bandit-infer @ ") { format!("bandit-infer @ {url}") } else {line.to_string()}).collect::<Vec<_>>().join("\n");
+        requirements = Path::new(python).parent().and_then(Path::parent).ok_or("Đường dẫn bộ xử lý không hợp lệ.")?.join("bandit-requirements.txt");
+        fs::write(&requirements,contents).map_err(|e|e.to_string())?;
+    }
     let requirements = requirements
         .to_str()
         .ok_or("Đường dẫn gói cài đặt không hợp lệ.")?;
@@ -576,6 +711,10 @@ fn install_feature(
         }
         return Ok(());
     }
+    let constraints = Path::new(python).parent().and_then(Path::parent).map(|p|p.join("existing-constraints.txt"));
+    let constraint_uri = constraints.as_ref().filter(|p|p.is_file()).and_then(|p|reqwest::Url::from_file_path(p).ok()).map(|p|p.to_string());
+    let mut pinned = Vec::new();
+    if let Some(uri) = constraint_uri.as_deref() { pinned.extend(["--constraint",uri]); }
     let torch_index = if profile == "cuda" {
         "https://download.pytorch.org/whl/cu128"
     } else {
@@ -602,6 +741,7 @@ fn install_feature(
         torch_index,
     ];
     args.extend(packages);
+    args.extend(pinned.iter().copied());
     run_uv(app, uv, root, &args, torch_label)?;
     if feature == "whisperx" {
         run_uv(
@@ -621,26 +761,12 @@ fn install_feature(
             "Cài bộ đọc âm thanh",
         )?;
     }
-    run_uv(
-        app,
-        uv,
-        root,
-        &[
-            "pip",
-            "install",
-            "--no-progress",
-            "--python",
-            python,
-            "-r",
-            requirements,
-        ],
-        match feature {
-            "whisperx" => "Cài WhisperX",
-            "bandit" => "Cài tách thoại gốc",
-            "acceleration" => "Cài tăng tốc NVIDIA",
-            _ => "Cài bộ xử lý STTN",
-        },
-    )?;
+    let mut feature_args = vec!["pip", "install", "--no-progress", "--python", python, "-r", requirements];
+    feature_args.extend(pinned.iter().copied());
+    run_uv(app,uv,root,&feature_args,match feature {
+        "whisperx" => "Cài WhisperX", "bandit" => "Cài tách thoại gốc",
+        "acceleration" => "Cài tăng tốc NVIDIA", _ => "Cài bộ xử lý STTN",
+    })?;
     if feature == "acceleration" {
         run_uv(
             app,
@@ -668,6 +794,9 @@ fn install_feature(
 }
 
 fn verification_script(features: &[String], profile: &str) -> String {
+    verification_script_scoped(features,profile,features.iter().any(|f|f=="acceleration"))
+}
+fn verification_script_scoped(features: &[String], profile: &str, cuda_ort: bool) -> String {
     let mut script = String::from("from packaging.version import Version\n");
     if features
         .iter()
@@ -697,7 +826,7 @@ fn verification_script(features: &[String], profile: &str) -> String {
         script.push_str("import bandit_infer, soundfile\n");
     }
     if features.iter().any(|feature| feature == "sttn") {
-        let expected_onnx_version = if features.iter().any(|feature| feature == "acceleration") {
+        let expected_onnx_version = if cuda_ort {
             CUDA_ONNXRUNTIME_VERSION
         } else {
             "1.30.0"
@@ -721,7 +850,7 @@ fn verification_script(features: &[String], profile: &str) -> String {
             assert cuda_ready, cuda_error\n",
         );
     }
-    if profile == "cuda" {
+    if profile == "cuda" && !features.is_empty() {
         script.push_str("assert torch.cuda.is_available()\n");
         if features
             .iter()
@@ -741,7 +870,11 @@ fn verify(
     profile: &str,
 ) -> Result<(), String> {
     emit(app, "Kiểm tra các tính năng đã cài");
-    let script = verification_script(features, profile);
+    let directory = python.parent().and_then(Path::parent);
+    let pack = directory.filter(|path|path.file_name().is_some_and(|n|n=="current"))
+        .and_then(Path::parent).and_then(read_marker_at);
+    let cuda_ort = features.iter().any(|f|f=="acceleration") || pack.is_some_and(|m|m.features.iter().any(|f|f=="acceleration"));
+    let script = if features.len() > 1 { verification_script(features,profile) } else { verification_script_scoped(features, profile, cuda_ort) };
     let mut command = Command::new(python);
     hide_console(&mut command);
     let output = command
@@ -755,7 +888,7 @@ fn verify(
         )
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .output()
+        .pipe_output_timeout()
         .map_err(|error| format!("Không thể kiểm tra thành phần vừa cài: {error}"))?;
     if !output.status.success() {
         log::error!(
@@ -781,7 +914,7 @@ fn verify(
         .env("PYTHONUTF8", "1")
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .output()
+        .pipe_output_timeout()
         .map_err(|error| format!("Không thể kiểm tra bộ xử lý AI: {error}"))?;
     if !output.status.success() {
         log::error!(
@@ -801,8 +934,17 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
         return Err("Lựa chọn cài đặt không hợp lệ.".into());
     }
     let _guard = INSTALL_LOCK
-        .lock()
-        .map_err(|_| "Không thể khóa thao tác cài đặt.".to_string())?;
+        .try_lock()
+        .map_err(|_| "Một lượt cài đặt khác đang chạy. Hãy chờ hoàn tất rồi thử lại.".to_string())?;
+    if crate::runtime_registry::registry().protocol_version != crate::worker_manager::PROTOCOL_VERSION {
+        return Err("Phiên bản bộ xử lý không tương thích với ứng dụng.".into());
+    }
+    let _file_lock = installation_file_lock()?;
+    recover_runtime_at(&feature_root(feature)?)?;
+    install_locked(app, feature, profile)
+}
+
+fn install_locked(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeStatus, String> {
     if profile == "cuda" && !nvidia_detected() {
         return Err("Windows chưa nhận diện GPU NVIDIA. Kiểm tra driver và kết nối GPU trước khi cài tăng tốc.".into());
     }
@@ -810,9 +952,29 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
         .ok_or("Bộ cài thành phần bổ sung chưa có trong ứng dụng. Hãy cập nhật JC AI.")?;
     let source = crate::runtime_paths::optional_worker_source()
         .ok_or("Ứng dụng thiếu bộ xử lý AI. Hãy cập nhật JC AI.")?;
-    let root = ensure_runtime_root()?;
+    if !matches!(feature, "ocr_openvino" | "whisper_openvino") {
+        if let Some(legacy) = read_marker() {
+            let intel_features: Vec<_> = legacy.features.iter().filter(|f| matches!(f.as_str(), "ocr_openvino" | "whisper_openvino")).cloned().collect();
+            for intel in &intel_features {
+                let dedicated = read_marker_at(&feature_root(intel)?);
+                if !dedicated.is_some_and(|m| m.features.contains(intel)) {
+                    emit(app, "Tách bộ xử lý Intel đã cài để giữ tương thích với NVIDIA/CPU");
+                    install_locked(app, intel, "openvino")?;
+                }
+            }
+            // Leave old packages intact. Subsequent staging only owns non-Intel
+            // features; a dedicated Intel pack is verified before this migration.
+            if !intel_features.is_empty() {
+                let mut marker = legacy;
+                marker.features.retain(|f| !intel_features.contains(f));
+                write_marker(&root()?.join("current.json"), &marker)?;
+            }
+        }
+    }
+    let root = ensure_runtime_root_at(feature_root(feature)?)?;
+    let shared = ensure_runtime_root()?;
     for name in ["cache", "python"] {
-        let directory = root.join(name);
+        let directory = shared.join(name);
         fs::create_dir_all(&directory)
             .map_err(|error| format!("Không thể tạo thư mục cài đặt: {error}"))?;
         let metadata = fs::symlink_metadata(&directory).map_err(|error| error.to_string())?;
@@ -820,19 +982,9 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
             return Err("Thư mục cài đặt không an toàn.".into());
         }
     }
-    let old = read_marker();
-    // Adding Intel is orthogonal to the existing CPU/CUDA feature set.
-    let profile = if matches!(feature, "ocr_openvino" | "whisper_openvino") {
-        old.as_ref()
-            .map(|marker| marker.profile.as_str())
-            .unwrap_or(profile)
-    } else {
-        profile
-    };
-    let reuse_current = matches!(feature, "ocr_openvino" | "whisper_openvino")
-        && old
-            .as_ref()
-            .is_some_and(|marker| marker.runtime_version == RUNTIME_VERSION);
+    let old = read_marker_at(&root);
+    let mut reuse_current = old.as_ref().is_some_and(|marker|
+        marker.runtime_version == RUNTIME_VERSION && marker.profile == profile);
     if profile == "cpu"
         && old
             .as_ref()
@@ -860,6 +1012,9 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
             return Ok(status());
         }
         emit(app, "Phát hiện runtime AI không tương thích; đang sửa chữa");
+        // A corrupt/incompatible pack must be rebuilt from pinned dependencies;
+        // freezing its broken versions would prevent repair indefinitely.
+        reuse_current=false;
     }
 
     let mut features = old
@@ -896,7 +1051,7 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
                 "--no-project",
                 "--managed-python",
                 "--python",
-                "3.12",
+                &crate::runtime_registry::registry().python_version,
                 "--no-progress",
                 destination
                     .to_str()
@@ -906,6 +1061,10 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
         )?;
     }
     let python = python_path(&destination);
+    let constraints=crate::runtime_registry::registry().pins.iter()
+        .map(|(name,version)|format!("{name}=={version}"))
+        .collect::<Vec<_>>().join("\n");
+    fs::write(destination.join("matrix-constraints.txt"),constraints).map_err(|e|e.to_string())?;
     let install_result = (|| {
         let mut requested: Vec<&str> = if reuse_current {
             vec![feature]
@@ -917,6 +1076,13 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
         requested.sort_by_key(|item| *item == "acceleration");
         for item in requested {
             install_feature(app, &uv, &root, &source, &python, item, profile)?;
+        }
+        // Adding another feature can resolve the CPU ORT distribution again.
+        // Restore the exclusive CUDA provider and its files before verification.
+        if features.iter().any(|f| f == "acceleration") {
+            let py = python.to_str().ok_or("Đường dẫn Python không hợp lệ.")?;
+            run_uv(app, &uv, &root, &["pip", "uninstall", "--python", py, "onnxruntime"], "Kiểm tra bộ đọc chữ NVIDIA")?;
+            run_uv(app, &uv, &root, &["pip", "install", "--python", py, "--reinstall-package", "onnxruntime-gpu", "onnxruntime-gpu==1.26.0"], "Hoàn thiện bộ đọc chữ NVIDIA")?;
         }
         check_dependencies(app, &uv, &root, &python, &source, &features)?;
         verify(app, &python, &source, &features, profile)
@@ -932,32 +1098,66 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
         profile: profile.into(),
         features,
     };
+    fs::write(destination.join("runtime-manifest.json"), serde_json::to_vec_pretty(&serde_json::json!({
+        "schemaVersion": 1, "runtimeVersion": RUNTIME_VERSION, "protocolVersion": crate::worker_manager::PROTOCOL_VERSION,
+        "pythonVersion": crate::runtime_registry::registry().python_version, "backend": profile,
+        "features": marker.features, "installedAt": chrono::Utc::now().to_rfc3339(),
+        "requirements": marker.features.iter().map(|f| requirement_name(f)).collect::<Vec<_>>()
+    })).map_err(|e|e.to_string())?).map_err(|e|format!("Không thể lưu thông tin bộ xử lý: {e}"))?;
+    if let Err(error)=promote(&root, &destination, &marker) {
+        let _=safe_remove(&destination,&root);
+        let _=fs::remove_file(root.join("current.json.tmp"));
+        return Err(error);
+    }
+    // Keep downloaded packages until the user explicitly clears them in
+    // Settings. Ordinary install success/failure must not evict this cache.
+    emit(app, "Đã cài tính năng được chọn");
+    Ok(status())
+}
+
+fn promote(root: &Path, destination: &Path, marker: &RuntimeMarker) -> Result<(), String> {
+    if !marker.features.is_empty() {
+        let source = crate::runtime_paths::optional_worker_source().ok_or("Không tìm thấy bộ xử lý AI.")?;
+        let mut command = Command::new(python_path(destination));
+        hide_console(&mut command);
+        let output = command.args(["-m", "worker.runtime_dependencies", r#"{"inventory":true}"#])
+            .current_dir(&source).env("PYTHONPATH", &source).pipe_output_timeout().map_err(|e|e.to_string())?;
+        if !output.status.success() { return Err("Không đọc được danh sách thành phần vừa cài.".into()); }
+        let inventory: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|_|"Danh sách thành phần không hợp lệ.")?;
+        fs::write(destination.join("python-packages.json"),serde_json::to_vec_pretty(&inventory).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    }
+    crate::worker_manager::with_runtime_idle(&root.join("current"), || promote_idle(root, destination, marker))
+}
+fn promote_idle(root: &Path, destination: &Path, marker: &RuntimeMarker) -> Result<(), String> {
+    write_marker(&root.join("current.json.tmp"), marker)?;
+    let manifest = serde_json::json!({
+        "schemaVersion": 1, "runtimeVersion": RUNTIME_VERSION, "protocolVersion": crate::worker_manager::PROTOCOL_VERSION,
+        "pythonVersion": crate::runtime_registry::registry().python_version, "backend": marker.profile,
+        "features": marker.features, "installedAt": chrono::Utc::now().to_rfc3339(),
+        "requirements": marker.features.iter().map(|f| requirement_name(f)).collect::<Vec<_>>()
+    });
+    fs::write(destination.join("runtime-manifest.json"), serde_json::to_vec_pretty(&manifest).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
     let marker_temp = root.join("current.json.tmp");
     let marker_file = root.join("current.json");
     let marker_previous = root.join("previous.json");
-    fs::write(
-        &marker_temp,
-        serde_json::to_vec(&marker).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| format!("Không thể lưu trạng thái cài đặt: {error}"))?;
-    if replace {
+    {
         let current = root.join("current");
         let previous = root.join("previous");
         safe_remove(&previous, &root)?;
         if current.exists() {
-            fs::rename(&current, &previous)
+            rename_runtime(&current, &previous)
                 .map_err(|error| format!("Không thể thay bộ xử lý cũ: {error}"))?;
         }
-        if let Err(error) = fs::rename(&destination, &current) {
+        if let Err(error) = rename_runtime(&destination, &current) {
             if previous.exists() {
-                let _ = fs::rename(&previous, &current);
+                let _ = rename_runtime(&previous, &current);
             }
             return Err(format!("Không thể hoàn tất cài đặt: {error}"));
         }
     }
     if marker_previous.is_file() {
         if let Err(error) = fs::remove_file(&marker_previous) {
-            if replace {
+            {
                 rollback_replacement(&root);
             }
             return Err(format!("Không thể dọn trạng thái cũ: {error}"));
@@ -965,7 +1165,7 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
     }
     if marker_file.is_file() {
         if let Err(error) = fs::rename(&marker_file, &marker_previous) {
-            if replace {
+            {
                 rollback_replacement(&root);
             }
             return Err(format!("Không thể cập nhật trạng thái cài đặt: {error}"));
@@ -975,23 +1175,129 @@ pub fn install(app: &AppHandle, feature: &str, profile: &str) -> Result<RuntimeS
         if marker_previous.is_file() {
             let _ = fs::rename(&marker_previous, &marker_file);
         }
-        if replace {
+        {
             rollback_replacement(&root);
         }
         return Err(format!("Không thể hoàn tất trạng thái cài đặt: {error}"));
     }
     let _ = fs::remove_file(&marker_previous);
-    if replace {
+    {
         cleanup_previous_runtime(&root);
     }
-    // Keep downloaded packages until the user explicitly clears them in
-    // Settings. Ordinary install success/failure must not evict this cache.
-    emit(app, "Đã cài tính năng được chọn");
+    Ok(())
+}
+
+fn write_marker(path: &Path, marker: &RuntimeMarker) -> Result<(), String> {
+    use std::io::Write;
+    let mut temporary = tempfile::NamedTempFile::new_in(path.parent().ok_or("Đường dẫn cài đặt không hợp lệ.")?)
+        .map_err(|e|e.to_string())?;
+    temporary.write_all(&serde_json::to_vec_pretty(marker).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    temporary.as_file().sync_all().map_err(|e|e.to_string())?;
+    temporary.persist(path).map_err(|e|e.to_string())?;
+    Ok(())
+}
+
+pub fn plan(feature: &str, profile: &str) -> Result<crate::runtime_registry::InstallPlan, String> {
+    if !valid_install(feature, profile) { return Err("Lựa chọn cài đặt không hợp lệ.".into()); }
+    let directory = feature_root(feature)?;
+    let marker = read_marker_at(&directory).filter(|m| m.runtime_version == RUNTIME_VERSION && m.profile == profile);
+    let installed = marker.as_ref().map(|m|m.features.clone()).unwrap_or_default();
+    let staging = if marker.is_some() { crate::storage_service::directory_size(&directory.join("current")) } else { 0 };
+    crate::runtime_registry::plan(feature, profile, &installed, staging)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeatureHealth { pub feature: String, pub installed: bool, pub verified: bool, pub backend: Option<String>, pub message: String }
+pub fn check_feature(app: &AppHandle, feature: &str) -> Result<FeatureHealth, String> {
+    if !FEATURES.contains(&feature) { return Err("Tính năng không hợp lệ.".into()); }
+    let Some((python, source, profile)) = active_runtime_for(feature) else {
+        return Ok(FeatureHealth { feature:feature.into(), installed:false, verified:false, backend:None, message:"Chưa cài bộ xử lý.".into() });
+    };
+    let verification_profile = if matches!(feature, "ocr_openvino" | "whisper_openvino") { "openvino" } else { &profile };
+    let result = verify(app, &python, &source, &[feature.into()], verification_profile);
+    Ok(FeatureHealth { feature:feature.into(), installed:true, verified:result.is_ok(), backend:Some(profile), message:result.err().unwrap_or_else(|| "Bộ xử lý đã sẵn sàng.".into()) })
+}
+
+pub fn uninstall(app: &AppHandle, feature: &str) -> Result<RuntimeStatus, String> {
+    if !FEATURES.contains(&feature) { return Err("Tính năng không hợp lệ.".into()); }
+    let _guard = INSTALL_LOCK.try_lock().map_err(|_|"Một lượt cài đặt khác đang chạy.")?;
+    let _file_lock = installation_file_lock()?;
+    let Some((python, source, profile)) = active_runtime_for(feature) else { return Ok(status()); };
+    let current = python.parent().and_then(Path::parent).ok_or("Đường dẫn bộ xử lý không hợp lệ.")?;
+    let directory = current.parent().ok_or("Đường dẫn bộ xử lý không hợp lệ.")?;
+    // uv keeps a managed-Python alias junction next to the runtime. It is not
+    // part of the venv being replaced or removed: validate only that venv and
+    // the parent directories, leaving the shared Python/cache trees untouched.
+    ensure_runtime_root_at(directory.to_path_buf())?;
+    ensure_plain_tree(current)?;
+    let mut marker = read_marker_at(directory).ok_or("Không đọc được trạng thái bộ xử lý.")?;
+    marker.features.retain(|f| f != feature);
+    let destination = directory.join("staging");
+    safe_remove(&destination, directory)?;
+    if marker.features.is_empty() {
+        // Empty staged pack atomically disconnects the old runtime before it is
+        // cleaned up. Never uninstall shared dependencies from a live venv.
+        fs::create_dir(&destination).map_err(|e|e.to_string())?;
+        promote(directory,&destination,&marker)?;
+        safe_remove(&directory.join("current"),directory)?;
+        fs::remove_file(directory.join("current.json")).map_err(|e|e.to_string())?;
+        return Ok(status());
+    }
+    copy_runtime(current, &destination)?;
+    let result = (|| {
+        let uv = crate::runtime_paths::optional_installer().ok_or("Thiếu bộ cài thành phần ứng dụng.")?;
+        let staged_python = python_path(&destination);
+        let py = staged_python.to_str().ok_or("Đường dẫn không hợp lệ.")?;
+        let _owned = crate::runtime_registry::removable_packages(feature, &marker.features, &profile)?;
+        let components = crate::runtime_registry::components(&marker.features,&profile)?;
+        let roots = components.iter().flat_map(|id| crate::runtime_registry::registry().components[id].packages.clone()).collect::<Vec<_>>();
+        let cuda_ort = marker.features.iter().any(|f| f == "acceleration");
+        let request = serde_json::json!({"roots":roots,"cudaOrt":cuda_ort});
+        let mut command = Command::new(&staged_python);
+        hide_console(&mut command);
+        let output = command.args(["-m","worker.runtime_dependencies", &request.to_string()])
+            .current_dir(&source).env("PYTHONPATH",&source).pipe_output_timeout().map_err(|e|e.to_string())?;
+        if !output.status.success() { return Err("Không xác định được các thành phần dùng chung; đã dừng gỡ để bảo vệ bộ xử lý.".into()); }
+        let packages: Vec<String> = serde_json::from_slice(&output.stdout).map_err(|_|"Danh sách thành phần dùng chung không hợp lệ.")?;
+        if !packages.is_empty() {
+            let mut args = vec!["pip","uninstall","--python",py];
+            args.extend(packages.iter().map(String::as_str));
+            run_uv(app,&uv,directory,&args,"Gỡ tính năng được chọn; giữ bộ dùng chung")?;
+        }
+        if feature == "acceleration" && !marker.features.is_empty() {
+            run_uv(app,&uv,directory,&["pip","install","--python",py,"--reinstall-package","onnxruntime","onnxruntime==1.30.0"],"Khôi phục bộ đọc chữ CPU")?;
+        }
+        check_dependencies(app,&uv,directory,&staged_python,&source,&marker.features)?;
+        verify(app,&staged_python,&source,&marker.features,&profile)?;
+        promote(directory,&destination,&marker)
+    })();
+    if let Err(error) = result { let _=safe_remove(&destination,directory); return Err(error); }
+    emit(app,"Đã gỡ tính năng được chọn; các model được giữ nguyên");
     Ok(status())
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn directory_promotion_retries_a_temporary_windows_lock() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("staging");
+        let target = temp.path().join("current");
+        std::fs::create_dir(&source).unwrap();
+        let handle = std::fs::OpenOptions::new().read(true).share_mode(0)
+            .custom_flags(0x02000000).open(&source).unwrap(); // FILE_FLAG_BACKUP_SEMANTICS
+        let unlock = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            drop(handle);
+        });
+        super::rename_runtime(&source, &target).unwrap();
+        unlock.join().unwrap();
+        assert!(target.is_dir());
+        assert!(!source.exists());
+    }
     use super::{
         cleanup_previous_runtime, clear_installation_cache_at,
         is_onnxruntime_gpu_metadata_conflict, safe_remove,
@@ -1090,6 +1396,72 @@ mod tests {
                 b"data"
             );
         }
+    }
+
+    #[test]
+    fn failed_marker_promotion_rolls_back_runtime_and_metadata() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        fs::create_dir(root.join("current")).unwrap();
+        fs::create_dir(root.join("staging")).unwrap();
+        fs::create_dir(root.join("previous.json")).unwrap(); // simulate a marker write failure
+        fs::write(root.join("current/old.bin"),b"working").unwrap();
+        fs::write(root.join("staging/new.bin"),b"replacement").unwrap();
+        fs::write(root.join("current.json"),b"old metadata").unwrap();
+        let marker=super::RuntimeMarker {runtime_version:7,profile:"cpu".into(),features:vec![]};
+        assert!(super::promote_idle(root,&root.join("staging"),&marker).is_err());
+        assert_eq!(fs::read(root.join("current/old.bin")).unwrap(),b"working");
+        assert_eq!(fs::read(root.join("current.json")).unwrap(),b"old metadata");
+        assert!(!root.join("current/new.bin").exists());
+    }
+
+    #[test]
+    fn failed_manifest_write_never_replaces_current() {
+        let temp=tempdir().unwrap();
+        let root=temp.path();
+        fs::create_dir(root.join("current")).unwrap();
+        fs::create_dir_all(root.join("staging/runtime-manifest.json")).unwrap();
+        fs::write(root.join("current/old.bin"),b"working").unwrap();
+        let marker=super::RuntimeMarker {runtime_version:7,profile:"cpu".into(),features:vec![]};
+        assert!(super::promote_idle(root,&root.join("staging"),&marker).is_err());
+        assert_eq!(fs::read(root.join("current/old.bin")).unwrap(),b"working");
+    }
+
+    #[test]
+    fn startup_recovers_interrupted_directory_and_marker_switches() {
+        for interrupted_marker in [false,true] {
+            let temp=tempdir().unwrap(); let root=temp.path();
+            fs::create_dir(root.join("previous")).unwrap();
+            fs::write(root.join("previous/old.bin"),b"working").unwrap();
+            let marker=super::RuntimeMarker {runtime_version:7,profile:"cpu".into(),features:vec!["sttn".into()]};
+            let filename=if interrupted_marker {"previous.json"} else {"current.json"};
+            super::write_marker(&root.join(filename),&marker).unwrap();
+            if interrupted_marker {
+                fs::create_dir(root.join("current")).unwrap();
+                fs::write(root.join("current/new.bin"),b"uncommitted").unwrap();
+            }
+            super::recover_runtime_at(root).unwrap();
+            assert_eq!(fs::read(root.join("current/old.bin")).unwrap(),b"working");
+            assert!(root.join("current.json").is_file());
+            assert!(!root.join("current/new.bin").exists());
+        }
+    }
+
+    #[test]
+    fn wheel_hash_and_path_are_validated_with_windows_bom() {
+        use sha2::Digest;
+        let temp=tempdir().unwrap(); let root=temp.path();
+        let name="bandit_infer-0.1.0-py3-none-any.whl";
+        fs::write(root.join(name),b"fixture wheel").unwrap();
+        let hash=format!("{:x}",sha2::Sha256::digest(b"fixture wheel"));
+        let manifest=serde_json::json!({"name":name,"sha256":hash});
+        let mut encoded=b"\xef\xbb\xbf".to_vec();encoded.extend(serde_json::to_vec(&manifest).unwrap());
+        fs::write(root.join("manifest.json"),encoded).unwrap();
+        assert!(super::verified_wheel(root,"manifest.json","bandit_infer-0.1.0-").is_ok());
+        fs::write(root.join(name),b"broken wheel").unwrap();
+        assert!(super::verified_wheel(root,"manifest.json","bandit_infer-0.1.0-").is_err());
+        fs::write(root.join("manifest.json"),br#"{"name":"../outside.whl","sha256":"unused"}"#).unwrap();
+        assert!(super::verified_wheel(root,"manifest.json","bandit_infer-").is_err());
     }
 
     #[test]
