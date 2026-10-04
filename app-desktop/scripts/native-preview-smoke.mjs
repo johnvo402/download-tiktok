@@ -33,13 +33,15 @@ try {
  const data = await evaluate(`window.__TAURI_INTERNALS__.invoke('list_projects')`);
  assert.ok(data.projects.every(p => p.name==='Native Preview QA'), 'Refuse to run against real user projects');
  if (!await evaluate(`!!document.querySelector('.preview-frame')`)) {
+  for(let tries=0;tries<50;tries++){if(await evaluate(`!!document.querySelector('.project-open')`))break;await delay(100);}
+  assert.equal(await evaluate(`!!document.querySelector('.project-open')`),true,'Wait for the project manager to finish loading');
   await evaluate(`document.querySelector('.project-open').click()`);await delay(3000);
  }
  for (let tries=0;tries<30;tries++){if(await evaluate(`document.querySelector('.preview-frame')?.dataset.previewReady==='true'`))break;await delay(200);}
  const initial = await status(); assert.equal(initial.decode,'hardware');assert.equal(initial.state,'paused');
- assert.equal(await evaluate(`!!document.querySelector('audio.workspace-video') && !document.querySelector('video.workspace-video')`),true,'Native playback must not decode a second browser video');
+ assert.equal(await evaluate(`!!document.querySelector('audio.workspace-video') && document.querySelector('audio.workspace-video').muted && !document.querySelector('video.workspace-video')`),true,'Native playback must not decode a second browser video/audio');
  await evaluate(`document.querySelector('.play-button').click()`);await delay(1300);
- const play=await status(); const audio=await evaluate(`document.querySelector('audio.workspace-video').currentTime`);
+ const play=await status(); const audio=await evaluate(`(async()=>{const s=await import('/src/app/project-state.ts');return (await window.__TAURI_INTERNALS__.invoke('audio_preview_status',{projectId:s.currentProject().id})).time;})()`);
  assert.ok(play.playing);assert.ok(play.framePts>0.5);assert.ok(Math.abs(play.position-audio)<0.25,`audio drift=${play.position-audio}`);
  await evaluate(`document.querySelector('.play-button').click()`);await delay(250);
  const paused=await status();await delay(350);const pausedAgain=await status();assert.equal(pausedAgain.framePts,paused.framePts);assert.equal(pausedAgain.frames,paused.frames,'Pause must not keep decoding/rendering');

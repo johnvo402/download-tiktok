@@ -10,7 +10,7 @@ import { ttsService } from '../../../app/services/tts-service';
 import { dialogueService, type DialogueEnvironment } from '../../../app/services/dialogue-service';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { SubtitleTrackMetadata } from '../../projects/types';
+import type { Project, SubtitleTrackMetadata } from '../../projects/types';
 import type { AsrEnvironment, OcrEnvironment, TextRemovalEnvironment, Transcript, TranscriptSegment } from '../../transcript/types';
 import type { AppSettings } from '../../../app/services/translation-service';
 import { compareSegmentTime, formatTimestamp, ttsWindowEnd, validateTranscript } from '../../transcript/transcript-utils';
@@ -802,6 +802,14 @@ export default function TranslationPanel() {
     }, 400);
   };
 
+  const updateAudioProcessing = (changes: Partial<NonNullable<Project['dubbing']['audioProcessing']>>) => {
+    updateDubbingSettings({ audioProcessing: {
+      headPaddingMs: 100, tailPaddingMs: 60, maxFitSpeed: 1.2, normalize: true,
+      duckAttackMs: 60, duckReleaseMs: 180,
+      ...currentProject()?.dubbing.audioProcessing, ...changes,
+    } });
+  };
+
   const fitAndRegenerate = async (segmentId: string) => {
     const project = currentProject();
     if (!project || ttsRunning()) return;
@@ -1320,7 +1328,16 @@ export default function TranslationPanel() {
             <label class="property-control-row"><span>Phát audio trên preview</span><input type="checkbox" checked={currentProject()?.dubbing.enabled ?? false} onChange={(event) => updateDubbingSettings({ enabled: event.currentTarget.checked })} /></label>
             <label class="property-control-row"><span>Provider</span><select class="settings-select" value={currentProject()?.dubbing.provider ?? 'vieneu'} disabled><option value="vieneu">VieNeu-TTS</option></select></label>
             <label class="property-control-row"><span>Tốc độ <small>{(currentProject()?.dubbing.speed ?? ttsSettings()?.speed ?? 1).toFixed(2)}×</small></span><input type="range" min="0.85" max="2" step="0.01" value={currentProject()?.dubbing.speed ?? ttsSettings()?.speed ?? 1} disabled={(currentProject()?.dubbing.fitMode ?? (ttsSettings()?.fitToDuration ? 'fit' : 'custom')) !== 'custom'} onInput={(event) => updateDubbingSettings({ speed: Number(event.currentTarget.value) })} /></label>
-            <label class="property-control-row"><span>Audio Fit</span><select class="settings-select" value={currentProject()?.dubbing.fitMode ?? (ttsSettings()?.fitToDuration ? 'fit' : 'custom')} onChange={(event) => updateDubbingSettings({ fitMode: event.currentTarget.value as 'natural' | 'fit' | 'custom' })}><option value="natural">Natural</option><option value="fit">Fit · tối đa 2.00×</option><option value="custom">Custom speed</option></select></label>
+            <label class="property-control-row"><span>Audio Fit</span><select class="settings-select" value={currentProject()?.dubbing.fitMode ?? (ttsSettings()?.fitToDuration ? 'fit' : 'custom')} onChange={(event) => updateDubbingSettings({ fitMode: event.currentTarget.value as 'natural' | 'fit' | 'custom' })}><option value="natural">Natural</option><option value="fit">Tự khớp · giữ nhịp tự nhiên</option><option value="custom">Custom speed</option></select></label>
+            <details class="property-group"><summary>Điều chỉnh giọng đọc nâng cao</summary>
+              <label class="property-control-row"><span>Tăng tốc tối đa <small>{(currentProject()?.dubbing.audioProcessing?.maxFitSpeed ?? 1.2).toFixed(2)}×</small></span><input type="range" min="1" max="2" step="0.05" value={currentProject()?.dubbing.audioProcessing?.maxFitSpeed ?? 1.2} onInput={(e) => updateAudioProcessing({ maxFitSpeed: Number(e.currentTarget.value) })} /></label>
+              <label class="property-control-row"><span>Khoảng đệm đầu <small>{currentProject()?.dubbing.audioProcessing?.headPaddingMs ?? 100} ms</small></span><input type="range" min="0" max="300" step="10" value={currentProject()?.dubbing.audioProcessing?.headPaddingMs ?? 100} onInput={(e) => updateAudioProcessing({ headPaddingMs: Number(e.currentTarget.value) })} /></label>
+              <label class="property-control-row"><span>Khoảng đệm cuối <small>{currentProject()?.dubbing.audioProcessing?.tailPaddingMs ?? 60} ms</small></span><input type="range" min="0" max="300" step="10" value={currentProject()?.dubbing.audioProcessing?.tailPaddingMs ?? 60} onInput={(e) => updateAudioProcessing({ tailPaddingMs: Number(e.currentTarget.value) })} /></label>
+              <label class="property-control-row"><span>Cân bằng âm lượng giọng đọc</span><input type="checkbox" checked={currentProject()?.dubbing.audioProcessing?.normalize ?? true} onChange={(e) => updateAudioProcessing({ normalize: e.currentTarget.checked })} /></label>
+              <label class="property-control-row"><span>Hạ âm gốc trong <small>{currentProject()?.dubbing.audioProcessing?.duckAttackMs ?? 60} ms</small></span><input type="range" min="0" max="500" step="10" value={currentProject()?.dubbing.audioProcessing?.duckAttackMs ?? 60} onInput={(e) => updateAudioProcessing({ duckAttackMs: Number(e.currentTarget.value) })} /></label>
+              <label class="property-control-row"><span>Khôi phục âm gốc trong <small>{currentProject()?.dubbing.audioProcessing?.duckReleaseMs ?? 180} ms</small></span><input type="range" min="0" max="2000" step="10" value={currentProject()?.dubbing.audioProcessing?.duckReleaseMs ?? 180} onInput={(e) => updateAudioProcessing({ duckReleaseMs: Number(e.currentTarget.value) })} /></label>
+              <p class="property-help">Tạo lại audio để áp dụng. Giọng đọc ngắn giữ tốc độ tự nhiên; đoạn vượt khung được giữ đầy đủ và có cảnh báo.</p>
+            </details>
             <label class="property-control-row"><span>Âm thanh gốc <small>{Math.round((currentProject()?.dubbing.originalVolume ?? 1) * 100)}%</small></span><input type="range" min="0" max="1" step="0.01" value={currentProject()?.dubbing.originalVolume ?? 1} onInput={(event) => updateDubbingSettings({ originalVolume: Number(event.currentTarget.value) })} /></label>
             <label class="property-control-row"><span>Âm thanh lồng tiếng <small>{Math.round((currentProject()?.dubbing.dubbedVolume ?? 1) * 100)}%</small></span><input type="range" min="0" max="1" step="0.01" value={currentProject()?.dubbing.dubbedVolume ?? 1} onInput={(event) => updateDubbingSettings({ dubbedVolume: Number(event.currentTarget.value) })} /></label>
             <label class="property-control-row"><span>Tắt âm thanh gốc</span><input type="checkbox" checked={currentProject()?.dubbing.muteOriginal ?? false} onChange={(event) => updateDubbingSettings({ muteOriginal: event.currentTarget.checked })} /></label>

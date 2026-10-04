@@ -323,6 +323,7 @@ pub async fn delete_project(
         }
         let result = (|| {
             app.state::<crate::preview::PreviewManager>().close_project(&id);
+            app.state::<crate::audio::transport::AudioManager>().close(Some(&id));
             asr_service::cancel_project_jobs_and_wait(&asr_jobs, &id)?;
             translation_service::cancel_project_jobs_and_wait_ref(&translation_jobs, &id)?;
             tts_service::cancel_project_jobs_and_wait(&tts_jobs, &id)?;
@@ -913,6 +914,7 @@ pub fn update_dubbing_settings(
     project_id: String,
     dubbing: crate::project_service::DubbingSettings,
 ) -> Result<Project, String> {
+    dubbing.audio_processing.validate()?;
     if !dubbing.original_volume.is_finite()
         || !(0.0..=1.0).contains(&dubbing.original_volume)
         || !dubbing.dubbed_volume.is_finite()
@@ -1076,6 +1078,7 @@ pub async fn import_video(
             );
         }
         app.state::<crate::preview::PreviewManager>().close_project(&project_id);
+        app.state::<crate::audio::transport::AudioManager>().close(Some(&project_id));
         video_service::import_video(&ProjectStore::new(root), &project_id, &source_path, replace)
     })
     .await

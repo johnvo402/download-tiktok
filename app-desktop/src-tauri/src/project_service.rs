@@ -449,6 +449,7 @@ impl Default for SubtitleSettings {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DubbingSettings {
+    pub audio_processing: crate::audio::ProcessingSettings,
     pub enabled: bool,
     pub provider: String,
     pub model_id: String,
@@ -474,6 +475,7 @@ impl Default for DubbingSettings {
         Self {
             enabled: false,
             provider: "vieneu".to_string(),
+            audio_processing: crate::audio::ProcessingSettings::default(),
             model_id: "v3-turbo".to_string(),
             voice: None,
             voice_profile_id: None,

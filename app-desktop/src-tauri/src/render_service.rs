@@ -82,6 +82,7 @@ pub struct ExportValidation {
     pub warnings: Vec<render_spec::SubtitleLayoutWarning>,
     pub dubbing_segments: usize,
     pub expected_audio: bool,
+    pub audio_warnings: Vec<String>,
 }
 
 pub fn has_active_project_job(jobs: &RenderJobs, project_id: &str) -> bool {
@@ -102,7 +103,7 @@ pub fn validate_export(
 ) -> Result<ExportValidation, String> {
     validate_export_options(options)?;
     resolve_export_directory(store, project_id, options.output_directory.as_deref())?;
-    let (project, _transcript, spec, dubbing_count, expected_audio) =
+    let (project, transcript, spec, dubbing_count, expected_audio) =
         prepare(store, project_id, options)?;
     let normal = spec
         .subtitle
@@ -118,6 +119,11 @@ pub fn validate_export(
         .map(|event| event.layout.font_size)
         .min()
         .unwrap_or(0);
+    let voices=if options.include_dubbing {crate::audio::timeline::voices(store,project_id,&transcript,true,spec.duration)?}else{Vec::new()};
+    let mut audio_warnings=crate::audio::timeline::collisions(&voices).into_iter().map(|(a,b)|format!("Giọng đọc {a} và {b} chồng thời gian; audio được giữ đầy đủ.")).collect::<Vec<_>>();
+    for segment in &transcript.segments {
+        if options.include_dubbing { if let Some(message)=segment.tts.as_ref().and_then(|t|t.warning.clone()){audio_warnings.push(message);} }
+    }
     let _ = project;
     Ok(ExportValidation {
         resolved_encoder: spec.output.encoder,
@@ -134,6 +140,7 @@ pub fn validate_export(
         warnings: spec.subtitle.warnings.clone(),
         dubbing_segments: dubbing_count,
         expected_audio,
+        audio_warnings,
     })
 }
 
@@ -505,7 +512,7 @@ fn resolve_dubbing(
                 .tts
                 .as_ref()
                 .ok_or_else(|| format!("Segment {} chưa có voice-over.", segment.id))?;
-            if tts.status != Some(TranscriptTtsStatus::Ready) {
+            if !matches!(tts.status,Some(TranscriptTtsStatus::Ready | TranscriptTtsStatus::DurationOverflow)) {
                 return Err(format!(
                     "Voice-over của segment {} đã cũ hoặc lỗi thời. Tạo lại TTS trước khi export.",
                     segment.id
@@ -692,15 +699,35 @@ fn run_export_inner(
     } else {
         None
     };
-    let (graph, dub_items, logo_paths, audio_expected) =
-        build_filtergraph(store, project_id, &transcript, &spec, options, &ass_path, dialogue_stem.as_deref(), &ai_patches)?;
+    let voices = if options.include_dubbing { crate::audio::timeline::voices(store, project_id, &transcript, true, spec.duration)? } else { Vec::new() };
+    let conflicts = crate::audio::timeline::collisions(&voices);
+    let audio_manifest = serde_json::json!({"engineVersion":2,"dubbingSegments":voices.iter().map(|v|serde_json::json!({
+        "id":v.id,"audioStart":v.start,"audioEnd":v.end,"speechStart":v.speech_start,"speechEnd":v.speech_end
+    })).collect::<Vec<_>>()});
+    if !conflicts.is_empty() { log::warn!("Audio speech intervals overlap: {conflicts:?}"); }
+    let audio_expected = spec.audio.include_original || !voices.is_empty();
+    let master_audio = if audio_expected {
+        let path = render_dir.join("master-audio.wav");
+        crate::audio::mixer::render(
+            if spec.audio.include_original {Some(source_path.as_path())}else{None},dialogue_stem.as_deref(),voices,
+            crate::audio::mixer::Mix::export(&spec.audio,project.dubbing.audio_processing.clone()),spec.duration,&path,
+            ||state.load(Ordering::SeqCst)==JOB_CANCELLED,
+            |p|emit_event(app,event(project_id,job_id,"running",p*0.04,started.elapsed().as_secs_f64(),source_duration,None,None,
+                "Đang trộn âm thanh…".into(),Vec::new())))?;
+        Some(path)
+    } else {None};
+    // Every visual backend receives the same processed/mixed master, encoded to AAC once.
+    let dub_items: Vec<(PathBuf,f64,f64,String)> = Vec::new();
+    let logo_paths = if options.apply_logos { spec.logos.iter().filter(|l|l.enabled)
+        .map(|l|resolve_project_file(store,project_id,&l.asset_path,"media/overlays")).collect::<Result<Vec<_>,_>>()? } else {Vec::new()};
+    let mut graph = build_video_filtergraph(&spec,options,&ass_path,0,&ai_patches);
+    graph.push_str(&master_audio_filter(1+logo_paths.len()+ai_patches.len(),audio_expected));
     let filter_path = render_dir.join("filtergraph.txt");
     fs::write(&filter_path, &graph)
         .map_err(|error| format!("Không thể ghi filtergraph: {error}"))?;
-    let manifest = serde_json::json!({"dubbingSegments": dub_items.iter().map(|item| serde_json::json!({"id":item.3,"delayMs":(item.1*1000.0).round() as u64,"duration":item.2})).collect::<Vec<_>>()});
     fs::write(
         render_dir.join("audio-manifest.json"),
-        serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
+        serde_json::to_vec_pretty(&audio_manifest).unwrap_or_default(),
     )
     .map_err(|error| format!("Không thể ghi manifest audio: {error}"))?;
     let final_path = unique_output_path(&export_dir, &options.output_file_name);
@@ -793,12 +820,12 @@ fn run_export_inner(
     for (attempt, backend) in candidates.iter().copied().enumerate() {
         spec.output.encoder = backend;
         if let Some(renderer) = gpu_renderer.as_mut() {
-            let raw_index = 1 + dub_items.len() + usize::from(dialogue_stem.is_some());
+            let raw_index = 1 + dub_items.len() + usize::from(master_audio.is_some());
             let mut gpu_graph = format!("[{raw_index}:v]null[vout];");
-            gpu_graph.push_str(&build_audio_filtergraph(&spec.audio, &dub_items, audio_expected, dialogue_stem.as_ref().map(|_| 1 + dub_items.len()), spec.duration));
+            gpu_graph.push_str(&master_audio_filter(1,audio_expected));
             let gpu_filter = render_dir.join("audio-gpu-filtergraph.txt");
             fs::write(&gpu_filter, gpu_graph).map_err(|error| format!("Không ghi được audio graph: {error}"))?;
-            let command = build_ffmpeg_command(crate::runtime_paths::ffmpeg_command()?, &source_path, &dub_items, &[], &[], dialogue_stem.as_deref(),
+            let command = build_ffmpeg_command(crate::runtime_paths::ffmpeg_command()?, &source_path, &dub_items, &[], &[], master_audio.as_deref(),
                 &gpu_filter, &staging_path, &spec, audio_expected, Some(gpu_fps))?;
             let rendered = crate::render::stream::run(renderer, crate::render::stream::decoder_command(&source_path)?, command, gpu_fps, &ai_patches, state, |pts, frames| {
                 let fraction = (pts / source_duration).clamp(0.0, 0.995);
@@ -822,16 +849,15 @@ fn run_export_inner(
         }
         let mut command = if let Some(video) = native_video.as_deref() {
             let audio_filter=render_dir.join("audio-native-filtergraph.txt");
-            fs::write(&audio_filter,build_audio_filtergraph(&spec.audio,&dub_items,audio_expected,
-                dialogue_stem.as_ref().map(|_|1+dub_items.len()),spec.duration)).map_err(|e|e.to_string())?;
-            build_native_mux_command(&source_path,video,&dub_items,dialogue_stem.as_deref(),&audio_filter,&staging_path,&spec,audio_expected)?
+            fs::write(&audio_filter,master_audio_filter(1,audio_expected)).map_err(|e|e.to_string())?;
+            build_native_mux_command(&source_path,video,&dub_items,master_audio.as_deref(),&audio_filter,&staging_path,&spec,audio_expected)?
         } else { build_ffmpeg_command(
             crate::runtime_paths::ffmpeg_command()?,
             &source_path,
             &dub_items,
             &logo_paths,
             &ai_patches,
-            dialogue_stem.as_deref(),
+            master_audio.as_deref(),
             &filter_path,
             &staging_path,
             &spec,
@@ -1012,7 +1038,7 @@ fn prepare_dialogue_stem(
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err("Cache stem thoại không hợp lệ; không sử dụng file này.".into());
         }
-        if metadata.len() > 44 { return Ok(Some(cached)); }
+        if metadata.len() > 44 && crate::audio::signal::validate_stem(&cached,duration).is_ok() { return Ok(Some(cached)); }
         fs::remove_file(&cached).map_err(|error| format!("Không thể dọn stem thoại lỗi: {error}"))?;
     }
     if state.load(Ordering::SeqCst) == JOB_CANCELLED { return Err("Đã hủy export.".into()); }
@@ -1048,6 +1074,7 @@ fn prepare_dialogue_stem(
     );
     let _ = fs::remove_file(input_wav);
     if let Err(error) = separation { let _ = fs::remove_file(partial); return Err(error); }
+    if let Err(e)=crate::audio::signal::validate_stem(&partial,duration) {let _=fs::remove_file(&partial);return Err(e);}
     fs::rename(&partial, &cached).map_err(|error| format!("Không thể lưu stem thoại trong cache project: {error}"))?;
     Ok(Some(cached))
 }
@@ -1064,6 +1091,11 @@ fn file_sha256(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", digest.finalize()))
 }
 
+fn master_audio_filter(index:usize,expected:bool)->String {
+    if expected {format!("[{index}:a:0]anull[aout];")} else {String::new()}
+}
+
+#[cfg(test)]
 fn build_filtergraph(
     store: &ProjectStore,
     project_id: &str,
@@ -1073,8 +1105,8 @@ fn build_filtergraph(
     ass_path: &Path,
     dialogue_stem: Option<&Path>,
     ai_patches: &[crate::text_removal_service::AiTextRemovalPatch],
-) -> Result<(String, Vec<(PathBuf, f64, f64, String)>, Vec<PathBuf>, bool), String> {
-    let dub_items = resolve_dubbing(store, project_id, transcript, options.include_dubbing)?;
+) -> Result<(String, Vec<(PathBuf, f64, f64, String)>, Vec<PathBuf>, bool, PathBuf), String> {
+    let voices = if options.include_dubbing {crate::audio::timeline::voices(store,project_id,transcript,true,spec.duration)?}else{Vec::new()};
     let logos: Vec<PathBuf> = if options.apply_logos {
         spec.logos
             .iter()
@@ -1084,18 +1116,14 @@ fn build_filtergraph(
     } else {
         Vec::new()
     };
-    let audio_expected =
-        spec.audio.include_original || (spec.audio.include_dubbing && !dub_items.is_empty());
-    let dialogue_input = dialogue_stem.map(|_| 1 + dub_items.len() + logos.len() + ai_patches.len());
-    let mut graph = build_video_filtergraph(spec, options, ass_path, dub_items.len(), ai_patches);
-    graph.push_str(&build_audio_filtergraph(
-        &spec.audio,
-        &dub_items,
-        audio_expected,
-        dialogue_input,
-        spec.duration,
-    ));
-    Ok((graph, dub_items, logos, audio_expected))
+    let audio_expected = spec.audio.include_original || !voices.is_empty();
+    let source=resolve_video(store,project_id)?;
+    let master=ass_path.with_extension("master.wav");
+    crate::audio::mixer::render(if spec.audio.include_original {Some(&source)}else{None},dialogue_stem,voices,
+        crate::audio::mixer::Mix::export(&spec.audio,Default::default()),spec.duration,&master,||false,|_|{})?;
+    let mut graph=build_video_filtergraph(spec,options,ass_path,0,ai_patches);
+    graph.push_str(&master_audio_filter(1+logos.len()+ai_patches.len(),audio_expected));
+    Ok((graph,Vec::new(),logos,audio_expected,master))
 }
 
 /// Composite order is deliberately blur → translated ASS → logo. Keep the subtitle asset
@@ -1197,78 +1225,6 @@ fn build_video_filtergraph(
         current = next;
     }
     graph.push_str(&format!("[{current}]null[vout];"));
-    graph
-}
-
-fn build_audio_filtergraph(
-    audio: &render_spec::RenderAudioConfig,
-    dub_items: &[(PathBuf, f64, f64, String)],
-    audio_expected: bool,
-    dialogue_input: Option<usize>,
-    duration: f64,
-) -> String {
-    let mut graph = String::new();
-    let has_original = audio.include_original;
-    let has_dubs = audio.include_dubbing && !dub_items.is_empty();
-    if audio_expected {
-        let mut audio_labels = Vec::new();
-        if has_original {
-            let gain = audio.original_volume;
-            let duck_factor = (1.0 - audio.ducking_amount).clamp(0.0, 1.0);
-            let volume = if has_dubs && audio.ducking {
-                let mut expression = format!("{gain:.4}");
-                for (_, start, length, _) in dub_items {
-                    expression = format!(
-                        "({expression})*if(between(t,{start:.3},{:.3}),{duck_factor:.4},1)",
-                        start + length
-                    );
-                }
-                expression
-            } else {
-                format!("{gain:.4}")
-            };
-            if audio.dialogue_reduction {
-                if let Some(input) = dialogue_input {
-                    let speech_gain = (1.0 - audio.dialogue_reduction_amount).clamp(0.0, 1.0);
-                    graph.push_str(&format!("[0:a:0]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[origbase];[{input}:a:0]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[dialogue_stem];[dialogue_stem]asplit=2[dialogue_sub_src][dialogue_gain_src];[dialogue_sub_src]volume=-1[dialogue_negative];[origbase][dialogue_negative]amix=inputs=2:duration=first:normalize=0[original_bed];[dialogue_gain_src]volume={speech_gain:.5}[dialogue_lowered];[original_bed][dialogue_lowered]amix=inputs=2:duration=first:normalize=0[dialogue_mix];[dialogue_mix]volume='{}':eval=frame[origmix];", volume));
-                } else {
-                    graph.push_str(&format!("[0:a:0]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,volume='{}':eval=frame[origmix];", volume));
-                }
-            } else {
-                graph.push_str(&format!("[0:a:0]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,volume='{}':eval=frame[origmix];", volume));
-            }
-            audio_labels.push("origmix".to_string());
-        }
-        if has_dubs {
-            let mut dub_labels = Vec::new();
-            for (index, (_, start, _, _)) in dub_items.iter().enumerate() {
-                let label = format!("dub{index}");
-                let delay = (*start * 1000.0).round().clamp(0.0, u64::MAX as f64) as u64;
-                graph.push_str(&format!("[{}:a:0]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,adelay={delay}:all=1,volume={:.4}[{label}];", 1 + index, audio.dubbed_volume));
-                dub_labels.push(format!("[{label}]"));
-            }
-            if dub_labels.len() == 1 {
-                graph.push_str(&format!("{}anull[dubmix];", dub_labels[0]));
-            } else {
-                graph.push_str(&format!(
-                    "{}amix=inputs={}:duration=longest:normalize=0[dubmix];",
-                    dub_labels.join(""),
-                    dub_labels.len()
-                ));
-            }
-            audio_labels.push("dubmix".into());
-        }
-        if audio_labels.len() == 1 {
-            graph.push_str(&format!("[{}]alimiter=limit=0.98[audio_unpadded];", audio_labels[0]));
-        } else {
-            graph.push_str(&format!(
-                "[{}][{}]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.98[audio_unpadded];",
-                audio_labels[0], audio_labels[1]
-            ));
-        }
-        // Keep silence after the last dub: -shortest must not truncate the video.
-        graph.push_str(&format!("[audio_unpadded]apad=whole_dur={duration:.6},atrim=duration={duration:.6}[aout];"));
-    }
     graph
 }
 
@@ -1997,7 +1953,7 @@ mod tests {
         .unwrap();
         let ass = project_root.join("cache/translated.ass");
         fs::write(&ass, render_spec::generate_ass(&spec).unwrap()).unwrap();
-        let (graph, dubs, logos, expected_audio) =
+        let (graph, dubs, logos, expected_audio, master) =
             build_filtergraph(&store, &project.id, &transcript, &spec, &options, &ass, None, &[]).unwrap();
         assert!(
             graph.find("gblur=").unwrap() < graph.find("subtitles=").unwrap(),
@@ -2015,10 +1971,10 @@ mod tests {
             graph.contains("noise=alls=10:allf=t+u"),
             "pixel noise should be applied to the blurred crop"
         );
-        assert!(graph.contains("adelay=200:all=1"));
-        if original_audio { assert!(graph.contains("if(between(t,0.200,0.650)")); }
-        assert!(graph.contains("apad=whole_dur=1.000000"));
-        assert_eq!(dubs.len(), 1);
+        assert!(graph.contains("anull[aout]"));
+        assert!(!graph.contains("amix") && !graph.contains("adelay"));
+        assert_eq!(dubs.len(), 0);
+        assert_eq!(crate::audio::signal::inspect(&master).unwrap().duration,1.0);
         assert_eq!(logos.len(), 1);
         assert!(expected_audio);
         let filter = project_root.join("cache/filtergraph.txt");
@@ -2036,8 +1992,8 @@ mod tests {
                 let stats=pipeline.run(&state,|_,_|{}).unwrap();
                 assert_eq!(stats.frames,20);assert_eq!(stats.upload_bytes,0);assert_eq!(stats.readback_bytes,0);
                 drop(pipeline);
-                fs::write(&filter,build_audio_filtergraph(&spec.audio,&dubs,true,None,spec.duration)).unwrap();
-                let mut command=build_native_mux_command(&source,&temp_video,&dubs,None,&filter,&output_path,&spec,true).unwrap();
+                fs::write(&filter,master_audio_filter(1,true)).unwrap();
+                let mut command=build_native_mux_command(&source,&temp_video,&dubs,Some(&master),&filter,&output_path,&spec,true).unwrap();
                 let rendered=command.output().unwrap();
                 assert!(rendered.status.success(),"native mux: {}",String::from_utf8_lossy(&rendered.stderr));
                 let pcm=crate::runtime_paths::ffmpeg_command().unwrap().args(["-v","error","-i"]).arg(&output_path)
@@ -2065,15 +2021,15 @@ mod tests {
         } else if gpu {
             let mut renderer=crate::render::renderer::Renderer::new(crate::render::graph::RenderScene::from_spec(&spec), &logos).unwrap();
             let fps=crate::render::stream::compatible_input(&source).unwrap();
-            let gpu_graph=format!("[{}:v]null[vout];{}",1+dubs.len(),build_audio_filtergraph(&spec.audio,&dubs,true,None,spec.duration));
+            let gpu_graph=format!("[{}:v]null[vout];{}",1+dubs.len()+1,master_audio_filter(1,true));
             assert!(!gpu_graph.contains("gblur")&&!gpu_graph.contains("subtitles=")&&!gpu_graph.contains("overlay="));
             fs::write(&filter,gpu_graph).unwrap();
-            let command=build_ffmpeg_command(crate::runtime_paths::ffmpeg_command().unwrap(),&source,&dubs,&[],&[],None,&filter,&output_path,&spec,true,Some(fps)).unwrap();
+            let command=build_ffmpeg_command(crate::runtime_paths::ffmpeg_command().unwrap(),&source,&dubs,&[],&[],Some(&master),&filter,&output_path,&spec,true,Some(fps)).unwrap();
             let state=Arc::new(AtomicU8::new(JOB_RUNNING));
             let stats=crate::render::stream::run(&mut renderer,crate::render::stream::decoder_command(&source).unwrap(),command,fps,&[],&state,|_,_|{}).unwrap();
             assert_eq!(stats.frames,20);assert!(stats.seconds>0.0);
             println!("wgpu export {backend:?} passed on {} / {} ({:.3}s, {:.1} fps stream)",renderer.adapter_name(),renderer.adapter_backend(),stats.seconds,stats.frames as f64/stats.seconds);
-            let mut cancelled_command=build_ffmpeg_command(crate::runtime_paths::ffmpeg_command().unwrap(),&source,&dubs,&[],&[],None,&filter,&project_root.join("exports/cancelled.mp4"),&spec,true,Some(fps)).unwrap();
+            let mut cancelled_command=build_ffmpeg_command(crate::runtime_paths::ffmpeg_command().unwrap(),&source,&dubs,&[],&[],Some(&master),&filter,&project_root.join("exports/cancelled.mp4"),&spec,true,Some(fps)).unwrap();
             cancelled_command.stdin(Stdio::piped());
             let mut slow=crate::runtime_paths::ffmpeg_command().unwrap();
             slow.args(["-hide_banner","-loglevel","info","-re","-i"]).arg(&source).args(["-map","0:v:0","-an","-vf","setpts=PTS-STARTPTS,showinfo","-fps_mode","passthrough","-pix_fmt","rgba","-f","rawvideo","pipe:1"]).stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -2085,7 +2041,7 @@ mod tests {
         } else {
         let rendered = build_ffmpeg_command(
             crate::runtime_paths::ffmpeg_command().unwrap(), &source, &dubs, &logos,
-            &[], None, &filter, &output_path, &spec, expected_audio, None,
+            &[], Some(&master), &filter, &output_path, &spec, expected_audio, None,
         ).unwrap().output().unwrap();
         assert!(
             rendered.status.success(),

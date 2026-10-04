@@ -1,17 +1,16 @@
 import { Dynamic } from 'solid-js/web';
 import { createNativePreview } from './native-preview';
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { createAudioPreview } from './audio-preview';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open } from '@tauri-apps/plugin-dialog';
 import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from 'solid-js';
 import {
   AlertTriangle, Film, Maximize2, Pause, Play, Plus, Volume1, Volume2, VolumeX,
 } from 'lucide-solid';
-import { aiRemovalPreview, blurRegionPicking, currentProject, currentTranscript, ocrRegionEditing, ocrRegionPicking, playbackTime, seekRequest, segmentVoicePreviewActive, setActiveWorkspacePanelTab, setAiRemovalPreview, setBlurRegionPicking, setCurrentProject, setCurrentTranscript, setNotice, setOcrRegionEditing, setOcrRegionPicking, setPlaybackTime, setSeekRequest, setSelectedOverlay, setSegmentVoicePreviewActive, setSubtitleRegionPicking, setVideoPlaying, selectedOverlay, subtitleRegionPicking, videoPlaying } from '../../../app/project-state';
+import { aiRemovalPreview, blurRegionPicking, currentProject, currentTranscript, ocrRegionEditing, ocrRegionPicking, playbackTime, seekRequest, segmentVoicePreviewActive, setActiveWorkspacePanelTab, setAiRemovalPreview, setBlurRegionPicking, setCurrentProject, setCurrentTranscript, setNotice, setOcrRegionEditing, setOcrRegionPicking, setPlaybackTime, setSeekRequest, setSelectedOverlay, setSegmentVoicePreviewActive, setSubtitleRegionPicking, setVideoPlaying, selectedOverlay, subtitleRegionPicking } from '../../../app/project-state';
 import { projectService } from '../../../app/services/project-service';
-import { ttsService } from '../../../app/services/tts-service';
-import { dialogueService } from '../../../app/services/dialogue-service';
-import { findPlayableDubbingSegmentAtTime, findTranslatedSegmentAtTime, ttsWindowEnd } from '../../transcript/transcript-utils';
+import { findTranslatedSegmentAtTime } from '../../transcript/transcript-utils';
 import { needsCompatibilityPreview } from './video-utils';
 import Modal from '../../../shared/components/Modal';
 import OverlayCanvas from '../../overlays/OverlayCanvas';
@@ -36,19 +35,7 @@ function isVideoPath(path: string) {
 export default function TranslationView() {
   let videoElement!: HTMLVideoElement;
   let previewFrame!: HTMLDivElement;
-  let dubbingAudio: HTMLAudioElement | undefined;
-  let dialogueAudio: HTMLAudioElement | undefined;
-  let audioContext: AudioContext | undefined;
-  let originalGain: GainNode | undefined;
-  let dubbingGain: GainNode | undefined;
-  let dialogueGain: GainNode | undefined;
-  let activeDubId: string | undefined;
-  let finishedDubId: string | undefined;
-  let lastOverflowNoticeId: string | undefined;
-  let dubLookupToken = 0;
-  let dialogueStemLookupToken = 0;
-  const [dialogueStemPath, setDialogueStemPath] = createSignal('');
-  const [dialogueStemLoading, setDialogueStemLoading] = createSignal(false);
+  let audioVisualSeek = false;
   const [videoUrl, setVideoUrl] = createSignal('');
   const [importing, setImporting] = createSignal(false);
   const [loadingVideo, setLoadingVideo] = createSignal(false);
@@ -60,18 +47,38 @@ export default function TranslationView() {
   const [mediaError, setMediaError] = createSignal('');
   const [playing, setPlaying] = createSignal(false);
   const muted = () => currentProject()?.dubbing.muteOriginal ?? false;
-  const [volume, setVolume] = createSignal(0.82);
+  const [volume, setVolume] = createSignal(1);
   const [playerTime, setPlayerTime] = createSignal(0);
   const [previewSubtitleSegmentId, setPreviewSubtitleSegmentId] = createSignal<string>();
   const [duration, setDuration] = createSignal(0);
   const [contentBounds, setContentBounds] = createSignal({ left: 0, top: 0, width: 0, height: 0 });
-  const [activeDubbingSegment, setActiveDubbingSegment] = createSignal<string>();
   let removeDropListener: (() => void) | undefined;
   let componentAlive = true;
   let previewAttemptedForSource: string | undefined;
   const nativePreview = createNativePreview(() => previewFrame, () => videoElement, (time, isPlaying) => {
+    if (audioPreview.ready()) return;
     setPlayerTime(time); setPlaybackTime(time); setPlaying(isPlaying); setVideoPlaying(isPlaying);
   });
+  const audioPreview = createAudioPreview((status) => {
+    setPlayerTime(status.time); setPlaybackTime(status.time); setPlaying(status.playing); setVideoPlaying(status.playing);
+    syncPreviewSubtitle(status.time);
+    if (nativePreview.preferred()) {
+      nativePreview.control('audio', status.time);
+      nativePreview.control(status.playing && !status.buffering ? 'play' : 'pause');
+    } else if (videoElement && videoElement.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      const local = Math.max(0, status.time - (activeAiPreview()?.startSeconds ?? 0));
+      if (Math.abs(videoElement.currentTime - local) > 0.15 && !videoElement.seeking) {
+        audioVisualSeek = true; videoElement.currentTime = local;
+      }
+      if (status.playing && videoElement.paused) void videoElement.play().catch(() => undefined);
+      if (!status.playing && !videoElement.paused) videoElement.pause();
+    }
+  }, (message) => setNotice({ kind: 'error', message }));
+  createEffect(() => {
+    const gain = volume();
+    if (audioPreview.ready()) void audioPreview.control('volume', undefined, gain);
+  });
+  createEffect(() => { if (segmentVoicePreviewActive()) { void audioPreview.control('pause'); nativePreview.control('pause'); } });
   const videoSourceKey = createMemo(() => {
     const project = currentProject();
     return JSON.stringify([
@@ -108,6 +115,10 @@ export default function TranslationView() {
     const preview = activeAiPreview();
     return preview ? convertFileSrc(preview.path) : videoUrl();
   });
+  createEffect(on(() => activeAiPreview()?.path, () => {
+    const preview = activeAiPreview();
+    if (preview) { void audioPreview.control('pause'); void audioPreview.control('seek', preview.startSeconds); }
+  }));
   const globalTimeForPlayer = (localTime: number) => {
     const preview = activeAiPreview();
     return preview ? preview.startSeconds + localTime : localTime;
@@ -244,6 +255,13 @@ export default function TranslationView() {
   createEffect(() => {
     const target = seekRequest();
     if (target === null || !videoElement || !Number.isFinite(target)) return;
+    if (audioPreview.ready()) {
+      void audioPreview.control('seek', target);
+      if (activeAiPreview() && (target < activeAiPreview()!.startSeconds || target > activeAiPreview()!.endSeconds)) setAiRemovalPreview(undefined);
+      nativePreview.control('seek', target);
+      setPlayerTime(target); setPlaybackTime(target); syncPreviewSubtitle(target);
+      setSeekRequest(null); return;
+    }
     if (nativePreview.preferred()) nativePreview.control('seek', target);
     if (videoElement.readyState < HTMLMediaElement.HAVE_METADATA) {
       if (nativePreview.preferred()) setSeekRequest(null);
@@ -264,36 +282,10 @@ export default function TranslationView() {
     setSeekRequest(null);
   });
 
-  const setPreviewGain = (node: GainNode | undefined, value: number) => {
-    if (!node || !audioContext) return;
-    const now = audioContext.currentTime;
-    const target = Math.max(-1, Math.min(1, value));
-    node.gain.cancelScheduledValues(now);
-    if (Math.abs(target) < 0.000001) node.gain.setValueAtTime(0, now);
-    else node.gain.setTargetAtTime(target, now, 0.025);
-  };
-
   createEffect(() => {
-    const project = currentProject();
-    const sourceVolume = volume() * (project?.dubbing.originalVolume ?? 1);
-    const ducking = project?.dubbing.duckingEnabled && activeDubbingSegment() ? 1 - (project.dubbing.duckingAmount ?? 0.75) : 1;
-    const originalLevel = muted() ? 0 : Math.max(0, Math.min(1, sourceVolume * ducking));
-    if (originalGain) {
-      setPreviewGain(originalGain, originalLevel);
-      if (videoElement) { videoElement.volume = 1; videoElement.muted = false; }
-    } else if (videoElement) {
-      videoElement.volume = originalLevel;
-      videoElement.muted = muted();
-    }
-    if (dubbingGain) setPreviewGain(dubbingGain, project?.dubbing.enabled ? Math.max(0, Math.min(1, project.dubbing.dubbedVolume ?? 1)) : 0);
-    if (dialogueGain) {
-      const reduction = project?.dubbing.dialogueReductionEnabled && dialogueStemPath()
-        ? Math.max(0, Math.min(1, project.dubbing.dialogueReductionAmount ?? 0.65))
-        : 0;
-      setPreviewGain(dialogueGain, -originalLevel * reduction);
-    }
+    currentProject()?.dubbing; audioPreview.ready();
+    if (videoElement) { videoElement.volume = 0; videoElement.muted = true; }
   });
-
   onMount(() => {
     const nativeDrop = (event: Event) => {
       const paths = (event as CustomEvent<string[]>).detail;
@@ -308,8 +300,8 @@ export default function TranslationView() {
     requestAnimationFrame(updateContentBounds);
     onCleanup(() => frameResizeObserver?.disconnect());
     if (videoElement) {
-      videoElement.volume = volume() * (currentProject()?.dubbing.originalVolume ?? 1);
-      videoElement.muted = muted();
+      videoElement.volume = 0;
+      videoElement.muted = true;
     }
     void getCurrentWebview().onDragDropEvent((event) => {
       if (event.payload.type === 'over') setDragging(true);
@@ -339,211 +331,6 @@ export default function TranslationView() {
   });
   createEffect(on(() => currentProject()?.source.videoPath, (source) => { if (source) requestAnimationFrame(updateContentBounds); }));
 
-  const ensureAudioGraph = () => {
-    if (!videoElement || audioContext) return;
-    try {
-      audioContext = new AudioContext();
-      const videoSource = audioContext.createMediaElementSource(videoElement);
-      originalGain = audioContext.createGain();
-      videoSource.connect(originalGain).connect(audioContext.destination);
-      dubbingAudio = new Audio();
-      dubbingAudio.crossOrigin = 'anonymous';
-      dubbingAudio.preload = 'auto';
-      const dubSource = audioContext.createMediaElementSource(dubbingAudio);
-      dubbingGain = audioContext.createGain();
-      dubSource.connect(dubbingGain).connect(audioContext.destination);
-      dialogueAudio = new Audio();
-      dialogueAudio.crossOrigin = 'anonymous';
-      dialogueAudio.preload = 'auto';
-      const dialogueSource = audioContext.createMediaElementSource(dialogueAudio);
-      dialogueGain = audioContext.createGain();
-      dialogueSource.connect(dialogueGain).connect(audioContext.destination);
-      originalGain.gain.value = muted() ? 0 : volume() * (currentProject()?.dubbing.originalVolume ?? 1);
-      dubbingGain.gain.value = currentProject()?.dubbing.enabled ? currentProject()?.dubbing.dubbedVolume ?? 1 : 0;
-      dialogueGain.gain.value = 0;
-      void audioContext.resume();
-      videoElement.volume = 1;
-      videoElement.muted = false;
-    } catch {
-      audioContext = undefined;
-      originalGain = undefined;
-      dubbingGain = undefined;
-      dialogueGain = undefined;
-      dialogueAudio = undefined;
-      setNotice({ kind: 'error', message: 'Web Audio không khả dụng trong WebView; lồng tiếng preview chưa thể phát.' });
-    }
-  };
-
-  const clearDialogueAudio = () => {
-    if (!dialogueAudio) return;
-    dialogueAudio.pause();
-    dialogueAudio.onloadedmetadata = null;
-    dialogueAudio.onerror = null;
-    delete dialogueAudio.dataset.stemPath;
-    if (dialogueAudio.hasAttribute('src')) {
-      dialogueAudio.removeAttribute('src');
-      dialogueAudio.load();
-    }
-  };
-
-  const dialogueStemKey = createMemo(() => {
-    const project = currentProject();
-    return [project?.id ?? '', project?.source.videoPath ?? '', project?.dubbing.dialogueReductionEnabled ? '1' : '0'].join('\0');
-  });
-
-  createEffect(() => {
-    if (dialogueStemLoading()) setMediaStatus('Đang chuẩn bị BandIt preview…');
-    else if (mediaStatus() === 'Đang chuẩn bị BandIt preview…') setMediaStatus('');
-  });
-  createEffect(on(dialogueStemKey, () => {
-    const project = currentProject();
-    const projectId = project?.id;
-    const enabled = project?.dubbing.dialogueReductionEnabled ?? false;
-    dialogueStemLookupToken += 1;
-    const token = dialogueStemLookupToken;
-    setDialogueStemPath('');
-    setDialogueStemLoading(false);
-    clearDialogueAudio();
-    if (!projectId || !project?.source.videoPath || !enabled) return;
-    setDialogueStemLoading(true);
-    void dialogueService.preparePreviewStem(projectId).then((path) => {
-      if (token !== dialogueStemLookupToken || currentProject()?.id !== projectId) return;
-      setDialogueStemPath(path);
-    }).catch((error: unknown) => {
-      if (token !== dialogueStemLookupToken) return;
-      setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể chuẩn bị BandIt preview.' });
-    }).finally(() => {
-      if (token === dialogueStemLookupToken) setDialogueStemLoading(false);
-    });
-  }));
-
-  createEffect(() => {
-    const project = currentProject();
-    const path = dialogueStemPath();
-    const enabled = project?.dubbing.dialogueReductionEnabled ?? false;
-    const time = playbackTime();
-    const playingNow = videoPlaying();
-    const voicePreviewActive = segmentVoicePreviewActive();
-    if (!enabled || !path || !videoElement) {
-      if (dialogueAudio && !dialogueAudio.paused) dialogueAudio.pause();
-      return;
-    }
-    if (playingNow) ensureAudioGraph();
-    if (!dialogueAudio || !audioContext) return;
-    if (dialogueAudio.dataset.stemPath !== path) {
-      dialogueAudio.dataset.stemPath = path;
-      dialogueAudio.onloadedmetadata = () => {
-        if (!dialogueAudio || dialogueAudio.dataset.stemPath !== path) return;
-        dialogueAudio.currentTime = Math.max(0, Math.min(videoElement.currentTime, dialogueAudio.duration || videoElement.currentTime));
-        if (videoPlaying() && !segmentVoicePreviewActive()) {
-          void audioContext?.resume().then(() => dialogueAudio?.play()).catch(() => undefined);
-        }
-      };
-      dialogueAudio.onerror = () => setNotice({ kind: 'error', message: 'Không thể đọc stem thoại BandIt để preview.' });
-      dialogueAudio.src = convertFileSrc(path);
-      dialogueAudio.load();
-    }
-    if (voicePreviewActive) {
-      if (!dialogueAudio.paused) dialogueAudio.pause();
-      return;
-    }
-    if (dialogueAudio.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      if (Math.abs(dialogueAudio.currentTime - time) > 0.12) dialogueAudio.currentTime = Math.max(0, Math.min(time, dialogueAudio.duration || time));
-      dialogueAudio.playbackRate = videoElement.playbackRate || 1;
-      if (playingNow && dialogueAudio.paused) void audioContext.resume().then(() => dialogueAudio?.play()).catch(() => undefined);
-      if (!playingNow && !dialogueAudio.paused) dialogueAudio.pause();
-    }
-  });
-  const clearDubbingAudio = () => {
-    dubLookupToken += 1;
-    if (!dubbingAudio) return;
-    dubbingAudio.pause();
-    dubbingAudio.onended = null;
-    dubbingAudio.onerror = null;
-    dubbingAudio.onloadedmetadata = null;
-    if (dubbingAudio.hasAttribute('src')) {
-      dubbingAudio.removeAttribute('src');
-      dubbingAudio.load();
-    }
-  };
-
-  createEffect(() => {
-    const project = currentProject();
-    const projectId = project?.id;
-    const enabled = project?.dubbing.enabled ?? false;
-    const time = playbackTime();
-    const playingNow = videoPlaying();
-    const voicePreviewActive = segmentVoicePreviewActive();
-    const segments = currentTranscript()?.segments ?? [];
-    if (!videoElement || !projectId) return;
-    if (voicePreviewActive) {
-      if (activeDubId || dubbingAudio?.hasAttribute('src')) clearDubbingAudio();
-      if (!videoElement.paused) videoElement.pause();
-      activeDubId = undefined;
-      finishedDubId = undefined;
-      setActiveDubbingSegment(undefined);
-      return;
-    }
-    if (playingNow) ensureAudioGraph();
-    const overflow = enabled ? segments.find((item) => item.tts?.status === 'durationOverflow' && time >= item.start && time < ttsWindowEnd(segments, item)) : undefined;
-    if (overflow?.id && overflow.id !== lastOverflowNoticeId) {
-      setNotice({ kind: 'info', message: 'Dubbing preview bỏ qua audio vượt thời lượng để tránh chồng hoặc cắt tiếng. Nghe thử segment riêng hoặc chạy Fit Audio.' });
-      lastOverflowNoticeId = overflow.id;
-    } else if (!overflow) {
-      lastOverflowNoticeId = undefined;
-    }
-    const segment = findPlayableDubbingSegmentAtTime(segments, time, enabled, finishedDubId);
-    const segmentId = segment?.id;
-    if (!segment || !dubbingAudio || !audioContext) {
-      if (activeDubId || dubbingAudio?.hasAttribute('src')) clearDubbingAudio();
-      activeDubId = undefined;
-      setActiveDubbingSegment(undefined);
-      return;
-    }
-    if (activeDubId !== segmentId) {
-      clearDubbingAudio();
-      activeDubId = segmentId;
-      const token = dubLookupToken;
-      setActiveDubbingSegment(segmentId);
-      void ttsService.getAudioPath(projectId, segmentId!).then((path) => {
-        if (token !== dubLookupToken || !dubbingAudio || activeDubId !== segmentId) return;
-        dubbingAudio.onended = () => { if (token === dubLookupToken) finishedDubId = segmentId; };
-        dubbingAudio.onerror = () => {
-          if (token !== dubLookupToken || activeDubId !== segmentId) return;
-          finishedDubId = segmentId;
-          setNotice({ kind: 'error', message: 'Không thể đọc hoặc giải mã file audio lồng tiếng của segment này.' });
-        };
-        dubbingAudio.onloadedmetadata = () => {
-          if (token !== dubLookupToken || !dubbingAudio) return;
-          const elapsed = Math.max(0, playbackTime() - segment!.start);
-          if (elapsed >= dubbingAudio.duration) {
-            finishedDubId = segmentId;
-            return;
-          }
-          // Loading a local WAV can still take a few frames. Seeking by that tiny
-          // delay chops Vietnamese initial consonants (e.g. "Ma" -> "a").
-          // Preserve the attack for normal segment entry; only seek when the user
-          // actually starts well inside the segment.
-          dubbingAudio.currentTime = elapsed <= 0.25 ? 0 : elapsed;
-          if (videoPlaying()) void dubbingAudio.play().catch(() => setNotice({ kind: 'error', message: 'Không thể phát audio lồng tiếng trên preview.' }));
-        };
-        dubbingAudio.src = convertFileSrc(path);
-        dubbingAudio.load();
-      }).catch((error: unknown) => {
-        if (token === dubLookupToken && activeDubId === segmentId) {
-          finishedDubId = segmentId;
-          setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể mở audio lồng tiếng.' });
-        }
-      });
-    } else if (dubbingAudio.src) {
-      const offset = Math.max(0, time - segment.start);
-      if (Math.abs(dubbingAudio.currentTime - offset) > 0.32) dubbingAudio.currentTime = offset;
-      dubbingAudio.playbackRate = videoElement.playbackRate || 1;
-      if (playingNow && dubbingAudio.paused) void audioContext.resume().then(() => dubbingAudio?.play()).catch(() => undefined);
-      if (!playingNow && !dubbingAudio.paused) dubbingAudio.pause();
-    }
-  });
-
   onCleanup(() => {
     componentAlive = false;
     setOcrRegionPicking(false);
@@ -552,10 +339,7 @@ export default function TranslationView() {
     stopPreviewSubtitleSync();
     removeDropListener?.();
     setVideoPlaying(false);
-    dialogueStemLookupToken += 1;
-    clearDubbingAudio();
-    clearDialogueAudio();
-    void audioContext?.close();
+    void audioPreview.control('pause');
   });
 
   const browse = async () => {
@@ -583,7 +367,7 @@ export default function TranslationView() {
   const importVideo = async (path: string, replace: boolean) => {
     const project = currentProject();
     if (!project || importing()) return;
-    videoElement?.pause(); nativePreview.control('pause');
+    videoElement?.pause(); nativePreview.control('pause'); void audioPreview.control('pause');
     setImporting(true);
     try {
       const result = await projectService.importVideo(project.id, path, replace);
@@ -603,39 +387,13 @@ export default function TranslationView() {
   };
 
   const togglePlayback = async () => {
-    if (!videoElement || !videoUrl()) return;
-    if (nativePreview.preferred() && !(currentProject()?.source.audioStreams?.length)) {
-      if (segmentVoicePreviewActive()) setSegmentVoicePreviewActive(false);
-      ensureAudioGraph(); await audioContext?.resume();
-      nativePreview.control(playing() ? 'pause' : 'play');
-      setPlaying(!playing()); setVideoPlaying(playing());
-      return;
+    if (!videoUrl() || !audioPreview.ready()) return;
+    if (segmentVoicePreviewActive()) setSegmentVoicePreviewActive(false);
+    const next = !playing();
+    if (next && playerTime() >= totalDuration() - 0.025) await audioPreview.control('seek', 0);
+    if (await audioPreview.control(next ? 'play' : 'pause')) {
+      nativePreview.control(next ? 'play' : 'pause'); setPlaying(next); setVideoPlaying(next);
     }
-    if (videoElement.paused) {
-      if (segmentVoicePreviewActive()) setSegmentVoicePreviewActive(false);
-      // Create and unlock the Web Audio graph while the Play click still carries
-      // user activation. Creating it from a later onPlay effect can leave the
-      // preview graph suspended, making gain controls appear ineffective.
-      ensureAudioGraph();
-      try {
-        if (audioContext?.state === 'suspended') {
-          try {
-            await audioContext.resume();
-          } catch {
-            setNotice({ kind: 'error', message: 'Không thể kích hoạt bộ trộn âm thanh preview của WebView.' });
-            return;
-          }
-        }
-      } catch {
-        setMediaError('WebView không thể phát định dạng video này.');
-      }
-      try {
-        await videoElement.play();
-      } catch {
-        setMediaError('WebView không thể phát định dạng video này.');
-      }
-    }
-    else videoElement.pause();
   };
 
   const toggleFullscreen = () => {
@@ -646,13 +404,7 @@ export default function TranslationView() {
   };
 
   const handleMediaError = async () => {
-    if (nativePreview.preferred()) {
-      if (!currentProject()?.source.audioStreams?.length) return;
-      const p = currentProject()!;
-      try { const path = await invoke<string>('preview_audio_path', { projectId: p.id }); if (currentProject()?.id === p.id) setVideoUrl(convertFileSrc(path)); }
-      catch { setMediaError('Không đọc được âm thanh nguồn. Hãy thử preview tương thích.'); }
-      return;
-    }
+    if (nativePreview.preferred()) return;
     if (creatingProxy()) return;
     if (usingProxy()) {
       const mediaError = videoElement?.error;
@@ -694,6 +446,7 @@ export default function TranslationView() {
   };
 
   const onTimeUpdate = () => {
+    if (audioPreview.ready()) return;
     const time = globalTimeForPlayer(videoElement.currentTime);
     if (nativePreview.preferred()) nativePreview.control('audio', time);
     setPlayerTime(time);
@@ -892,9 +645,7 @@ export default function TranslationView() {
               component={nativePreview.preferred() ? 'audio' : 'video'}
               ref={(element: HTMLMediaElement) => {
                 if (videoElement && videoElement !== element) {
-                  videoElement.pause(); clearDubbingAudio(); clearDialogueAudio(); void audioContext?.close();
-                  audioContext = undefined; originalGain = undefined; dubbingGain = undefined; dialogueGain = undefined;
-                  dubbingAudio = undefined; dialogueAudio = undefined;
+                  videoElement.pause();
                 }
                 videoElement = element as HTMLVideoElement;
               }}
@@ -902,6 +653,7 @@ export default function TranslationView() {
               style={{ display: nativePreview.preferred() ? 'none' : undefined }}
               src={activeVideoUrl()}
               crossOrigin="anonymous"
+              muted
               preload="metadata"
               playsinline
               onLoadedMetadata={() => {
@@ -925,11 +677,11 @@ export default function TranslationView() {
                 setLoadingVideo(false);
               }}
               onTimeUpdate={onTimeUpdate}
-              onPlay={() => { nativePreview.control('play'); setPlaying(true); setVideoPlaying(true); startPreviewSubtitleSync(); }}
-              onPause={() => { nativePreview.control('pause'); setPlaying(false); setVideoPlaying(false); stopPreviewSubtitleSync(); syncPreviewSubtitle(globalTimeForPlayer(videoElement.currentTime)); dubbingAudio?.pause(); }}
-              onSeeking={() => { syncPreviewSubtitle(globalTimeForPlayer(videoElement.currentTime)); clearDubbingAudio(); activeDubId = undefined; finishedDubId = undefined; setActiveDubbingSegment(undefined); }}
-              onSeeked={() => { if (nativePreview.preferred()) nativePreview.control('seek', globalTimeForPlayer(videoElement.currentTime)); onTimeUpdate(); }}
-              onEnded={() => { nativePreview.control('pause'); setPlaying(false); setVideoPlaying(false); stopPreviewSubtitleSync(); syncPreviewSubtitle(globalTimeForPlayer(videoElement.currentTime)); clearDubbingAudio(); activeDubId = undefined; finishedDubId = undefined; }}
+              onPlay={() => { if (!audioPreview.ready()) return; startPreviewSubtitleSync(); }}
+              onPause={() => { stopPreviewSubtitleSync(); }}
+              onSeeking={() => { if (!audioVisualSeek && !nativePreview.preferred()) void audioPreview.control('seek', globalTimeForPlayer(videoElement.currentTime)); }}
+              onSeeked={() => { audioVisualSeek = false; }}
+              onEnded={() => { if (!audioPreview.ready()) { setPlaying(false); setVideoPlaying(false); } }}
               onError={() => void handleMediaError()}
             />
             <OverlayCanvas
@@ -964,9 +716,12 @@ export default function TranslationView() {
           <Show when={mediaError()}><div class="media-error-overlay" role="alert"><AlertTriangle size={17} /><span class="media-error-message">{mediaError()}</span><Show when={currentProject()?.source.videoPath}><button class="media-error-retry" type="button" onClick={retryPreview}>{usingProxy() ? 'Tạo lại preview' : 'Thử tạo preview'}</button></Show></div></Show>
         </div>
       </div>
+      <Show when={currentProject()?.source.videoPath && !audioPreview.ready() && !audioPreview.loading()}><button class="button button-quiet" type="button" onClick={audioPreview.retry}>Thử lại âm thanh</button></Show>
+      <Show when={audioPreview.loading()}><span class="preview-compatibility-note" role="status">Đang chuẩn bị âm thanh…</span></Show>
+      <Show when={audioPreview.buffering()}><span class="preview-compatibility-note" role="status">Đang đợi âm thanh…</span></Show>
       <Show when={nativePreview.warning()}><span class="preview-compatibility-note" role="status">{nativePreview.preferred() ? nativePreview.warning() : 'Đang dùng preview tương thích.'}</span></Show>
       <div class="playback-controls" aria-label="Điều khiển phát video">
-        <button class="play-button" type="button" aria-label={playing() ? 'Tạm dừng video' : 'Phát video'} disabled={!videoUrl() || loadingVideo() || creatingProxy()} onClick={togglePlayback}>
+        <button class="play-button" type="button" aria-label={playing() ? 'Tạm dừng video' : 'Phát video'} disabled={!videoUrl() || loadingVideo() || creatingProxy() || !audioPreview.ready()} onClick={togglePlayback}>
           {playing() ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
         </button>
         <span class="playback-time"><span>{formatTime(playerTime())}</span><span class="playback-time-divider">/</span><span>{formatTime(totalDuration())}</span></span>
@@ -987,10 +742,10 @@ export default function TranslationView() {
             setSeekRequest(value);
           }}
         />
-        <button class="playback-volume" type="button" aria-label={muted() ? 'Bật âm thanh' : 'Tắt âm thanh'} disabled={!videoUrl()} onClick={() => updateOriginalMute(!muted())}>
+        <button class="playback-volume" type="button" aria-label={muted() ? 'Bật âm thanh gốc' : 'Tắt âm thanh gốc'} disabled={!videoUrl()} onClick={() => updateOriginalMute(!muted())}>
               {muted() || volume() === 0 ? <VolumeX size={16} /> : volume() < 0.45 ? <Volume1 size={16} /> : <Volume2 size={16} />}
             </button>
-        <input class="playback-volume-slider" type="range" min="0" max="1" step="0.01" value={muted() ? 0 : volume()} aria-label="Âm lượng video" disabled={!videoUrl()} onInput={(event) => { setVolume(Number(event.currentTarget.value)); if (muted()) updateOriginalMute(false); }} />
+        <input class="playback-volume-slider" type="range" min="0" max="1" step="0.01" value={volume()} aria-label="Âm lượng nghe thử" disabled={!videoUrl()} onInput={(event) => { setVolume(Number(event.currentTarget.value)); }} />
         <button class="playback-expand" type="button" aria-label="Toàn màn hình" disabled={!videoUrl()} onClick={toggleFullscreen}><Maximize2 size={15} /></button>
       </div>
       <div class="preview-footnote"><span><span class="footnote-dot" /> {activeAiPreview() ? 'AI REMOVAL PREVIEW' : usingProxy() ? 'PREVIEW TƯƠNG THÍCH' : 'TỶ LỆ GỐC'}</span><span>{currentProject()?.source.videoPath ? currentProject()?.source.originalName : 'Kéo thả video vào khu vực xem trước'}</span></div>

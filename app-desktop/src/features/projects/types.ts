@@ -55,6 +55,10 @@ export interface Project {
     region?: { x: number; y: number; width: number; height: number } | null;
   };
   dubbing: {
+    audioProcessing?: {
+      headPaddingMs: number; tailPaddingMs: number; maxFitSpeed: number;
+      normalize: boolean; duckAttackMs: number; duckReleaseMs: number;
+    };
     enabled: boolean;
     provider: 'vieneu';
     modelId: string;

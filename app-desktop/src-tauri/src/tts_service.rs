@@ -85,6 +85,8 @@ struct WorkItem {
     destination: PathBuf,
     reference_audio: Option<PathBuf>,
     model_revision: String,
+    raw_path: PathBuf,
+    processing: crate::audio::ProcessingSettings,
 }
 
 #[derive(Default)]
@@ -801,7 +803,7 @@ pub fn get_transcript_with_audio_validation(
                 .audio_path
                 .as_deref()
                 .and_then(|path| resolve_project_file(store, project_id, path, "audio/tts").ok())
-                .is_some_and(|path| has_wave_header(&path));
+                .is_some_and(|path| crate::audio::signal::inspect(&path).is_ok());
             if !valid {
                 tts.status = Some(TranscriptTtsStatus::Failed);
                 tts.warning = Some(
@@ -942,11 +944,12 @@ fn run_generation(
                 slot_end,
                 reference_hash.as_deref(),
                 &model_revision,
+                &project.dubbing.audio_processing,
             )
         {
             continue;
         }
-        let fingerprint = fingerprint(
+        let fingerprint = processed_fingerprint(fingerprint(
             segment,
             &project.translation.target_language,
             &voice,
@@ -955,7 +958,9 @@ fn run_generation(
             slot_end,
             reference_hash.as_deref(),
             &model_revision,
-        );
+        ), &project.dubbing.audio_processing);
+        let raw_key = raw_fingerprint(&segment.translated, &project.translation.target_language, &voice, reference_hash.as_deref(), &model_revision);
+        let raw_path = tts_dir.join(format!("raw-{raw_key}.wav"));
         let text_hash = sha256(segment.translated.as_bytes());
         let id_hash = sha256(segment.id.as_bytes());
         let stage_path = tts_dir.join(format!(".{}.{}.tmp.wav", &id_hash[..12], job_id));
@@ -974,18 +979,36 @@ fn run_generation(
             destination,
             reference_audio: reference_audio.clone(),
             model_revision: model_revision.clone(),
+            raw_path,
+            processing: project.dubbing.audio_processing.clone(),
         });
     }
+    // Refit from immutable raw cache, independently of the processing fingerprint.
+    let mut pending = Vec::new();
+    let total_candidates=items.len();
+    let mut refitted=0;
+    for item in items {
+        if canceled.load(Ordering::SeqCst) { return Err("Đã hủy TTS.".into()); }
+        if crate::audio::signal::inspect(&item.raw_path).is_ok() {
+            fs::copy(&item.raw_path, &item.stage_path).map_err(|e| e.to_string())?;
+            refitted+=1;
+            match commit_segment(&store, project_id, &project.translation.target_language, &item, &voice, speed, fit, &canceled) {
+                Ok((_,warning)) => emit(&app,job_id,project_id,"running",warning.as_deref().unwrap_or("Đã cập nhật giọng đọc từ audio gốc."),refitted as f64/total_candidates.max(1) as f64,refitted,total_candidates,Some(item.segment.id.clone())),
+                Err(error) => { record_segment_failure(&store, project_id, &item, &error); return Err(error); }
+            }
+        } else { pending.push(item); }
+    }
+    let items = pending;
     if items.is_empty() {
         emit(
             &app,
             job_id,
             project_id,
             "completed",
-            "Không có bản dịch mới cần tạo giọng đọc.",
+            if refitted>0 {"Đã cập nhật audio từ bản gốc."}else{"Không có bản dịch mới cần tạo giọng đọc."},
             1.0,
-            0,
-            0,
+            refitted,
+            refitted,
             None,
         );
         return Ok(());
@@ -1192,6 +1215,7 @@ fn run_generation(
                             &voice,
                             speed,
                             fit,
+                            &canceled,
                         ) {
                             Ok((status, warning)) => {
                                 counts.completed += 1;
@@ -1469,6 +1493,7 @@ fn commit_segment(
     voice: &str,
     speed: f64,
     fit: bool,
+    canceled: &AtomicBool,
 ) -> Result<(TranscriptTtsStatus, Option<String>), String> {
     if !item.stage_path.is_file() {
         return Err("VieNeu không tạo được file WAV hợp lệ.".to_string());
@@ -1476,64 +1501,35 @@ fn commit_segment(
     if !has_wave_header(&item.stage_path) {
         return Err("VieNeu tạo ra file không phải WAV hợp lệ.".to_string());
     }
-    let mut warning = None;
-    let mut status = TranscriptTtsStatus::Ready;
-    let initial_duration = probe_duration(&item.stage_path)?;
-    let mut filters = Vec::new();
-    let slot_duration = item.slot_end - item.segment.start;
-    let (applied_tempo, duration_overflow) =
-        plan_audio_tempo(initial_duration, slot_duration, speed, fit);
-    if (applied_tempo - 1.0).abs() > 0.001 {
-        filters.push(format!("atempo={applied_tempo:.4}"));
+    let settings = item.processing.clone();
+    if store.get(project_id)?.dubbing.audio_processing != settings { return Err("Cấu hình audio đã đổi khi đang tạo giọng. Hãy tạo lại để áp dụng cấu hình mới.".into()); }
+    let raw_signal = crate::audio::signal::inspect(&item.stage_path)?;
+    if raw_signal.peak <= 0.00001 { return Err("Model tạo giọng đọc trống. Hãy thử tạo lại.".into()); }
+    if fs::symlink_metadata(&item.raw_path).is_ok() { crate::audio::signal::regular_file(&item.raw_path)?; }
+    if !item.raw_path.exists() {
+        let temp = tempfile::NamedTempFile::new_in(item.raw_path.parent().unwrap()).map_err(|e| e.to_string())?;
+        fs::copy(&item.stage_path, temp.path()).map_err(|e| e.to_string())?;
+        temp.persist_noclobber(&item.raw_path).map_err(|e| e.to_string())?;
+    } else if crate::audio::signal::inspect(&item.raw_path).is_err() {
+        // The raw cache is not authoritative until the generated WAV has passed validation.
+        fs::remove_file(&item.raw_path).map_err(|e| e.to_string())?;
+        let temp = tempfile::NamedTempFile::new_in(item.raw_path.parent().unwrap()).map_err(|e| e.to_string())?;
+        fs::copy(&item.stage_path, temp.path()).map_err(|e| e.to_string())?;
+        temp.persist_noclobber(&item.raw_path).map_err(|e| e.to_string())?;
     }
-    if duration_overflow {
-        status = TranscriptTtsStatus::DurationOverflow;
-        warning = Some(if fit {
-            format!(
-                "Audio vẫn dài hơn khung TTS của segment {} sau khi Fit đến giới hạn 2.00×.",
-                item.segment.id
-            )
-        } else {
-            format!(
-                "Audio dài hơn khung TTS của segment {}. Chọn chế độ Fit hoặc rút gọn bản dịch.",
-                item.segment.id
-            )
-        });
+    let report = crate::audio::processing::process(&item.raw_path, &item.destination,
+        item.slot_end-item.segment.start,item.segment.start,speed,fit,&settings,||canceled.load(Ordering::SeqCst))?;
+    let _ = fs::remove_file(&item.stage_path);
+    log::info!("TTS audio validated: raw={:.3}s processed={:.3}s slot={:.3}s tempo={:.3} onset={:?} peak={:.4} rms={:.4}",
+        report.raw.duration,report.processed.duration,report.slot_duration,report.tempo,report.raw.speech_start,report.raw.peak,report.raw.rms);
+    if report.raw.speech_start == Some(0.0) && report.raw.peak > 0.1 {
+        log::debug!("TTS raw signal starts at the first sample; inspect raw WAV for possible model onset clipping.");
     }
-    if !filters.is_empty() {
-        let processed = item.stage_path.with_extension("processed.wav");
-        let output = crate::runtime_paths::ffmpeg_command()?
-            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
-            .arg(&item.stage_path)
-            .args(["-filter:a", &filters.join(","), "-c:a", "pcm_s16le"])
-            .arg(&processed)
-            .output()
-            .map_err(|error| format!("Không thể chạy FFmpeg để điều chỉnh audio TTS: {error}"))?;
-        if !output.status.success() {
-            let detail = String::from_utf8_lossy(&output.stderr);
-            let _ = fs::remove_file(&processed);
-            return Err(format!(
-                "Không thể điều chỉnh tốc độ audio TTS: {}",
-                detail.trim()
-            ));
-        }
-        fs::rename(&processed, &item.stage_path)
-            .map_err(|error| format!("Không thể thay audio tạm sau Fit: {error}"))?;
-    }
-    let duration = probe_duration(&item.stage_path)?;
-    let destination_rel = format!(
-        "audio/tts/{}",
-        item.destination
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-    );
-    if item.destination.exists() {
-        fs::remove_file(&item.destination)
-            .map_err(|error| format!("Không thể thay file audio TTS cũ: {error}"))?;
-    }
-    fs::rename(&item.stage_path, &item.destination)
-        .map_err(|error| format!("Không thể lưu audio TTS trong dự án: {error}"))?;
+    let status = if report.overflow { TranscriptTtsStatus::DurationOverflow } else { TranscriptTtsStatus::Ready };
+    let warning = report.overflow.then(|| format!("Giọng đọc đoạn {} vượt khung {:.2}s ở giới hạn {:.2}×. Audio được giữ đầy đủ; hãy rút gọn hoặc điều chỉnh tốc độ.", item.segment.id,report.processed.duration-report.lead_seconds-report.slot_duration,settings.max_fit_speed));
+    let duration = report.processed.duration;
+    let destination_rel = format!("audio/tts/{}", item.destination.file_name().unwrap_or_default().to_string_lossy());
+    if canceled.load(Ordering::SeqCst) {let _=fs::remove_file(&item.destination);let _=fs::remove_file(item.destination.with_extension("audio.json"));return Err("Đã hủy tạo giọng đọc.".into());}
     transcript_service::with_transcript_lock(project_id, || {
         let mut transcript = transcript_service::get_transcript(store, project_id)?.ok_or_else(|| "Transcript đã bị xóa khi TTS đang chạy.".to_string())?;
         let Some(segment) = transcript.segments.iter_mut().find(|segment| segment.id == item.segment.id) else { return Err("Segment đã bị xóa khi TTS đang chạy.".to_string()); };
@@ -1551,26 +1547,20 @@ fn commit_segment(
         });
         transcript_service::save_transcript_locked(store, project_id, transcript)?;
         Ok(())
-    }).map_err(|error| { let _ = fs::remove_file(&item.destination); error })?;
+    }).map_err(|error| { let _ = fs::remove_file(&item.destination); let _ = fs::remove_file(item.destination.with_extension("audio.json")); error })?;
     let _ = target_language;
     Ok((status, warning))
 }
 
+#[cfg(test)]
 fn plan_audio_tempo(audio_duration: f64, slot_duration: f64, speed: f64, fit: bool) -> (f64, bool) {
-    let requested = if fit {
-        // The slot is a deadline, not a target duration. Keep naturally short
-        // speech at its original speed; only speed up clips that would overlap
-        // the next transcript cue.
-        if audio_duration <= slot_duration + 0.02 {
-            1.0
-        } else {
-            (audio_duration / slot_duration).clamp(1.0, 2.0)
-        }
-    } else {
-        speed
-    };
-    let applied = requested;
-    (applied, audio_duration / applied > slot_duration + 0.02)
+    crate::audio::processing::tempo(audio_duration, slot_duration, speed, fit, 1.2)
+}
+fn processed_fingerprint(base: String, settings: &crate::audio::ProcessingSettings) -> String {
+    sha256(format!("audio-v2\0{base}\0{}",serde_json::to_string(settings).unwrap_or_default()).as_bytes())
+}
+fn raw_fingerprint(text: &str, language: &str, voice: &str, reference: Option<&str>, revision: &str) -> String {
+    sha256(format!("raw-v2\0{MODEL_ID}\0{revision}\0{text}\0{language}\0{voice}\0{}",reference.unwrap_or("preset")).as_bytes())
 }
 
 fn record_segment_failure(store: &ProjectStore, project_id: &str, item: &WorkItem, message: &str) {
@@ -1625,13 +1615,14 @@ fn is_cached(
     slot_end: f64,
     reference_hash: Option<&str>,
     model_revision: &str,
+    settings: &crate::audio::ProcessingSettings,
 ) -> bool {
     let Some(tts) = &segment.tts else {
         return false;
     };
     if tts.fingerprint.as_deref()
         != Some(
-            fingerprint(
+            processed_fingerprint(fingerprint(
                 segment,
                 target_language,
                 voice,
@@ -1640,7 +1631,7 @@ fn is_cached(
                 slot_end,
                 reference_hash,
                 model_revision,
-            )
+            ), settings)
             .as_str(),
         )
     {
@@ -1649,10 +1640,14 @@ fn is_cached(
     let Some(path) = tts.audio_path.as_deref() else {
         return false;
     };
-    resolve_project_file(store, project_id, path, "audio/tts").is_ok()
+    resolve_project_file(store, project_id, path, "audio/tts").is_ok_and(|p| {
+        crate::audio::signal::inspect(&p).is_ok_and(|signal| {
+            crate::audio::processing::report(&p).is_some_and(|r| r.settings == *settings && (r.processed.duration-signal.duration).abs()<0.002)
+        })
+    })
         && tts.voice.as_deref() == Some(voice)
         && (tts.speed.unwrap_or(1.0) - speed).abs() < 0.001
-        && tts.status == Some(TranscriptTtsStatus::Ready)
+        && matches!(tts.status, Some(TranscriptTtsStatus::Ready | TranscriptTtsStatus::DurationOverflow))
         && tts.text_hash.as_deref() == Some(sha256(segment.translated.as_bytes()).as_str())
 }
 
@@ -1696,30 +1691,6 @@ fn tts_slot_end(segment: &TranscriptSegment, segments: &[TranscriptSegment]) -> 
 
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
-}
-
-fn probe_duration(path: &Path) -> Result<f64, String> {
-    let output = crate::runtime_paths::ffprobe_command()?
-        .args([
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-        ])
-        .arg(path)
-        .output()
-        .map_err(|error| format!("Không thể chạy FFprobe để kiểm tra audio TTS: {error}"))?;
-    if !output.status.success() {
-        return Err("Audio TTS không hợp lệ hoặc FFprobe không đọc được file.".to_string());
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<f64>()
-        .ok()
-        .filter(|value| value.is_finite() && *value > 0.0)
-        .ok_or_else(|| "Audio TTS có thời lượng không hợp lệ.".to_string())
 }
 
 fn safe_tts_directory(store: &ProjectStore, project_id: &str) -> Result<PathBuf, String> {
@@ -1984,6 +1955,18 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn raw_cache_survives_fit_changes_but_processing_and_language_invalidate() {
+        let raw = raw_fingerprint("Ma Đế.","vi","Ngọc Huyền",None,"revision");
+        assert_eq!(raw,raw_fingerprint("Ma Đế.","vi","Ngọc Huyền",None,"revision"));
+        assert_ne!(raw,raw_fingerprint("Ma Đế.","en","Ngọc Huyền",None,"revision"));
+        assert_ne!(raw,raw_fingerprint("Ma Đế.","vi","other",None,"revision"));
+        let mut settings=crate::audio::ProcessingSettings::default();
+        let before=processed_fingerprint(raw.clone(),&settings);
+        settings.head_padding_ms=120;
+        assert_ne!(before,processed_fingerprint(raw,&settings));
+    }
+
+    #[test]
     fn model_cache_removal_preserves_unrelated_hugging_face_repositories() {
         let temp = tempdir().unwrap();
         let root = temp.path().join("models").join("huggingface");
@@ -2078,7 +2061,7 @@ mod tests {
         assert!(!fits);
 
         let (limited_tempo, still_overflows) = plan_audio_tempo(5.0, 2.0, 1.0, true);
-        assert!((limited_tempo - 2.0).abs() < 0.001);
+        assert!((limited_tempo - 1.2).abs() < 0.001);
         assert!(still_overflows);
 
         let (short_tempo, short_overflow) = plan_audio_tempo(0.7, 1.0, 1.0, true);

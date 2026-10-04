@@ -172,3 +172,7 @@ Project nằm trong `appDataDir/projects/{UUID}`. Video được copy vào `medi
 7. Sửa bản dịch, xác nhận audio cũ chuyển thành Outdated, tạo lại; đợi autosave, đóng/mở app/project và kiểm tra audio cùng cài đặt đã phục hồi.
 
 Unit tests không tải model và không gọi VieNeu thật. VieNeu inference end-to-end cần cài package, xác nhận tải khoảng 1.8 GB model/codec trong app, và có FFmpeg/FFprobe trên PATH. TTS model, blur, logo và export video vẫn chưa được bundle/triển khai.
+
+## Audio Engine v2 (Task 7)
+
+Preview Windows và export dùng chung Rust audio mixer. Kiến trúc, kết quả kiểm thử, benchmark và giới hạn hiện tại: [TASK_07_AUDIO_ENGINE.md](TASK_07_AUDIO_ENGINE.md).

@@ -1,4 +1,5 @@
 mod asr_service;
+mod audio;
 mod batch_service;
 mod commands;
 mod preview;
@@ -32,6 +33,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(preview::PreviewManager::default())
+        .manage(audio::transport::AudioManager::default())
         .manage(asr_service::AsrJobs::default())
         .manage(translation_service::TranslationJobs::default())
         .manage(tts_service::TtsJobs::default())
@@ -76,6 +78,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            audio::commands::audio_preview_open,
+            audio::commands::audio_preview_close,
+            audio::commands::audio_preview_status,
+            audio::commands::audio_preview_control,
             preview::commands::preview_open,
             preview::commands::preview_audio_path,
             preview::commands::preview_close,
@@ -174,5 +180,5 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build JC AI")
-        .run(|app,event| { if matches!(event,tauri::RunEvent::Exit) { app.state::<preview::PreviewManager>().close(None,None); } });
+        .run(|app,event| { if matches!(event,tauri::RunEvent::Exit) { app.state::<preview::PreviewManager>().close(None,None); app.state::<audio::transport::AudioManager>().close(None); } });
 }

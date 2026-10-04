@@ -482,15 +482,25 @@ fn run(
             }
             dirty = true;
         }
-        let mut position = clock.now();
+        // Native video samples the shared device clock directly; IPC is UI telemetry only.
+        use tauri::Manager;
+        let audio=app.state::<crate::audio::transport::AudioManager>();
+        let master=audio.status(&s.project_id).ok().filter(|a|a.error.is_none());
+        if let Some(master)=&master {
+            clock.set_playing(master.playing && !master.buffering);
+            clock.audio_anchor(master.time.clamp(s.range.0,s.range.1));
+        }
+        let mut position = master.as_ref().map_or_else(||clock.now(),|a|a.time.clamp(s.range.0,s.range.1));
         if position >= s.range.1 && clock.playing {
             clock.set_playing(false);
             position = s.range.1;
+            if master.is_some(){let _=audio.control(&s.project_id,"pause",None,None,None);}
         }
         let busy = crate::resource_scheduler::ai_gpu_slot().try_lock().is_err()
             || crate::resource_scheduler::ffmpeg_slot().try_lock().is_err();
         if busy && clock.playing {
             clock.set_playing(false);
+            if master.is_some(){let _=audio.control(&s.project_id,"pause",None,None,None);}
         }
         if visible && !busy && (clock.playing || dirty) {
             let generation = s.generation.load(Ordering::SeqCst);

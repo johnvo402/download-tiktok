@@ -319,7 +319,7 @@ pub fn prepare_preview_stem(
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err("Cache stem thoại preview không hợp lệ.".into());
         }
-        if metadata.len() > 44 {
+        if metadata.len() > 44 && crate::audio::signal::validate_stem(&cached, project.source.duration.unwrap_or(0.0)).is_ok() {
             return Ok(cached);
         }
         fs::remove_file(&cached)
@@ -368,6 +368,7 @@ pub fn prepare_preview_stem(
         let _ = fs::remove_file(&partial);
         return Err("BandIt không tạo được stem thoại preview hợp lệ.".into());
     }
+    if let Err(e) = crate::audio::signal::validate_stem(&partial,project.source.duration.unwrap_or(0.0)) { let _=fs::remove_file(&partial); return Err(e); }
     fs::rename(&partial, &cached)
         .map_err(|error| format!("Không thể lưu stem thoại preview: {error}"))?;
     let _ = app.emit("dialogue-preview-progress", json!({"message":"Stem BandIt preview đã sẵn sàng."}));

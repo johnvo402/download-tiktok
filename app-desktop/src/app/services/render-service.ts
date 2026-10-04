@@ -46,6 +46,7 @@ export interface ExportValidation {
   warnings: SubtitleLayoutWarning[];
   dubbingSegments: number;
   expectedAudio: boolean;
+  audioWarnings: string[];
 }
 
 export interface ExportHistoryEntry {
