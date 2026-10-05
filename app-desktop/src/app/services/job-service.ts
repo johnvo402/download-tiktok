@@ -1,7 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
-export type UnifiedJobStatus = 'queued' | 'waiting' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled' | 'interrupted';
+export type UnifiedJobStatus = 'queued' | 'waiting' | 'running' | 'cancelling' | 'completed' | 'partial' | 'failed' | 'cancelled' | 'interrupted';
 
 export interface UnifiedJob {
   id: string;

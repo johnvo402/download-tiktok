@@ -1,14 +1,13 @@
+use crate::worker_manager::WorkerCommandExt;
 use crate::project_service::{
     Project, ProjectStore, TranscriptMetadata, TranscriptSourceType, TranscriptStatus,
 };
-use crate::video_service::{resolve_project_file, resolve_video};
+use crate::video_service::resolve_video;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
-use tempfile::NamedTempFile;
 use uuid::Uuid;
 
 const TRANSCRIPT_PATH: &str = "subtitles/transcript.json";
@@ -134,23 +133,21 @@ pub fn get_transcript(
     if metadata.status != TranscriptStatus::Completed {
         return Ok(None);
     }
-    let path = resolve_project_file(store, project_id, &metadata.path, "subtitles")?;
-    let bytes = fs::read(path).map_err(|error| format!("Không thể đọc transcript: {error}"))?;
-    let transcript: Transcript = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("File transcript.json bị lỗi hoặc không hợp lệ: {error}"))?;
-    if transcript.project_id != project_id {
-        return Err("Transcript không thuộc dự án hiện tại.".to_string());
-    }
-    if transcript.video_checksum != project.source.checksum_sha256 {
-        return Err("Transcript không khớp với video nguồn hiện tại.".to_string());
-    }
-    if transcript.schema_version != 1 {
-        return Err(format!(
-            "Phiên bản transcript {} chưa được hỗ trợ.",
-            transcript.schema_version
-        ));
-    }
-    validate_transcript(&transcript, project.source.duration)?;
+    crate::project_service::validate_relative_asset(&metadata.path, "subtitles")?;
+    let root = store.project_directory(project_id)?.canonicalize().map_err(|_| "Không tìm thấy dự án.")?;
+    let candidate = root.join(&metadata.path);
+    let parent = candidate.parent().ok_or("Thư mục transcript không hợp lệ.")?.canonicalize().map_err(|_| "Không tìm thấy thư mục transcript.")?;
+    if !parent.starts_with(&root) { return Err("Transcript nằm ngoài dự án.".into()); }
+    let path = parent.join(candidate.file_name().ok_or("Tên transcript không hợp lệ.")?);
+    let transcript = crate::recovery_store::read(&path, Some(1), |bytes| {
+        let transcript: Transcript = serde_json::from_slice(bytes)
+            .map_err(|_| "File transcript.json bị lỗi hoặc không hợp lệ.".to_string())?;
+        if transcript.project_id != project_id { return Err("Transcript không thuộc dự án hiện tại.".into()); }
+        if transcript.video_checksum != project.source.checksum_sha256 { return Err("Transcript không khớp với video nguồn hiện tại.".into()); }
+        if transcript.schema_version != 1 { return Err("Phiên bản transcript chưa được hỗ trợ.".into()); }
+        validate_transcript(&transcript, project.source.duration)?;
+        Ok(transcript)
+    })?;
     Ok(Some(transcript))
 }
 
@@ -231,8 +228,7 @@ pub fn save_transcript_locked(
         }
     }
     validate_transcript(&transcript, project.source.duration)?;
-    let project_dir = store.project_directory(project_id)?;
-    let transcript_path = project_dir.join(TRANSCRIPT_PATH);
+    let transcript_path = store.data_directory(project_id, "subtitles")?.join("transcript.json");
     let previous_bytes = fs::read(&transcript_path).ok();
     let bytes = serde_json::to_vec_pretty(&transcript)
         .map_err(|error| format!("Không thể chuyển transcript thành JSON: {error}"))?;
@@ -304,10 +300,11 @@ pub fn extract_subtitle(
         .args(["-hide_banner", "-loglevel", "error", "-i"])
         .arg(&video_path)
         .args(["-map", map.as_str(), "-f", "srt", "pipe:1"])
-        .output()
+        .output_contained(std::time::Duration::from_secs(7200))
         .map_err(|error| {
             format!("Không thể khởi chạy FFmpeg. Hãy cài FFmpeg và thêm ffmpeg vào PATH: {error}")
         })?;
+    if output.stdout.len() >= 8*1024*1024 {return Err("Phụ đề quá lớn để đọc trong một lượt; chưa cập nhật transcript.".into());}
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if detail.is_empty() {
@@ -496,16 +493,11 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .ok_or_else(|| "Đường dẫn tệp project không hợp lệ.".to_string())?;
     fs::create_dir_all(parent)
         .map_err(|error| format!("Không thể tạo thư mục lưu dữ liệu: {error}"))?;
-    let mut temporary = NamedTempFile::new_in(parent)
-        .map_err(|error| format!("Không thể tạo tệp tạm thời: {error}"))?;
-    temporary
-        .write_all(bytes)
-        .and_then(|_| temporary.as_file().sync_all())
-        .map_err(|error| format!("Không thể ghi transcript: {error}"))?;
-    temporary
-        .persist(path)
-        .map_err(|error| format!("Không thể lưu transcript: {}", error.error))?;
-    Ok(())
+    if path.extension().is_some_and(|extension| extension == "json") {
+        crate::recovery_store::write(path, bytes)
+    } else {
+        crate::recovery_store::write_blob(path, bytes)
+    }
 }
 
 #[cfg(test)]
@@ -641,6 +633,17 @@ mod tests {
         assert_eq!(updated_project.transcript.unwrap().segment_count, 1);
         let reloaded = get_transcript(&store, &project.id).unwrap().unwrap();
         assert_eq!(reloaded, transcript);
+    }
+
+    #[test]
+    fn corrupt_transcript_recovers_and_thousand_segments_roundtrip() {
+        let temp=tempdir().unwrap();let store=ProjectStore::new(temp.path().join("projects"));let mut project=store.create("Large transcript").unwrap();
+        project.source.video_path=Some("media/source/video.mp4".into());project.source.duration=Some(7200.0);let project=store.update_project(&project).unwrap();
+        let transcript=Transcript {schema_version:1,project_id:project.id.clone(),source_type:TranscriptSourceType::Subtitle,source_track:None,language:Some("vi".into()),video_checksum:None,
+            segments:(0..5000).map(|i|TranscriptSegment::new(i as f64,i as f64+0.8,format!("Câu tiếng Việt {i}"),TranscriptSourceType::Subtitle)).collect()};
+        save_transcript(&store,&project.id,transcript.clone()).unwrap();let mut edited=transcript.clone();edited.segments[0].source="Đã sửa".into();save_transcript(&store,&project.id,edited).unwrap();
+        let path=store.project_directory(&project.id).unwrap().join("subtitles/transcript.json");fs::write(path,b"broken").unwrap();
+        assert_eq!(get_transcript(&store,&project.id).unwrap().unwrap(),transcript);
     }
 
     #[test]

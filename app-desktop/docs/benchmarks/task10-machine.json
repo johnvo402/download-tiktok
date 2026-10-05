@@ -1,0 +1,24 @@
+{
+  "measuredAt": "2026-10-04T14:46:57.8170444Z",
+  "os": [
+    {
+      "Caption": "Microsoft Windows 11 Home Single Language",
+      "Version": "10.0.26200",
+      "BuildNumber": "26200"
+    }
+  ],
+  "cpu": [
+    {
+      "Name": "13th Gen Intel(R) Core(TM) i5-13500H",
+      "NumberOfCores": 12,
+      "NumberOfLogicalProcessors": 16
+    }
+  ],
+  "gpu": [
+    {
+      "Name": "Intel(R) Iris(R) Xe Graphics",
+      "DriverVersion": "32.0.101.6790"
+    }
+  ],
+  "scope": "Local development machine only; no NVIDIA/AMD/clean-machine evidence"
+}

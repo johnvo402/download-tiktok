@@ -1,3 +1,4 @@
+use crate::worker_manager::WorkerCommandExt;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Preference {
     Auto,
@@ -35,7 +36,7 @@ pub fn preflight(source: &std::path::Path) -> Result<(), String> {
     let output=crate::runtime_paths::ffprobe_command()?.args([
         "-v","error","-select_streams","v:0","-show_entries",
         "stream=codec_name,pix_fmt,color_transfer,sample_aspect_ratio,field_order:stream_side_data=rotation","-of","json"
-    ]).arg(source).output().map_err(|_|"Không kiểm tra được định dạng nguồn.")?;
+    ]).arg(source).output_contained(std::time::Duration::from_secs(30)).map_err(|_|"Không kiểm tra được định dạng nguồn.")?;
     if !output.status.success() {
         return Err("Không đọc được video nguồn.".into());
     }
@@ -94,7 +95,7 @@ pub fn bitrate(
             "json",
         ])
         .arg(source)
-        .output()
+        .output_contained(std::time::Duration::from_secs(30))
         .map_err(|e| e.to_string())?;
     let json: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap_or_default();
     let fps = spec.fps.unwrap_or(30.0).clamp(1.0, 120.0);

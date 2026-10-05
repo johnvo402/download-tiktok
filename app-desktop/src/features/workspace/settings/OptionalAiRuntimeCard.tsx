@@ -169,6 +169,7 @@ export default function OptionalAiRuntimeCard(props: OptionalAiRuntimeCardProps)
       <button type="button" class="button button-quiet" disabled={installing()} onClick={() => void manageRuntime(false)}>Kiểm tra bộ xử lý</button>
       <button type="button" class="button button-quiet" disabled={installing()} onClick={() => setConfirmRemove(true)}>Gỡ bộ xử lý</button>
     </div></Show>
+    <Show when={(error() && installed()) || ['broken','update_required'].includes(status()?.health?.[props.feature] ?? '')}><button class="button button-quiet" type="button" disabled={loading() || installing()} onClick={() => setConfirmProfile(activeProfile())}>Sửa bộ xử lý</button></Show>
     <Show when={confirmRemove()}><Modal title="Gỡ bộ xử lý?" description="Tính năng này sẽ ngừng sử dụng bộ xử lý đã cài. Các thành phần dùng chung, model và dữ liệu dự án được giữ nguyên." onClose={() => setConfirmRemove(false)}>
       <footer class="modal-actions"><button class="button button-quiet" onClick={() => setConfirmRemove(false)}>Hủy</button><button class="button button-primary" onClick={() => void manageRuntime(true)}>Gỡ bộ xử lý</button></footer>
     </Modal></Show>

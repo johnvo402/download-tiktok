@@ -26,7 +26,7 @@ pub fn open_ai_components_folder(app: tauri::AppHandle) -> Result<String, String
 
 #[tauri::command]
 pub async fn install_optional_runtime(app: tauri::AppHandle, feature: String, profile: String) -> Result<optional_runtime::RuntimeStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || optional_runtime::install(&app, &feature, &profile))
+    tauri::async_runtime::spawn_blocking(move || crate::job_service::maintenance(&app,"runtime_install",|| optional_runtime::install(&app, &feature, &profile)))
         .await.map_err(|error| format!("Không thể cài bộ xử lý bổ sung: {error}"))?
 }
 
@@ -37,9 +37,7 @@ pub async fn clear_ai_installation_cache() -> Result<u64, String> {
 }
 
 pub(crate) fn store(app: &tauri::AppHandle) -> Result<ProjectStore, String> {
-    let mut root = app
-        .path()
-        .app_data_dir()
+    let mut root = crate::runtime_paths::data_dir(app)
         .map_err(|error| format!("Không thể xác định thư mục dữ liệu ứng dụng: {error}"))?;
     if cfg!(debug_assertions) {
         if let Some(directory) = std::env::var_os("JC_QA_DATA_DIR") { root = std::path::PathBuf::from(directory); }
@@ -73,6 +71,22 @@ pub fn clear_batch_video_queue(app: tauri::AppHandle, project_id: String) -> Res
 #[tauri::command]
 pub fn list_projects(app: tauri::AppHandle) -> Result<ProjectListResponse, String> {
     store(&app)?.list()
+}
+
+#[tauri::command]
+pub fn get_recovery_notices() -> Vec<String> { crate::recovery_store::take_notices() }
+
+#[tauri::command]
+pub fn get_session_status(app: tauri::AppHandle) -> Result<crate::app_session::SessionStatus, String> {
+    app.try_state::<crate::app_session::AppSession>().map(|s|s.status.clone()).ok_or_else(|| "Không đọc được trạng thái phiên.".into())
+}
+
+#[tauri::command]
+pub fn report_frontend_error(kind: String, message: String) {
+    // Do not serialize objects, transcript text or a JavaScript stack with user paths.
+    let error=crate::app_error::AppError::classify(&message,crate::app_error::ErrorContext {feature:Some("frontend".into()),..Default::default()});
+    let kind=if kind=="unhandledrejection" {"unhandledrejection"} else {"error"};
+    log::error!("Frontend {kind}; code={}",error.code);
 }
 
 #[tauri::command]
@@ -138,6 +152,7 @@ pub fn open_model_folder(
 
 #[tauri::command]
 pub fn cancel_unified_job(
+    app: tauri::AppHandle,
     job_store: tauri::State<'_, crate::job_service::JobStore>,
     asr_jobs: tauri::State<'_, asr_service::AsrJobs>,
     translation_jobs: tauri::State<'_, translation_service::TranslationJobs>,
@@ -150,14 +165,21 @@ pub fn cancel_unified_job(
     if !crate::job_service::is_active(&job.status) {
         return Ok(false);
     }
-    match job.job_type.as_str() {
+    let result = match job.job_type.as_str() {
         "transcribe" => asr_service::cancel_transcription(asr_jobs, job_id),
         "translate" => translation_service::cancel_translation(translation_jobs, job_id),
         "tts" => tts_service::cancel(&tts_jobs, &job_id),
         "export" | "text_removal_preview" => render_service::cancel_export(&render_jobs, &job_id),
         "video_merge" | "tiktok_download" | "tiktok_cookie_login" => video_tools_service::cancel(&video_tools_jobs, &job_id),
         _ => Err("Loại job này chưa hỗ trợ hủy từ hàng đợi.".into()),
+    }?;
+    if result {
+        if let Some(record)=job_store.sync_event("cancel", &serde_json::json!({"jobId":job.id,"status":"cancelling","message":"Đang dừng tác vụ…"})) {
+            use tauri::Emitter;
+            let _=app.emit("job-record-updated",record);
+        }
     }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -268,8 +290,11 @@ pub fn create_project(
 }
 
 #[tauri::command]
-pub fn get_project(app: tauri::AppHandle, id: String) -> Result<Project, String> {
-    store(&app)?.get(&id)
+pub async fn get_project(app: tauri::AppHandle, id: String) -> Result<Project, Box<crate::app_error::AppError>> {
+    let context=crate::app_error::ErrorContext {feature:Some("project".into()),project_id:Some(id.clone()),stage:Some("load".into()),..Default::default()};
+    tauri::async_runtime::spawn_blocking(move ||store(&app)?.get(&id)).await
+        .map_err(|e|Box::new(crate::app_error::AppError::classify(&e.to_string(),context.clone())))?
+        .map_err(|e|Box::new(crate::app_error::AppError::classify(&e,context)))
 }
 
 #[tauri::command]
@@ -760,7 +785,7 @@ pub async fn prepare_dialogue_preview_stem(
 
 #[tauri::command]
 pub async fn install_dialogue_model(app: tauri::AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || dialogue_service::install_model(&app))
+    tauri::async_runtime::spawn_blocking(move || crate::job_service::maintenance(&app,"model_install",|| dialogue_service::install_model(&app)))
         .await.map_err(|error| format!("Không thể tải model tách thoại: {error}"))?
 }
 
@@ -779,7 +804,7 @@ pub async fn remove_dialogue_model(app: tauri::AppHandle, jobs: tauri::State<'_,
 
 #[tauri::command]
 pub async fn install_tts_model(app: tauri::AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || tts_service::install_model(app))
+    tauri::async_runtime::spawn_blocking(move || crate::job_service::maintenance(&app,"model_install",|| tts_service::install_model(app.clone())))
         .await
         .map_err(|error| format!("Không thể tải model VieNeu: {error}"))?
 }
@@ -1054,6 +1079,7 @@ pub async fn import_video(
     project_id: String,
     source_path: String,
     replace: bool,
+    restore_source: Option<bool>,
 ) -> Result<video_service::VideoImportResult, String> {
     let root = projects_root(&app)?;
     let render_jobs = render_jobs.inner().clone();
@@ -1080,7 +1106,8 @@ pub async fn import_video(
         }
         app.state::<crate::preview::PreviewManager>().close_project(&project_id);
         app.state::<crate::audio::transport::AudioManager>().close(Some(&project_id));
-        video_service::import_video(&ProjectStore::new(root), &project_id, &source_path, replace)
+        if restore_source.unwrap_or(false) { video_service::restore_source_video(&ProjectStore::new(root), &project_id, &source_path) }
+        else { video_service::import_video(&ProjectStore::new(root), &project_id, &source_path, replace) }
     })
     .await
     .map_err(|error| format!("Không thể hoàn tất nhập video: {error}"))?
@@ -1164,20 +1191,26 @@ pub async fn extract_subtitle(
 }
 
 #[tauri::command]
-pub fn get_transcript(
+pub async fn get_transcript(
     app: tauri::AppHandle,
     project_id: String,
-) -> Result<Option<Transcript>, String> {
-    crate::tts_service::get_transcript_with_audio_validation(&store(&app)?, &project_id)
+) -> Result<Option<Transcript>, Box<crate::app_error::AppError>> {
+    let context=crate::app_error::ErrorContext {feature:Some("transcript".into()),project_id:Some(project_id.clone()),stage:Some("load".into()),..Default::default()};
+    tauri::async_runtime::spawn_blocking(move ||crate::tts_service::get_transcript_with_audio_validation(&store(&app)?, &project_id)).await
+        .map_err(|e|Box::new(crate::app_error::AppError::classify(&e.to_string(),context.clone())))?
+        .map_err(|e|Box::new(crate::app_error::AppError::classify(&e,context)))
 }
 
 #[tauri::command]
-pub fn save_transcript(
+pub async fn save_transcript(
     app: tauri::AppHandle,
     project_id: String,
     transcript: Transcript,
-) -> Result<Project, String> {
-    transcript_service::save_transcript(&store(&app)?, &project_id, transcript)
+) -> Result<Project, Box<crate::app_error::AppError>> {
+    let context=crate::app_error::ErrorContext {feature:Some("transcript".into()),project_id:Some(project_id.clone()),stage:Some("save".into()),..Default::default()};
+    tauri::async_runtime::spawn_blocking(move ||transcript_service::save_transcript(&store(&app)?, &project_id, transcript)).await
+        .map_err(|e|Box::new(crate::app_error::AppError::classify(&e.to_string(),context.clone())))?
+        .map_err(|e|Box::new(crate::app_error::AppError::classify(&e,context)))
 }
 
 #[tauri::command]
@@ -1228,7 +1261,7 @@ pub async fn get_text_removal_cache_status(app:tauri::AppHandle, project_id:Stri
 
 #[tauri::command]
 pub async fn install_sttn_text_removal_model(app: tauri::AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || crate::text_removal_service::install_sttn_model(app))
+    tauri::async_runtime::spawn_blocking(move || crate::job_service::maintenance(&app,"model_install",|| crate::text_removal_service::install_sttn_model(app.clone())))
         .await
         .map_err(|error| format!("Không thể tải model STTN: {error}"))?
 }
@@ -1275,7 +1308,7 @@ pub async fn install_ocr_runtime(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn install_ocr_model(app: tauri::AppHandle, model: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || asr_service::install_ocr_model(app, model))
+    tauri::async_runtime::spawn_blocking(move || crate::job_service::maintenance(&app,"model_install",|| asr_service::install_ocr_model(app.clone(), model)))
         .await
         .map_err(|error| format!("Không thể cài model OCR: {error}"))?
 }
@@ -1292,14 +1325,14 @@ pub async fn install_whisperx_alignment(
     app: tauri::AppHandle,
     language: String,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || asr_service::install_whisperx_alignment(app, language))
+    tauri::async_runtime::spawn_blocking(move || crate::job_service::maintenance(&app,"model_install",|| asr_service::install_whisperx_alignment(app.clone(), language)))
         .await
         .map_err(|error| format!("Không thể khởi tạo cài đặt aligner WhisperX: {error}"))?
 }
 
 #[tauri::command]
 pub async fn install_asr_model(app: tauri::AppHandle, model: String, backend: Option<String>) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || asr_service::install_model(app, model, backend))
+    tauri::async_runtime::spawn_blocking(move || crate::job_service::maintenance(&app,"model_install",|| asr_service::install_model(app.clone(), model, backend)))
         .await
         .map_err(|error| format!("Không thể khởi tạo cài đặt model Speech Recognition: {error}"))?
 }
@@ -1366,9 +1399,7 @@ pub fn cancel_transcription(
 }
 
 pub fn projects_root(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    let mut root = app
-        .path()
-        .app_data_dir()
+    let mut root = crate::runtime_paths::data_dir(app)
         .map_err(|error| format!("Không thể xác định thư mục dữ liệu ứng dụng: {error}"))?;
     if cfg!(debug_assertions) {
         if let Some(directory) = std::env::var_os("JC_QA_DATA_DIR") { root = std::path::PathBuf::from(directory); }

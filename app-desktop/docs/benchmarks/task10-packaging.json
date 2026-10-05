@@ -1,0 +1,44 @@
+{
+  "version": "0.1.14-beta.1",
+  "channel": "beta",
+  "sha256": "414be2ea07eca84e3b25728a56af1cc370e97e479dc9d1ffebffde93ac634378",
+  "signatureStatus": "NotSigned",
+  "installerBytes": 368392253,
+  "previousTask9InstallerBytes": 368267204,
+  "extractedPayloadBytes": 1008955332,
+  "extractedPayloadFiles": 1905,
+  "resources": [
+    {
+      "group": "ai-worker",
+      "files": 1496,
+      "bytes": 441930380,
+      "allHashesMatch": true
+    },
+    {
+      "group": "downloader-worker",
+      "files": 352,
+      "bytes": 138069107,
+      "allHashesMatch": true
+    },
+    {
+      "group": "ffmpeg",
+      "files": 4,
+      "bytes": 325572617,
+      "allHashesMatch": true
+    },
+    {
+      "group": "optional-runtime",
+      "files": 49,
+      "bytes": 68262825,
+      "allHashesMatch": true
+    }
+  ],
+  "workerVersion": "0.1.8",
+  "workerProtocol": 2,
+  "optionalRuntimeAbi": 7,
+  "passed": true,
+  "limitations": [
+    "Extraction/hash audit is not a clean-machine install, upgrade or uninstall test.",
+    "Payload size excludes separately installed WebView2, models, optional runtimes and user projects."
+  ]
+}

@@ -44,6 +44,13 @@ pub fn optional_installer() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+/// All storage consumers share the root resolved during application startup.
+/// The isolated QA override is enabled only by the debug startup path.
+pub fn data_dir(app: &tauri::AppHandle) -> tauri::Result<PathBuf> {
+    use tauri::Manager;
+    if let Some(root)=app_data_dir() {Ok(root.to_path_buf())} else {app.path().app_data_dir()}
+}
+
 pub fn optional_wheelhouse() -> Option<PathBuf> {
     let path = if cfg!(debug_assertions) {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/optional-runtime/wheels")

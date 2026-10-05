@@ -1,3 +1,4 @@
+use crate::worker_manager::WorkerCommandExt;
 use crate::project_service::{BlurRegion, Project, ProjectLogo, ProjectStore, ProjectTextOverlay, SubtitleSettings};
 use crate::video_service::resolve_project_file;
 use serde::{Deserialize, Serialize};
@@ -468,7 +469,7 @@ fn decode_image(path: &Path) -> Result<(u32, u32), String> {
             "json",
         ])
         .arg(path)
-        .output()
+        .output_contained(std::time::Duration::from_secs(30))
         .map_err(|error| format!("Không thể khởi chạy FFprobe để kiểm tra logo: {error}"))?;
     if !output.status.success() {
         return Err(
@@ -495,7 +496,7 @@ fn decode_image(path: &Path) -> Result<(u32, u32), String> {
         .args(["-v", "error", "-i"])
         .arg(path)
         .args(["-frames:v", "1", "-f", "null", "-"])
-        .output()
+        .output_contained(std::time::Duration::from_secs(30))
         .map_err(|error| format!("Không thể khởi chạy FFmpeg để kiểm tra ảnh: {error}"))?;
     if !decode.status.success() {
         return Err("Ảnh logo bị hỏng hoặc không thể giải mã.".into());

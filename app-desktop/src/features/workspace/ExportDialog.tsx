@@ -8,8 +8,9 @@ import type { ExportHistoryEntry, ExportJobEvent, ExportOptions, ExportValidatio
 import VideoEncoderSelect from '../../shared/components/VideoEncoderSelect';
 import Modal from '../../shared/components/Modal';
 import { flushVisualSettings } from '../overlays/overlay-state';
+import { flushPendingSaves } from '../../app/save-guard';
 
-const terminal = (status?: string) => status === 'completed' || status === 'failed' || status === 'cancelled';
+const terminal = (status?: string) => status === 'completed' || status === 'partial' || status === 'failed' || status === 'cancelled';
 const formatTime = (seconds: number) => {
   if (!Number.isFinite(seconds) || seconds < 0) return '00:00';
   const total = Math.floor(seconds); return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
@@ -102,6 +103,7 @@ export default function ExportDialog(props: { onClose: () => void }) {
         setCanceling(false);
         void refreshHistory();
         if (event.status === 'completed') setNotice({ kind: 'success', message: `Đã xuất video: ${displayExportPath(event.output) ?? 'exports'}` });
+        else if (event.status === 'partial') setNotice({ kind: 'info', message: event.message });
         else if (event.status === 'failed') setNotice({ kind: 'error', message: event.message });
       }
     }).then((dispose) => { unlisten = dispose; });
@@ -129,6 +131,7 @@ export default function ExportDialog(props: { onClose: () => void }) {
     if (outputNameError()) { setValidationError(outputNameError()); return; }
     const exportOptions = { ...options(), outputFileName: outputFileName().trim() };
     try {
+      await flushPendingSaves();
       await flushVisualSettings(id);
       const latestValidation = await renderService.validate(id, exportOptions);
       setValidation(latestValidation);

@@ -1,3 +1,4 @@
+use crate::worker_manager::WorkerCommandExt;
 use super::{
     manager::{Status, Transform, TranslationPatch},
     scene, Bounds, PreviewManager,
@@ -15,8 +16,7 @@ pub async fn preview_audio_path(
         let project = store.get(&project_id)?;
         let source = crate::video_service::resolve_video(&store, &project_id)?;
         let root = store.project_directory(&project_id)?;
-        let dir = root.join("cache/preview");
-        std::fs::create_dir_all(&dir).map_err(|_| "Không tạo được thư mục audio preview.")?;
+        let dir = store.data_directory(&project_id,"cache/preview")?;
         let canonical_root = root.canonicalize().map_err(|_| "Dự án không tồn tại.")?;
         let dir = dir
             .canonicalize()
@@ -43,7 +43,7 @@ pub async fn preview_audio_path(
                 .arg(source)
                 .args(["-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "192k"])
                 .arg(temp.path())
-                .output()
+                .output_contained(std::time::Duration::from_secs(7200))
                 .map_err(|_| "Không tạo được audio preview.")?;
             if !status.status.success() {
                 return Err("Không chuyển đổi được âm thanh video.".into());
@@ -84,6 +84,9 @@ pub async fn preview_open(
     bounds: Bounds,
     clean: Option<CleanPreview>,
 ) -> Result<String, String> {
+    if std::env::var("JC_PREVIEW_BACKEND").is_ok_and(|value| value == "compatibility") {
+        return Err("Đã bật chế độ xem video tương thích cho phiên này.".into());
+    }
     bounds.validate()?;
     if window.label() != "main" {
         return Err("Cửa sổ không hỗ trợ preview.".into());

@@ -8,6 +8,26 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub const PROTOCOL_VERSION: u64 = 2;
+pub struct BoundedLines<R> { reader:R, maximum:u64, done:bool }
+pub fn bounded_lines<R:BufRead>(reader:R, maximum:u64)->BoundedLines<R> {BoundedLines {reader,maximum,done:false}}
+impl<R:BufRead> Iterator for BoundedLines<R> {
+    type Item=io::Result<String>;
+    fn next(&mut self)->Option<Self::Item> {
+        if self.done {return None;}
+        let mut bytes=Vec::new();
+        match self.reader.by_ref().take(self.maximum+1).read_until(b'\n',&mut bytes) {
+            Ok(0)=>{self.done=true;None},
+            Ok(count) if count as u64>self.maximum=>{self.done=true;Some(Err(io::Error::new(io::ErrorKind::InvalidData,"Process reply exceeds the allowed size")))},
+            Ok(_)=>{if bytes.last()==Some(&b'\n') {bytes.pop();} Some(Ok(String::from_utf8_lossy(&bytes).into_owned()))},
+            Err(error)=>{self.done=true;Some(Err(error))},
+        }
+    }
+}
+pub fn read_tail(mut pipe:impl Read, maximum:usize)->io::Result<String> {
+    let mut bytes=Vec::new();let mut chunk=[0_u8;8192];
+    loop {let count=pipe.read(&mut chunk)?;if count==0 {break;}bytes.extend_from_slice(&chunk[..count]);if bytes.len()>maximum {bytes.drain(..bytes.len()-maximum);}}
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
 struct ActiveProcess { executable: PathBuf, scope: Arc<ProcessScope> }
 static ACTIVE: OnceLock<Mutex<HashMap<u32, ActiveProcess>>> = OnceLock::new();
 fn active() -> &'static Mutex<HashMap<u32, ActiveProcess>> { ACTIVE.get_or_init(Mutex::default) }
@@ -60,6 +80,11 @@ impl DerefMut for ManagedWorker {
     fn deref_mut(&mut self) -> &mut Child { self.child.as_mut().expect("live worker handle") }
 }
 impl ManagedWorker {
+    /// Kill owned descendants before waiting for pipe readers to reach EOF.
+    pub fn kill(&mut self) -> io::Result<()> {
+        self.scope.stop();
+        self.child.as_mut().expect("live worker handle").kill()
+    }
     pub fn wait_with_output(self) -> io::Result<Output> { self.wait_with_output_timeout(Duration::from_secs(300)) }
     pub fn wait_with_output_timeout(mut self, timeout: Duration) -> io::Result<Output> {
         drop(self.stdin.take());
@@ -108,13 +133,18 @@ impl Drop for ManagedWorker {
 
 pub trait WorkerCommandExt {
     fn spawn_worker(&mut self) -> io::Result<ManagedWorker>;
+    fn spawn_contained(&mut self) -> io::Result<ManagedWorker>;
+    fn output_contained(&mut self, timeout: Duration) -> io::Result<Output>;
 }
 impl WorkerCommandExt for Command {
+    fn output_contained(&mut self, timeout: Duration) -> io::Result<Output> { output_timeout(self, timeout) }
+    fn spawn_contained(&mut self) -> io::Result<ManagedWorker> { spawn_process(self) }
     fn spawn_worker(&mut self) -> io::Result<ManagedWorker> {
         // Ignore arbitrary global Python homes/startup scripts. Each command explicitly
         // supplies its own source path or a frozen executable and selected environment.
         self.env_remove("PYTHONHOME").env_remove("PYTHONSTARTUP").env_remove("PYTHONUSERBASE")
             .env("PYTHONNOUSERSITE", "1").env("PYTHONDONTWRITEBYTECODE", "1")
+            .env("JC_SESSION_ID", crate::app_session::id())
             .env("PYTHONUNBUFFERED", "1").env("PYTHONUTF8", "1")
             .stdin(Stdio::piped()).stdout(Stdio::piped());
         let mut managed = spawn_process(self)?;
@@ -140,6 +170,10 @@ impl WorkerCommandExt for Command {
     }
 }
 pub fn spawn_process(command: &mut Command) -> io::Result<ManagedWorker> {
+    #[cfg(windows)] {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
     let mut registry = active().lock().map_err(|_|io::Error::other("Process registry unavailable"))?;
     let mut child = command.spawn()?;
     #[cfg(windows)]
@@ -206,6 +240,11 @@ pub fn shutdown() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn protocol_records_and_logs_have_explicit_memory_bounds() {
+        let mut lines=bounded_lines(io::Cursor::new(b"small\nxxxxxxxxxxxxxxxxxxxxxxxx"),8);
+        assert_eq!(lines.next().unwrap().unwrap(),"small");assert!(lines.next().unwrap().is_err());assert!(lines.next().is_none());
+        assert_eq!(read_tail(io::Cursor::new(b"0123456789"),4).unwrap(),"6789");
+    }
     #[test] fn startup_protocol_is_strict() {
         assert!(validate_handshake(r#"{"type":"ready","protocolVersion":2}"#).is_ok());
         for invalid in ["Traceback", "{}", r#"{"type":"ready","protocolVersion":1}"#, r#"{"type":"failed","protocolVersion":2}"#] {

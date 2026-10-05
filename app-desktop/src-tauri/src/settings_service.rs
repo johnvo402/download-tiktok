@@ -4,8 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
-use tempfile::NamedTempFile;
+use tauri::{AppHandle};
 
 const SETTINGS_FILENAME: &str = "app-settings.json";
 const KEYRING_SERVICE: &str = "com.ai.video-localization";
@@ -331,9 +330,7 @@ pub fn migrate_legacy_custom_prompt(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let root = app
-        .path()
-        .app_data_dir()
+    let root = crate::runtime_paths::data_dir(app)
         .map_err(|error| format!("Không thể xác định thư mục dữ liệu ứng dụng: {error}"))?
         .join("projects");
     let store = ProjectStore::new(root);
@@ -357,33 +354,28 @@ pub fn migrate_legacy_custom_prompt(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
+    crate::runtime_paths::data_dir(app)
         .map(|path| path.join(SETTINGS_FILENAME))
         .map_err(|error| format!("Không thể xác định nơi lưu cài đặt: {error}"))
 }
 
 pub fn read_settings(path: &std::path::Path) -> Result<AppSettings, String> {
-    match fs::read(path) {
-        Ok(bytes) => match parse_settings(&bytes) {
-            Ok(mut settings) => {
-                if migrate_legacy_tts_voice(&mut settings) | migrate_automatic_devices(&mut settings) {
-                    write_settings(path, &settings)?;
-                }
-                Ok(settings)
-            }
-            Err(error) => {
-                let backup = backup_settings(path, &bytes)?;
-                log::warn!(
-                    "Invalid global settings moved to backup {}: {}",
-                    backup.display(),
-                    error
-                );
-                Ok(AppSettings::default())
-            }
-        },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(AppSettings::default()),
-        Err(error) => Err(format!("Không thể đọc cài đặt: {error}")),
+    if !path.exists() && !crate::recovery_store::backup_path(path, 1).exists() { return Ok(AppSettings::default()); }
+    match crate::recovery_store::read(path, Some(4), parse_settings) {
+        Ok(mut settings) => {
+            if migrate_legacy_tts_voice(&mut settings) | migrate_automatic_devices(&mut settings) { write_settings(path, &settings)?; }
+            Ok(settings)
+        }
+        Err(error) if error.contains("mới hơn") || error.contains("không an toàn") => Err(error),
+        Err(error) => {
+            // Only malformed settings may fall back. Permission/IO errors must
+            // remain visible, so defaults cannot overwrite unreadable settings.
+            let bytes = fs::read(path).map_err(|e| format!("Không thể đọc cài đặt: {e}"))?;
+            parse_settings(&bytes).err().ok_or_else(|| error.clone())?;
+            backup_settings(path, &bytes)?;
+            log::warn!("Invalid global settings preserved; defaults are used");
+            Ok(AppSettings::default())
+        }
     }
 }
 
@@ -536,16 +528,8 @@ pub fn write_settings(path: &std::path::Path, settings: &AppSettings) -> Result<
         .map_err(|error| format!("Không thể tạo thư mục cài đặt: {error}"))?;
     let bytes = serde_json::to_vec_pretty(settings)
         .map_err(|error| format!("Không thể tạo JSON cài đặt: {error}"))?;
-    let mut temporary = NamedTempFile::new_in(parent)
-        .map_err(|error| format!("Không thể tạo file cài đặt tạm: {error}"))?;
-    temporary
-        .write_all(&bytes)
-        .and_then(|_| temporary.as_file().sync_all())
-        .map_err(|error| format!("Không thể ghi cài đặt: {error}"))?;
-    temporary
-        .persist(path)
-        .map_err(|error| format!("Không thể lưu cài đặt: {}", error.error))?;
-    Ok(())
+    parse_settings(&bytes)?;
+    crate::recovery_store::write(path, &bytes)
 }
 
 pub fn validate_settings(settings: &TranslationSettings) -> Result<(), String> {

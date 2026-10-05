@@ -5,7 +5,7 @@ use crate::render_spec::{PixelRect, RenderSpecification};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -90,8 +90,7 @@ struct RemovalInterval {
 }
 
 fn app_models_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
+    crate::runtime_paths::data_dir(app)
         .map(|path| path.join("models"))
         .map_err(|error| format!("Không thể xác định thư mục mô hình: {error}"))
 }
@@ -150,8 +149,7 @@ pub fn environment(app: AppHandle) -> Result<TextRemovalEnvironment, String> {
     let ocr = crate::asr_service::get_ocr_environment(app.clone(), model.clone());
     let ocr = ocr.ok();
     let sttn_path = sttn_model_path(&app)?;
-    let sttn_model_installed = fs::metadata(&sttn_path)
-        .is_ok_and(|metadata| metadata.is_file() && metadata.len() == STTN_MODEL_SIZE);
+    let sttn_model_installed = crate::file_integrity::verified(&sttn_path, STTN_MODEL_SIZE, STTN_MODEL_SHA256);
     let runtime = crate::optional_runtime::status();
     let ocr_cuda_available = ocr.as_ref().is_some_and(|value| value.cuda_available);
     Ok(TextRemovalEnvironment {
@@ -185,8 +183,7 @@ pub fn environment(app: AppHandle) -> Result<TextRemovalEnvironment, String> {
 
 pub fn install_sttn_model(app: AppHandle) -> Result<(), String> {
     let target = sttn_model_path(&app)?;
-    if fs::metadata(&target)
-        .is_ok_and(|metadata| metadata.is_file() && metadata.len() == STTN_MODEL_SIZE)
+    if crate::file_integrity::verified(&target, STTN_MODEL_SIZE, STTN_MODEL_SHA256)
     {
         return Ok(());
     }
@@ -1277,20 +1274,13 @@ where
         crate::render_spec::build_render_specification(&project, &transcript, duration, &options)?;
     spec.fps = Some(fps);
 
-    let render_dir = project_root.join("cache").join("render").join(job_id);
-    fs::create_dir_all(&render_dir)
-        .map_err(|error| format!("Không thể tạo thư mục preview tạm: {error}"))?;
+    let render_dir = store.data_directory(project_id,&format!("cache/render/{job_id}"))?;
     let canonical_project = fs::canonicalize(&project_root).map_err(|error| error.to_string())?;
     let canonical_render = fs::canonicalize(&render_dir).map_err(|error| error.to_string())?;
     if !canonical_render.starts_with(&canonical_project) {
         return Err("Đường dẫn preview vượt khỏi thư mục dự án.".into());
     }
-    let preview_dir = project_root
-        .join("cache")
-        .join("preview")
-        .join("ai-removal");
-    fs::create_dir_all(&preview_dir)
-        .map_err(|error| format!("Không thể tạo thư mục lưu preview: {error}"))?;
+    let preview_dir = store.data_directory(project_id,"cache/preview/ai-removal")?;
     let canonical_preview = fs::canonicalize(&preview_dir).map_err(|error| error.to_string())?;
     if !canonical_preview.starts_with(&canonical_project) {
         return Err("Thư mục lưu preview nằm ngoài dự án.".into());
@@ -1358,7 +1348,7 @@ where
     app.asset_protocol_scope()
         .allow_file(&canonical_output)
         .map_err(|error| format!("Không thể mở clip preview trong ứng dụng: {error}"))?;
-    let _ = fs::remove_dir_all(&render_dir);
+    if crate::project_service::verify_tree_has_no_reparse_points(&render_dir).is_ok() {let _ = fs::remove_dir_all(&render_dir);}
     progress(0.99, "Preview đã sẵn sàng.".into());
     Ok(Some(canonical_output))
 }
@@ -1445,7 +1435,7 @@ where
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command
-        .spawn()
+        .spawn_contained()
         .map_err(|error| format!("Không thể tạo video preview: {error}"))?;
     let stdout = child
         .stdout
@@ -1455,18 +1445,16 @@ where
         .stderr
         .take()
         .ok_or("Không đọc được lỗi FFmpeg khi tạo preview.")?;
-    let (sender, receiver) = mpsc::channel::<String>();
+    let (sender, receiver) = mpsc::sync_channel::<String>(8);
     thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().flatten() {
+        for line in crate::worker_manager::bounded_lines(BufReader::new(stdout),8*1024*1024).map_while(Result::ok) {
             if sender.send(line).is_err() {
                 break;
             }
         }
     });
     let stderr_thread = thread::spawn(move || {
-        let mut message = String::new();
-        let _ = BufReader::new(stderr).read_to_string(&mut message);
-        message
+        crate::worker_manager::read_tail(stderr,2*1024*1024).unwrap_or_default()
     });
     let started = Instant::now();
     let mut out_seconds = 0.0_f64;
@@ -1635,18 +1623,16 @@ where
         .stderr
         .take()
         .ok_or("Python worker không mở stderr.")?;
-    let (sender, receiver) = mpsc::channel::<String>();
+    let (sender, receiver) = mpsc::sync_channel::<String>(8);
     thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().flatten() {
+        for line in crate::worker_manager::bounded_lines(BufReader::new(stdout),8*1024*1024).map_while(Result::ok) {
             if sender.send(line).is_err() {
                 break;
             }
         }
     });
     let stderr_thread = thread::spawn(move || {
-        let mut text = String::new();
-        let _ = BufReader::new(stderr_pipe).read_to_string(&mut text);
-        text
+        crate::worker_manager::read_tail(stderr_pipe,2*1024*1024).unwrap_or_default()
     });
     let started = Instant::now();
     let mut final_result = None;

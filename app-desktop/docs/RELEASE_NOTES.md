@@ -1,5 +1,16 @@
 # JC AI cho Windows
 
+## 0.1.14-beta.1 — phục hồi dữ liệu và tác vụ
+
+- Giữ ba bản sao dữ liệu gần nhất, phục hồi bản chép lời bị hỏng và thông báo khi đã phục hồi.
+- Lưu thay đổi trước khi đóng ứng dụng; nếu chưa lưu được, giữ cửa sổ và nội dung đang sửa.
+- Tác vụ dở dang được đánh dấu sau khi mở lại; chỉ chạy lại khi bạn chọn thử lại.
+- Kiểm tra video xuất trước khi hoàn tất, giữ nguyên tệp đã xuất và video nguồn.
+- Có thể tìm lại video nguồn bị mất nếu tệp được chọn giống bản gốc.
+- Thêm kiểm tra và sửa chữa các thành phần xử lý tùy chọn, cùng báo cáo chẩn đoán đã lọc thông tin riêng tư.
+
+Đây là bản beta thử nghiệm, chưa xác nhận đầy đủ trên NVIDIA/AMD và máy Windows mới. Bộ cài thử nghiệm chưa ký số. Ứng dụng chưa tự cập nhật.
+
 ## Bắt đầu
 
 1. Tải tệp `JC-AI-...-windows-x64-setup.exe` và mở để cài đặt.

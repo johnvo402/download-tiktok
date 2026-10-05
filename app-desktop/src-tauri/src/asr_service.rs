@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 const MODELS: &[&str] = &["tiny", "base", "small", "medium", "large-v3"];
@@ -28,7 +28,7 @@ fn asr_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
     // sandboxed Windows environments, app_data_dir can already be deeply
     // nested, and the old models/faster-whisper suffix pushed blob filenames
     // past the legacy MAX_PATH boundary.
-    let cache_dir = app.path().app_data_dir()
+    let cache_dir = crate::runtime_paths::data_dir(app)
         .map_err(|error| format!("Không thể xác định thư mục dữ liệu model: {error}"))?
         .join("models").join("fw");
     fs::create_dir_all(&cache_dir)
@@ -37,8 +37,7 @@ fn asr_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn legacy_asr_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
+    crate::runtime_paths::data_dir(app)
         .map(|path| path.join("models").join("faster-whisper"))
         .map_err(|error| format!("Không thể xác định cache model cũ: {error}"))
 }
@@ -277,7 +276,7 @@ fn merge_core_asr_capabilities(selected: &mut serde_json::Value, core: &serde_js
 }
 
 fn ocr_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let root = app.path().app_data_dir()
+    let root = crate::runtime_paths::data_dir(app)
         .map_err(|error| format!("Không thể xác định thư mục model OCR: {error}"))?
         .join("models");
     fs::create_dir_all(&root).map_err(|error| format!("Không thể tạo thư mục model OCR: {error}"))?;
@@ -364,7 +363,7 @@ pub fn install_ocr_runtime(app: AppHandle) -> Result<(), String> {
         command.arg("onnxruntime==1.30.0");
     }
     let output = command
-        .output()
+        .output_contained(std::time::Duration::from_secs(900))
         .map_err(|error| format!("Không thể khởi chạy pip để cài runtime OCR: {error}"))?;
     if !output.status.success() {
         let details = String::from_utf8_lossy(&output.stderr);
@@ -412,7 +411,7 @@ pub fn remove_ocr_model(app: AppHandle, model: String) -> Result<u64, String> {
     let _operation = MODEL_CACHE_OPERATION_LOCK.lock()
         .map_err(|_| "Không thể khóa thao tác model Speech Recognition.".to_string())?;
     validate_ocr_options(&model, "cpu")?;
-    let data_root = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let data_root = crate::runtime_paths::data_dir(&app).map_err(|error| error.to_string())?;
     let models_root = data_root.join("models");
     let model_root = models_root.join("rapidocr");
     let Ok(models_metadata) = fs::symlink_metadata(&models_root) else { return Ok(0) };
@@ -690,7 +689,7 @@ pub fn generate_transcript(
     if options.mode == "ocr" {
         let environment = inspect_worker(&worker, &serde_json::json!({
             "operation": "ocr_inspect",
-            "cacheDir": app.path().app_data_dir().map_err(|error| error.to_string())?.join("models"),
+            "cacheDir": crate::runtime_paths::data_dir(&app).map_err(|error| error.to_string())?.join("models"),
             "model": options.ocr_model,
         }))?;
         cuda_available = environment.get("cudaAvailable").and_then(|value| value.as_bool()).unwrap_or(false);
@@ -790,7 +789,7 @@ pub fn generate_transcript(
         "transcribe",
         &resources,
         serde_json::to_value(&options).ok(),
-    );
+    ).map_err(|error| {if let Ok(mut entries)=jobs.inner.lock() {entries.remove(&job_id);} error})?;
     let registry = jobs.inner.clone();
     let app_handle = app.clone();
     let worker_job_id = job_id.clone();
@@ -910,13 +909,9 @@ fn run_transcription(
     }
     let source_checksum = project.source.checksum_sha256.clone();
     let video_path = resolve_video(&store, project_id)?;
-    let project_dir = store.project_directory(project_id)?;
-    let extracted_dir = project_dir.join("audio").join("extracted");
-    fs::create_dir_all(&extracted_dir)
-        .map_err(|error| format!("Không thể tạo thư mục audio trích xuất: {error}"))?;
+    let extracted_dir = store.data_directory(project_id,"audio/extracted")?;
     let audio_path = extracted_dir.join(format!("transcription-{job_id}.wav"));
-    let output_path = project_dir
-        .join("cache")
+    let output_path = store.data_directory(project_id,"cache")?
         .join(format!("transcription-{job_id}.json"));
     let mut artifacts = TranscriptionArtifacts {
         audio_path: audio_path.clone(),
@@ -950,7 +945,7 @@ fn run_transcription(
         .arg(&audio_path)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()
+        .spawn_contained()
         .map_err(|error| format!("Không thể khởi chạy FFmpeg để trích xuất audio: {error}"))?;
     let ffmpeg_status = wait_killable(&mut ffmpeg, canceled)?;
     if !ffmpeg_status.success() {
@@ -1094,11 +1089,9 @@ fn run_ocr_transcription(
     if ![1.0, 2.0, 4.0].contains(&options.ocr_fps) {
         return Err("Tốc độ lấy mẫu OCR không hợp lệ.".into());
     }
-    let project_dir = store.project_directory(project_id)?;
-    let temporary_root = project_dir.join("cache").join("ocr").join(job_id);
+    let temporary_root = store.data_directory(project_id,&format!("cache/ocr/{job_id}"))?;
     let artifacts = OcrArtifacts { root: temporary_root.clone() };
-    let frames_dir = temporary_root.join("frames");
-    fs::create_dir_all(&frames_dir).map_err(|error| format!("Không thể tạo cache frame OCR: {error}"))?;
+    let frames_dir = store.data_directory(project_id,&format!("cache/ocr/{job_id}/frames"))?;
     let output_path = temporary_root.join("transcript.json");
     emit_status(app, job_id, project_id, "progress", "Đang trích xuất frame trong vùng subtitle…", Some("ocr-extract"), Some(0.0));
     if canceled.load(Ordering::SeqCst) { return Err("Đã hủy transcription.".into()); }
@@ -1108,7 +1101,7 @@ fn run_ocr_transcription(
         .arg(&video_path)
         .args(["-vf", &filter, "-vsync", "0", "-q:v", "4", "-start_number", "1"])
         .arg(frames_dir.join("frame_%08d.jpg"))
-        .stdout(Stdio::null()).stderr(Stdio::null()).spawn()
+        .stdout(Stdio::null()).stderr(Stdio::null()).spawn_contained()
         .map_err(|error| format!("Không thể khởi chạy FFmpeg để lấy frame OCR: {error}"))?;
     let status = wait_killable(&mut ffmpeg, canceled)?;
     if !status.success() { return Err("FFmpeg không trích xuất được frame trong vùng OCR. Kiểm tra video và vùng đã chọn.".into()); }
@@ -1196,18 +1189,16 @@ fn run_worker_request(
         .stderr
         .take()
         .ok_or_else(|| "Python worker không mở stderr.".to_string())?;
-    let (sender, receiver) = mpsc::channel::<String>();
+    let (sender, receiver) = mpsc::sync_channel::<String>(8);
     thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().flatten() {
+        for line in crate::worker_manager::bounded_lines(BufReader::new(stdout),8*1024*1024).map_while(Result::ok) {
             if sender.send(line).is_err() {
                 break;
             }
         }
     });
     let stderr_thread = thread::spawn(move || {
-        let mut text = String::new();
-        let _ = BufReader::new(stderr).read_to_string(&mut text);
-        text
+        crate::worker_manager::read_tail(stderr,2*1024*1024).unwrap_or_default()
     });
     let started = Instant::now();
     let mut completed = false;
@@ -1443,7 +1434,7 @@ fn run_ocr_install_worker(
     let mut reader = BufReader::new(stdout);
     loop {
         let mut bytes = Vec::new();
-        match reader.read_until(b'\n', &mut bytes) {
+        match reader.by_ref().take(8*1024*1024+1).read_until(b'\n', &mut bytes) {
             Ok(0) => break,
             Err(error) => {
                 let _ = child.kill();
@@ -1552,7 +1543,9 @@ fn wait_killable(
     child: &mut Child,
     canceled: &AtomicBool,
 ) -> Result<std::process::ExitStatus, String> {
+    let started=std::time::Instant::now();
     loop {
+        if started.elapsed()>Duration::from_secs(12*60*60) {let _=child.kill();let _=child.wait();return Err("Trích xuất đã vượt thời gian chờ; dữ liệu nguồn được giữ nguyên.".into());}
         if canceled.load(Ordering::SeqCst) {
             let _ = child.kill();
             let _ = child.wait();

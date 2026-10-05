@@ -1,3 +1,4 @@
+use crate::worker_manager::WorkerCommandExt;
 use crate::project_service::{
     AudioStreamMetadata, Project, ProjectSource, ProjectStore, SubtitleTrackMetadata,
 };
@@ -72,6 +73,14 @@ pub fn import_video(
     source_path: &str,
     replace: bool,
 ) -> Result<VideoImportResult, String> {
+    import_video_mode(store,project_id,source_path,replace,false)
+}
+
+pub fn restore_source_video(store: &ProjectStore, project_id: &str, source_path: &str) -> Result<VideoImportResult,String> {
+    import_video_mode(store,project_id,source_path,true,true)
+}
+
+fn import_video_mode(store: &ProjectStore,project_id: &str,source_path: &str,replace: bool,restore: bool) -> Result<VideoImportResult,String> {
     let mut project = store.get(project_id)?;
     let source = PathBuf::from(source_path);
     let source = source
@@ -94,6 +103,9 @@ pub fn import_video(
 
     log::info!("Video import: hashing source; project={project_id}");
     let checksum = sha256_file(&source)?;
+    if restore && project.source.checksum_sha256.as_deref()!=Some(&checksum) {
+        return Err("Tệp này không trùng video nguồn ban đầu. Hãy chọn đúng video; transcript và bản dịch được giữ nguyên.".into());
+    }
     if let (Some(existing_hash), Some(existing_relative)) = (
         project.source.checksum_sha256.as_deref(),
         project.source.video_path.as_deref(),
@@ -113,10 +125,8 @@ pub fn import_video(
         return Err("Dự án đã có video. Hãy xác nhận thay thế video hiện tại.".to_string());
     }
 
-    let project_dir = store.project_directory(project_id)?;
-    let source_dir = project_dir.join("media").join("source");
-    fs::create_dir_all(&source_dir)
-        .map_err(|error| format!("Không thể tạo thư mục video của dự án: {error}"))?;
+    let source_dir = store.data_directory(project_id, "media/source")?;
+    crate::disk_space::require(&source_dir,source_meta.len())?;
     let staging = NamedTempFile::new_in(&source_dir)
         .map_err(|error| format!("Không thể chuẩn bị tệp video tạm thời: {error}"))?;
     let staging_path = staging.path().to_path_buf();
@@ -186,8 +196,7 @@ pub fn import_video(
         audio_streams: probe.audio_streams,
         subtitle_tracks: probe.subtitle_tracks,
     };
-    project.transcript = None;
-    project.translation.segments.clear();
+    if !restore { project.transcript = None; project.translation.segments.clear(); }
     let updated = match store.update_project(&project) {
         Ok(updated) => updated,
         Err(error) => {
@@ -197,7 +206,7 @@ pub fn import_video(
     };
     log::info!("Video import completed; project={project_id}");
 
-    if had_video {
+    if had_video && !restore {
         if let Some(previous) = previous_relative {
             if let Ok(path) = resolve_project_file(store, project_id, &previous, "media/source") {
                 let _ = fs::remove_file(path);
@@ -208,18 +217,15 @@ pub fn import_video(
                 let _ = fs::remove_file(path);
             }
         }
-        let _ = fs::remove_file(project_dir.join("subtitles").join("original.srt"));
-        let extracted_audio = project_dir
-            .join("audio")
-            .join("extracted")
-            .join("source.wav");
-        let _ = fs::remove_file(extracted_audio);
+        for (relative,prefix) in [("subtitles/original.srt","subtitles"),("audio/extracted/source.wav","audio/extracted")] {
+            if let Ok(path)=resolve_project_file(store,project_id,relative,prefix) {let _=fs::remove_file(path);}
+        }
     }
 
     Ok(VideoImportResult {
         project: updated,
         duplicate: false,
-        replaced: had_video,
+        replaced: had_video && !restore,
     })
 }
 
@@ -245,10 +251,7 @@ pub fn create_preview_proxy(
         .checksum_sha256
         .as_deref()
         .ok_or_else(|| "Thiếu checksum video để tạo preview.".to_string())?;
-    let project_dir = store.project_directory(project_id)?;
-    let preview_dir = project_dir.join("cache").join("preview");
-    fs::create_dir_all(&preview_dir)
-        .map_err(|error| format!("Không thể tạo thư mục preview: {error}"))?;
+    let preview_dir = store.data_directory(project_id, "cache/preview")?;
     let checksum_prefix: String = checksum.chars().take(24).collect();
     if checksum_prefix.len() < 24 || !checksum_prefix.chars().all(|ch| ch.is_ascii_hexdigit()) {
         return Err("Checksum video không hợp lệ để tạo preview.".to_string());
@@ -302,7 +305,7 @@ pub fn create_preview_proxy(
             "+faststart",
         ])
         .arg(&temporary)
-        .output()
+        .output_contained(std::time::Duration::from_secs(7200))
         .map_err(|error| format!("Không thể khởi chạy thành phần FFmpeg của ứng dụng: {error}"))?;
     if !output.status.success() {
         let _ = fs::remove_file(&temporary);
@@ -396,7 +399,7 @@ pub fn probe_video(path: &Path, file_size: u64) -> Result<ProbeMetadata, String>
             "json",
         ])
         .arg(path)
-        .output()
+        .output_contained(std::time::Duration::from_secs(30))
         .map_err(|error| format!("Không thể khởi chạy FFprobe của ứng dụng: {error}"))?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -663,6 +666,25 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn relinking_same_source_preserves_transcript_and_wrong_source_is_rejected() {
+        let temp=tempdir().unwrap(); let store=ProjectStore::new(temp.path().join("projects"));
+        let project=store.create("Relink tiếng Việt").unwrap(); let source=temp.path().join("nguồn.mp4");
+        assert!(make_fixture_video(&source,"sine=frequency=350:sample_rate=44100:duration=1"),"FFmpeg fixture is required");
+        let mut project=import_video(&store,&project.id,source.to_str().unwrap(),false).unwrap().project;
+        project.translation.segments=vec![serde_json::from_value(serde_json::json!({"id":"legacy","startMs":0,"endMs":800,"source":"Giữ nguyên","translated":"Keep","translationStatus":"empty"})).unwrap()];
+        project.transcript=Some(crate::project_service::TranscriptMetadata {status:crate::project_service::TranscriptStatus::Completed,path:"subtitles/transcript.json".into(),source_type:Some(crate::project_service::TranscriptSourceType::Subtitle),source_track:None,language:Some("vi".into()),segment_count:1});
+        let project=store.update_project(&project).unwrap();
+        let transcript=store.data_directory(&project.id,"subtitles").unwrap().join("transcript.json"); fs::write(&transcript,b"private fixture transcript").unwrap();
+        let owned=resolve_video(&store,&project.id).unwrap();fs::remove_file(&owned).unwrap();
+        let invalid=temp.path().join("other.mp4");fs::write(&invalid,b"different content").unwrap();
+        assert!(restore_source_video(&store,&project.id,invalid.to_str().unwrap()).is_err());
+        assert_eq!(store.get(&project.id).unwrap(),project);
+        let restored=restore_source_video(&store,&project.id,source.to_str().unwrap()).unwrap();
+        assert!(!restored.replaced);assert_eq!(restored.project.translation.segments,project.translation.segments);assert_eq!(restored.project.transcript,project.transcript);
+        assert_eq!(fs::read(transcript).unwrap(),b"private fixture transcript");assert!(resolve_video(&store,&project.id).is_ok());
     }
 
     #[test]

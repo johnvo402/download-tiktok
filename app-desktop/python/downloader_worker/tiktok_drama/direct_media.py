@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import subprocess
 import os
 import re
 import time
@@ -9,7 +11,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urljoin
 
 from .urls import get_video_id
 
@@ -299,95 +301,133 @@ def download_video_candidate(
     except ImportError as error:
         raise RuntimeError("Tải video trực tiếp chưa sẵn sàng. Hãy cập nhật hoặc cài lại ứng dụng.") from error
 
+    if not normalize_video_candidate(candidate.url, source=candidate.source):
+        raise RuntimeError("Nguồn video không hợp lệ.")
     for extension in ("mp4", "webm"):
         existing = output_dir / f"EP{episode:04d}.{extension}"
         if existing.is_file() and _valid_video_file(existing, extension, 0):
             on_progress(existing.stat().st_size, existing.stat().st_size)
             return existing
 
-    partial = output_dir / f".EP{episode:04d}.{uuid.uuid4().hex}.partial"
+    # A stable, opaque filename permits Range continuation after a crash.
+    # Neither cookies nor signed CDN URLs are written into resume metadata.
+    identity = uuid.uuid5(uuid.NAMESPACE_URL, candidate.url.split("?", 1)[0]).hex
+    partial = output_dir / f".EP{episode:04d}.{identity}.partial"
+    metadata_path = partial.with_suffix(".partial.json")
     session = curl_requests.Session(impersonate="chrome")
     _add_browser_cookies(session, cookies)
     last_report = 0.0
     downloaded = 0
     expected = candidate.bytes or None
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if partial.is_symlink() or metadata_path.is_symlink():
+        session.close()
+        raise RuntimeError("Tệp tải tạm không an toàn.")
     try:
-        try:
-            response = session.get(
-                candidate.url,
-                stream=True,
-                timeout=(20, 90),
-                allow_redirects=True,
-                headers={
-                    "Referer": "https://www.tiktok.com/",
-                    "Accept": "video/mp4,video/webm,application/octet-stream;q=0.9,*/*;q=0.8",
-                    "Accept-Encoding": "identity",
-                },
-            )
-        except Exception as error:
-            raise RuntimeError("Không kết nối được tới máy chủ video TikTok.") from error
-
-        try:
-            final_candidate = normalize_video_candidate(response.url, source=candidate.source)
-            if not final_candidate:
-                raise RuntimeError("Máy chủ chuyển hướng tới một địa chỉ video không được hỗ trợ.")
-            if response.status_code not in (200, 206):
-                if response.status_code in (401, 403):
-                    raise RuntimeError("TikTok/CDN từ chối nguồn video. Hãy kết nối lại phiên TikTok rồi thử lại.")
-                if response.status_code == 429:
-                    raise RuntimeError("TikTok/CDN đang giới hạn lượt tải. Hãy chờ một lúc rồi thử lại.")
-                raise RuntimeError(f"Máy chủ video trả HTTP {response.status_code}.")
-
-            mime = str(response.headers.get("content-type", "")).split(";", 1)[0].strip().lower()
-            if mime and mime not in _VIDEO_MIMES:
-                raise RuntimeError("Máy chủ trả về nội dung không phải video.")
-            if re.search(r"(?:subtitle|caption|timedtext|texttrack|closedcaption)|\.(?:m3u8|mpd|m4s|ts|cmf[av])(?:\?|$)", response.url, re.IGNORECASE):
-                raise RuntimeError("TikTok chỉ cung cấp phụ đề hoặc luồng video phân mảnh cho tập này.")
-
-            content_length = _safe_int(response.headers.get("content-length"))
-            if content_length > 0:
-                expected = content_length
-            content_range = str(response.headers.get("content-range", ""))
-            if response.status_code == 206:
-                match = re.fullmatch(r"bytes\s+(\d+)-(\d+)/(\d+)", content_range, re.IGNORECASE)
-                if not match or int(match.group(1)) != 0 or int(match.group(2)) + 1 != int(match.group(3)):
-                    raise RuntimeError("Máy chủ chỉ trả về một phần video, không thể lưu thành tập hoàn chỉnh.")
-                expected = int(match.group(3))
-
-            output_dir.mkdir(parents=True, exist_ok=True)
-            with partial.open("xb") as target:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if not chunk:
-                        continue
-                    target.write(chunk)
-                    downloaded += len(chunk)
-                    now = time.monotonic()
-                    if now - last_report >= 0.25:
-                        on_progress(downloaded, expected)
-                        last_report = now
-                target.flush()
-                os.fsync(target.fileno())
-        finally:
-            response.close()
-
-        if expected and downloaded < expected:
-            raise RuntimeError(f"Video tải chưa đủ dữ liệu ({downloaded}/{expected} byte).")
+        for attempt in range(3):
+            resume = {}
+            try:
+                if metadata_path.stat().st_size <= 4096:
+                    resume = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                pass
+            etag = str(resume.get("etag", ""))
+            offset = partial.stat().st_size if partial.is_file() and etag.startswith('"') and etag.endswith('"') and len(etag) < 512 and not any(c in etag for c in '\r\n') else 0
+            headers = {"Referer": "https://www.tiktok.com/", "Accept": "video/mp4,video/webm,application/octet-stream;q=0.9,*/*;q=0.8", "Accept-Encoding": "identity"}
+            if offset:
+                headers.update({"Range": f"bytes={offset}-", "If-Range": etag})
+            response = None
+            retry = False
+            try:
+                response = _get_safe_media(session, candidate.url, headers)
+                if not normalize_video_candidate(response.url, source=candidate.source):
+                    raise RuntimeError("Máy chủ chuyển hướng tới một địa chỉ video không được hỗ trợ.")
+                if response.status_code not in (200, 206):
+                    if response.status_code in (401, 403):
+                        raise RuntimeError("TikTok/CDN từ chối nguồn video. Hãy kết nối lại phiên TikTok rồi thử lại.")
+                    if response.status_code == 429:
+                        raise RuntimeError("TikTok/CDN đang giới hạn lượt tải. Hãy chờ một lúc rồi thử lại.")
+                    retry = response.status_code >= 500
+                    raise RuntimeError(f"Máy chủ video trả HTTP {response.status_code}.")
+                mime = str(response.headers.get("content-type", "")).split(";", 1)[0].strip().lower()
+                if mime and mime not in _VIDEO_MIMES:
+                    raise RuntimeError("Máy chủ trả về nội dung không phải video.")
+                if re.search(r"(?:subtitle|caption|timedtext|texttrack|closedcaption)|\.(?:m3u8|mpd|m4s|ts|cmf[av])(?:\?|$)", response.url, re.IGNORECASE):
+                    raise RuntimeError("TikTok chỉ cung cấp phụ đề hoặc luồng video phân mảnh cho tập này.")
+                if response.status_code == 206:
+                    match = re.fullmatch(r"bytes\s+(\d+)-(\d+)/(\d+)", str(response.headers.get("content-range", "")), re.IGNORECASE)
+                    if not match or int(match[1]) != offset or int(match[2]) + 1 != int(match[3]):
+                        raise RuntimeError("Máy chủ trả phạm vi video không hợp lệ; chưa lưu tập này.")
+                    if offset and str(response.headers.get("etag", "")) != etag:
+                        raise RuntimeError("Nguồn video đã thay đổi; hãy tải lại tập này.")
+                    expected = int(match[3])
+                else:
+                    # If-Range mismatch or no Range support: restart safely.
+                    offset = 0
+                    expected = _safe_int(response.headers.get("content-length")) or candidate.bytes or None
+                current_etag = str(response.headers.get("etag", ""))
+                if len(current_etag) > 512 or any(c in current_etag for c in "\r\n"):
+                    current_etag = ""
+                resume_bytes = json.dumps({"etag": current_etag, "expected": expected}, ensure_ascii=True).encode("utf-8")
+                with metadata_path.open("wb") as meta:
+                    meta.write(resume_bytes); meta.flush(); os.fsync(meta.fileno())
+                downloaded = offset
+                with partial.open("ab" if offset else "wb") as target:
+                    try:
+                        for chunk in response.iter_content(chunk_size=1024 * 1024):
+                            if not chunk: continue
+                            target.write(chunk); downloaded += len(chunk)
+                            now = time.monotonic()
+                            if now - last_report >= 0.25:
+                                on_progress(downloaded, expected); last_report = now
+                    except Exception:
+                        retry = True
+                        raise
+                    finally:
+                        target.flush(); os.fsync(target.fileno())
+                if expected and downloaded != expected:
+                    retry = True
+                    raise RuntimeError(f"Video tải chưa đủ dữ liệu ({downloaded}/{expected} byte).")
+                break
+            except Exception as error:
+                # Transport errors can reuse a strong ETag. Invalid content,
+                # authentication and unsafe redirects must not be retried.
+                if response is None: retry = not isinstance(error, RuntimeError)
+                if not retry or attempt == 2:
+                    if isinstance(error, RuntimeError): raise
+                    raise RuntimeError("Không tải xong video TikTok. Hãy kiểm tra mạng và thử lại.") from error
+                time.sleep(0.5 * (attempt + 1))
+            finally:
+                if response is not None: response.close()
         extension = _sniff_video_extension(partial)
-        if not extension:
-            raise RuntimeError("Dữ liệu nhận được không phải file MP4/WebM hoàn chỉnh.")
-        if not _valid_video_file(partial, extension, expected or 0):
-            raise RuntimeError("File video thiếu header hoặc dữ liệu phát; chưa lưu vào danh sách tập.")
-
+        if not extension or not _valid_video_file(partial, extension, expected or 0):
+            raise RuntimeError("Video tải về thiếu dữ liệu phát hoặc không có luồng video hợp lệ; chưa lưu vào danh sách tập.")
         final_path = output_dir / f"EP{episode:04d}.{extension}"
+        if final_path.is_symlink(): raise RuntimeError("Tệp đích không an toàn.")
         os.replace(partial, final_path)
         on_progress(downloaded, expected or downloaded)
         return final_path
     finally:
         session.close()
-        try:
-            partial.unlink(missing_ok=True)
-        except OSError:
-            log.warning("Could not remove incomplete TikTok download")
+        for temporary in (partial, metadata_path):
+            try: temporary.unlink(missing_ok=True)
+            except OSError: log.warning("Could not remove incomplete TikTok download")
+
+
+def _get_safe_media(session: Any, url: str, headers: dict[str, str]) -> Any:
+    """Validate every redirect before connecting; never send cookies to arbitrary hosts."""
+    for _ in range(6):
+        if not normalize_video_candidate(url):
+            raise RuntimeError("Máy chủ chuyển hướng tới một địa chỉ video không được hỗ trợ.")
+        response = session.get(url, stream=True, timeout=(20, 90), allow_redirects=False, headers=headers)
+        if response.status_code not in (301, 302, 303, 307, 308):
+            return response
+        location = str(response.headers.get("location", ""))
+        response.close()
+        if not location or any(c in location for c in "\r\n"):
+            raise RuntimeError("Địa chỉ chuyển hướng video không hợp lệ.")
+        url = urljoin(url, location)
+    raise RuntimeError("Máy chủ chuyển hướng quá nhiều lần; hãy thử lại nguồn video.")
 
 
 def _add_browser_cookies(session: Any, cookies: list[dict[str, Any]]) -> None:
@@ -433,8 +473,27 @@ def _sniff_video_extension(path: Path) -> str | None:
     return None
 
 
+def _probe_playable(path: Path) -> bool:
+    executable = os.environ.get("JC_FFPROBE_PATH")
+    if not executable:
+        # The desktop always supplies its bundled FFprobe. Standalone header
+        # inspection remains usable without depending on a system executable.
+        return True
+    try:
+        result = subprocess.run([executable, "-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height", "-of", "json", str(path)],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        if result.returncode or len(result.stdout) > 1024 * 1024: return False
+        metadata = json.loads(result.stdout)
+        duration = float(metadata.get("format", {}).get("duration", 0))
+        return math.isfinite(duration) and duration > 0 and any(stream.get("codec_type") == "video" and stream.get("width", 0) > 0 and stream.get("height", 0) > 0 for stream in metadata.get("streams", []))
+    except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
+        return False
+
+
 def _valid_video_file(path: Path, extension: str, expected_bytes: int) -> bool:
     try:
+        if path.is_symlink(): return False
         size = path.stat().st_size
         if size < 128 * 1024 or (expected_bytes > 0 and size < expected_bytes):
             return False
@@ -445,6 +504,7 @@ def _valid_video_file(path: Path, extension: str, expected_bytes: int) -> bool:
                 header.startswith(bytes.fromhex("1a45dfa3"))
                 and bytes.fromhex("18538067") in header
                 and bytes.fromhex("1f43b675") in header
+                and _probe_playable(path)
             )
 
         offset = 0
@@ -473,6 +533,6 @@ def _valid_video_file(path: Path, extension: str, expected_bytes: int) -> bool:
                 has_media |= box_type == b"mdat" and box_size - header_size >= 64 * 1024
                 offset += box_size
                 box_count += 1
-        return has_ftyp and has_moov and has_media
+        return has_ftyp and has_moov and has_media and _probe_playable(path)
     except OSError:
         return False

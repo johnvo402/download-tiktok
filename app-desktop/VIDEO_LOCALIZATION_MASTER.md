@@ -554,3 +554,15 @@ Test hiệu năng video dài, migration, crash recovery, GPU/CPU paths, installe
 - Lưu đồ dữ liệu ổn định, schemas versioned, các provider là adapter có thể thay thế; chỉ tối ưu/bổ sung tính năng khi pipeline end-to-end đã hoạt động.
 
 **Tài liệu này là baseline v1; mọi thay đổi phạm vi nên cập nhật phần Quyết định đã chốt, schema và acceptance criteria tương ứng.**
+
+
+## Task 10 implementation record (2026-10-04)
+
+Current schema remains project v11 / transcript v1; worker protocol remains v2,
+optional runtime ABI v7. Critical JSON persistence now has three rotating
+backups and semantic recovery; future schemas are refused without downgrade.
+Windows session ownership, interrupted job recovery, guarded close/autosave,
+validated no-clobber export, and sanitized diagnostics are implemented.
+The release candidate is 0.1.14-beta.1. See
+`docs/TASK_10_PRODUCTION_STABILITY.md` for evidence and unverified release gates.
+This record supplements historical task specifications without replacing them.

@@ -1,10 +1,11 @@
 //! Deterministic CPU mixer. Preview and offline export call the same next_block.
+use crate::worker_manager::WorkerCommandExt;
 use super::{signal, timeline::Voice, ProcessingSettings, BLOCK, RATE};
 use std::{
     collections::HashMap,
     io::Read,
     path::Path,
-    process::{Child, Stdio},
+    process::Stdio,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc, Mutex,
@@ -66,7 +67,7 @@ impl Mix {
 /// Streaming FFmpeg decoder with a bounded two-block queue. Drop kills and joins it.
 struct Decoder {
     rx: Option<mpsc::Receiver<Result<Vec<f32>, String>>>,
-    child: Arc<Mutex<Child>>,
+    child: Arc<Mutex<crate::worker_manager::ManagedWorker>>,
     reader: Option<thread::JoinHandle<()>>,
     stopped: Arc<AtomicBool>,
 }
@@ -82,7 +83,7 @@ impl Decoder {
             .args(["-f", "f32le", "pipe:1"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()
+            .spawn_contained()
             .map_err(|e| format!("Không giải mã được audio: {e}"))?;
         let mut stdout = child.stdout.take().ok_or("Không đọc được audio.")?;
         let mut stderr = child.stderr.take().ok_or("Không đọc được lỗi audio.")?;

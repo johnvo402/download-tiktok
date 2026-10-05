@@ -13,6 +13,7 @@ use tauri::{AppHandle, Manager};
 struct SanitizedDiagnostics<'a> {
     app: &'a RuntimeHealth,
     settings: serde_json::Value,
+    metadata: serde_json::Value,
     logs_directory: String,
     includes_user_media: bool,
     includes_transcripts: bool,
@@ -30,17 +31,20 @@ pub fn export(app: &AppHandle, destination: &str) -> Result<String, String> {
         .canonicalize()
         .map_err(|error| format!("Không thể xác minh thư mục đã chọn: {error}"))?;
     let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
-    let bundle = destination.join(format!("JC-AI-Diagnostics-{timestamp}"));
+    let bundle = destination.join(format!("JC-AI-Diagnostics-{timestamp}-{}",uuid::Uuid::new_v4().simple()));
     fs::create_dir(&bundle)
         .map_err(|error| format!("Không thể tạo diagnostics trong thư mục đã chọn: {error}"))?;
 
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("Không thể xác định thư mục dữ liệu ứng dụng: {error}"))?;
+    let app_data = crate::runtime_paths::app_data_dir().ok_or("Không thể xác định thư mục dữ liệu ứng dụng.")?;
     let settings =
         settings_service::read_settings(&settings_service::settings_path(app)?).unwrap_or_default();
     let health = runtime_health::check(app);
+    let jobs = app.try_state::<crate::job_service::JobStore>().and_then(|store|store.list().ok()).unwrap_or_default();
+    // Whitelist fields: neither retry payloads, names, raw error messages nor
+    // user file paths may enter a shareable report.
+    let recent_errors = jobs.iter().rev().filter(|job|job.error.is_some()).take(20).map(safe_job_summary).collect::<Vec<_>>();
+    let runtime = crate::optional_runtime::status();
+    let encoders=crate::hardware_acceleration::capabilities(false).ok().map(|caps|caps.encoders.into_iter().map(|c|json!({"id":c.id,"hardware":c.hardware,"h264":c.h264,"hevc":c.hevc})).collect::<Vec<_>>());
     let safe = SanitizedDiagnostics {
         app: &health,
         settings: json!({
@@ -52,6 +56,17 @@ pub fn export(app: &AppHandle, destination: &str) -> Result<String, String> {
             "ttsProvider": settings.tts.provider,
             "ttsModel": settings.tts.model_id,
             "ttsDevice": settings.tts.device,
+        }),
+        metadata: json!({
+            "sessionId":crate::app_session::id(),
+            "session":app.try_state::<crate::app_session::AppSession>().map(|s|s.status.clone()),
+            "projectSchemaVersion":11,"transcriptSchemaVersion":1,
+            "workerProtocolVersion":crate::worker_manager::PROTOCOL_VERSION,
+            "optionalRuntimeVersion":crate::runtime_registry::registry().runtime_version,
+            "recentErrors":recent_errors,"encoders":encoders,
+            "optionalRuntimeHealth":runtime.health,"installedFeatures":runtime.installed_features,"featureProfiles":runtime.feature_profiles,
+            "overrideRender":std::env::var("JC_RENDER_BACKEND").ok().filter(|v|["legacy","wgpu","gpu","auto"].contains(&v.as_str())),
+            "overrideMedia":std::env::var("JC_MEDIA_PIPELINE").ok().filter(|v|["cpu","auto","gpu-copy","zero-copy"].contains(&v.as_str())),
         }),
         logs_directory: "appDataDir/logs".to_string(),
         includes_user_media: false,
@@ -68,6 +83,16 @@ pub fn export(app: &AppHandle, destination: &str) -> Result<String, String> {
     )?;
     copy_recent_logs(&app_data.join("logs"), &bundle.join("logs"))?;
     Ok(bundle.to_string_lossy().into_owned())
+}
+
+fn safe_job_summary(job:&crate::job_service::JobRecord) -> serde_json::Value {
+    fn label(value:&str,maximum:usize)->Option<&str> { (value.len()<=maximum && value.bytes().all(|c|c.is_ascii_uppercase() || c.is_ascii_digit() || c==b'_')).then_some(value) }
+    let id=uuid::Uuid::parse_str(&job.id).ok().map(|id|id.to_string());
+    let project=job.project_id.as_deref().and_then(|id|uuid::Uuid::parse_str(id).ok()).map(|id|id.to_string());
+    let kind=["transcribe","translate","tts","export","text_removal_preview","dialogue","video_merge","tiktok_download","runtime_install","model_install"].contains(&job.job_type.as_str()).then_some(&job.job_type);
+    let status=["idle","queued","running","waiting","cancelling","completed","partial","cancelled","failed","interrupted"].contains(&job.status.as_str()).then_some(&job.status);
+    json!({"jobId":id,"projectId":project,"type":kind,"status":status,"code":job.error.as_ref().and_then(|e|label(&e.code,64)),"attempt":job.attempt,
+        "resources":job.resources.iter().filter(|r|["cpu","gpu","python","python-worker","ffmpeg","disk","network","browser"].contains(&r.as_str())).collect::<Vec<_>>()})
 }
 
 fn copy_recent_logs(source: &Path, destination: &Path) -> Result<(), String> {
@@ -119,7 +144,10 @@ fn sanitize_log(raw: &str) -> String {
         let timestamp = parts.next().unwrap_or("");
         let level = parts.next().unwrap_or("");
         let message = parts.next().unwrap_or("");
-        if message.starts_with("Application startup; version=") {
+        let message = if let Some((session,rest))=message.strip_prefix("session=").and_then(|s|s.split_once(' ')) {
+            if uuid::Uuid::parse_str(session).is_ok() {rest} else {""}
+        } else {message};
+        if message.strip_prefix("Application startup; version=").is_some_and(|v|v.len()<64 && v.bytes().all(|c|c.is_ascii_alphanumeric() || matches!(c,b'.'|b'-'|b'+'))) {
             output.push_str(timestamp);
             output.push(' ');
             output.push_str(level);
@@ -156,6 +184,8 @@ mod tests {
         let health = RuntimeHealth {
             app_version: "0.1.0".into(),
             build_commit: "unknown".into(),
+            build_date: "unknown".into(),
+            release_channel: "beta".into(),
             os: "windows".into(),
             architecture: "x86_64".into(),
             project_storage_available: true,
@@ -170,6 +200,7 @@ mod tests {
         let serialized = serde_json::to_string(&SanitizedDiagnostics {
             app: &health,
             settings: json!({"translationProvider":"gemini", "asrModel":"small"}),
+            metadata: json!({}),
             logs_directory: "logs".into(),
             includes_user_media: false,
             includes_transcripts: false,

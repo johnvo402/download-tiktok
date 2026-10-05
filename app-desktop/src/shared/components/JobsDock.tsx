@@ -6,13 +6,13 @@ import { setNotice } from '../../app/project-state';
 type Filter = 'all' | 'active' | 'failed' | 'completed';
 
 const jobLabel = (type: string) => ({
-  transcribe: 'Speech Recognition', translate: 'Translation', tts: 'VieNeu-TTS', export: 'FFmpeg Export',
+  transcribe: 'Nhận dạng lời thoại', translate: 'Dịch', tts: 'Tạo giọng đọc', export: 'Xuất video', runtime_install: 'Cài bộ xử lý', model_install: 'Cài model',
 } as Record<string, string>)[type] ?? type;
 const statusLabel = (status: UnifiedJobStatus) => ({
-  queued: 'Đang chờ', waiting: 'Chờ tài nguyên', running: 'Đang chạy', completed: 'Hoàn tất',
+  queued: 'Đang chờ', waiting: 'Chờ tài nguyên', running: 'Đang chạy', cancelling: 'Đang dừng…', completed: 'Hoàn tất',
   partial: 'Hoàn tất một phần', failed: 'Thất bại', cancelled: 'Đã hủy', interrupted: 'Bị gián đoạn',
 }[status]);
-const active = (job: UnifiedJob) => ['queued', 'waiting', 'running'].includes(job.status);
+const active = (job: UnifiedJob) => ['queued', 'waiting', 'running', 'cancelling'].includes(job.status);
 const terminalSuccess = (job: UnifiedJob) => job.status === 'completed';
 
 export default function JobsDock() {
@@ -85,14 +85,14 @@ export default function JobsDock() {
               </div>
               <div class="jobs-dock-item-main">
                 <div class="jobs-dock-item-title"><strong>{job.projectName ?? 'Ứng dụng'}</strong><span>{statusLabel(job.status)}</span></div>
-                <div class="jobs-dock-item-subtitle"><span>{jobLabel(job.type)}</span><Show when={job.attempt > 1}><span>· Lần {job.attempt}</span></Show><Show when={job.resources.length}><span>· {job.resources.join(', ')}</span></Show></div>
+                <div class="jobs-dock-item-subtitle"><span>{jobLabel(job.type)}</span><Show when={job.attempt > 1}><span>· Lần {job.attempt}</span></Show><Show when={job.resources.length}><span>· {[...new Set(job.resources.map(resource => (({cpu:'CPU',gpu:'GPU',ffmpeg:'Video',python:'AI','python-worker':'AI',disk:'Lưu trữ',network:'Mạng',browser:'Trình duyệt'} as Record<string,string>)[resource] ?? resource)))].join(', ')}</span></Show></div>
                 <Show when={active(job)}><div class="jobs-dock-progress"><span style={{ width: `${Math.round(job.progress * 100)}%` }} /></div></Show>
                 <small class="jobs-dock-message">{job.message}</small>
                 <Show when={job.error}><small class="jobs-dock-error">{job.error!.code}: {job.error!.message}</small></Show>
                 <small class="jobs-dock-time"><Clock3 size={11} /> {new Date(job.createdAt).toLocaleString('vi-VN')}</small>
               </div>
               <div class="jobs-dock-actions">
-                <Show when={active(job)}><button class="icon-button" type="button" disabled={busy() === job.id} aria-label="Hủy job" title="Hủy" onClick={() => void cancel(job)}><X size={14} /></button></Show>
+                <Show when={active(job) && job.status !== 'cancelling' && !['runtime_install', 'model_install'].includes(job.type)}><button class="icon-button" type="button" disabled={busy() === job.id} aria-label="Hủy job" title="Hủy" onClick={() => void cancel(job)}><X size={14} /></button></Show>
                 <Show when={['failed', 'partial', 'cancelled', 'interrupted'].includes(job.status) && job.retryPayload}><button class="icon-button" type="button" disabled={busy() === job.id} aria-label="Thử lại job" title="Thử lại" onClick={() => void retry(job)}><Show when={busy() === job.id} fallback={<RotateCcw size={14} />}><LoaderCircle size={14} class="spin" /></Show></button></Show>
               </div>
             </article>}</For>

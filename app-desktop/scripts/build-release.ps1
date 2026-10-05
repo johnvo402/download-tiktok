@@ -167,6 +167,13 @@ Set-Content -LiteralPath (Join-Path $Release "SHA256SUMS.txt") -Value "$Hash  $(
 $signature = Get-AuthenticodeSignature -LiteralPath $Artifact
 @{
     version = $Package.version
+    channel = $(if ($Package.version -match '-rc') { 'rc' } elseif ($Package.version -match '-') { 'beta' } else { 'stable' })
+    projectSchemaVersion = 11
+    transcriptSchemaVersion = 1
+    workerProtocolVersion = 2
+    optionalRuntimeAbi = 7
+    supportedWindows = 'Windows 10/11 x64 (clean-machine matrix requires separate verification)'
+    updateMode = 'manual-installer'
     workerVersion = $WorkerVersion
     workerFingerprint = (Get-Content (Join-Path $Root "src-tauri\resources\ai-worker\worker-build.json") -Raw | ConvertFrom-Json).fingerprint
     downloaderFingerprint = (Get-Content (Join-Path $Root "src-tauri\resources\downloader-worker\worker-build.json") -Raw | ConvertFrom-Json).fingerprint

@@ -1,7 +1,8 @@
 //! Shared video encoding policy. AI acceleration and decoding are independent.
+use crate::worker_manager::WorkerCommandExt;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::io::{BufRead, BufReader};
+use std::io::{BufReader};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -281,6 +282,8 @@ pub fn is_encoder_initialization_error(stderr: &str) -> bool {
 }
 pub fn encoding_error(codec: VideoCodec, backend: VideoEncoder, stderr: &str) -> String {
     log::error!("Video encode failed: backend={backend:?}, codec={codec:?}: {stderr}");
+    let error=crate::app_error::AppError::classify(stderr,crate::app_error::ErrorContext::default());
+    if matches!(error.code.as_str(),"DISK_FULL"|"ACCESS_DENIED") { return error.message; }
     if is_encoder_initialization_error(stderr) {
         unavailable_message(backend, codec)
     } else {
@@ -443,7 +446,7 @@ fn probe_encoder(codec: VideoCodec, backend: VideoEncoder) -> Result<(), String>
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
-        let mut child = command.spawn().map_err(|error| error.to_string())?;
+        let mut child = command.spawn_contained().map_err(|error| error.to_string())?;
         let stderr = child
             .stderr
             .take()
@@ -453,7 +456,7 @@ fn probe_encoder(codec: VideoCodec, backend: VideoEncoder) -> Result<(), String>
         let reader = std::thread::Builder::new()
             .name("video-encoder-probe".into())
             .spawn(move || {
-                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                for line in crate::worker_manager::bounded_lines(BufReader::new(stderr),8*1024*1024).map_while(Result::ok) {
                     if let Ok(mut tail) = reader_tail.lock() {
                         tail.push_back(line);
                         if tail.len() > 16 {

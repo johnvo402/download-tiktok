@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 const MODEL_ID: &str = "v3-turbo";
@@ -105,9 +105,7 @@ pub fn has_active_project_job(jobs: &TtsJobs, project_id: &str) -> bool {
 }
 
 pub fn get_environment(app: AppHandle) -> Result<TtsEnvironment, String> {
-    let cache = app
-        .path()
-        .app_data_dir()
+    let cache = crate::runtime_paths::data_dir(&app)
         .map_err(|error| format!("Không thể xác định cache model: {error}"))?
         .join("models")
         .join("huggingface");
@@ -131,9 +129,7 @@ pub fn install_model(app: AppHandle) -> Result<(), String> {
     if get_environment(app.clone())?.model_cached {
         return Ok(());
     }
-    let cache = app
-        .path()
-        .app_data_dir()
+    let cache = crate::runtime_paths::data_dir(&app)
         .map_err(|error| format!("Không thể xác định cache model: {error}"))?
         .join("models")
         .join("huggingface");
@@ -165,9 +161,7 @@ pub fn remove_model(app: AppHandle, jobs: &TtsJobs) -> Result<(), String> {
         return Err("Không thể gỡ VieNeu-TTS khi đang chạy một tác vụ giọng đọc.".to_string());
     }
     drop(active);
-    let data_root = app
-        .path()
-        .app_data_dir()
+    let data_root = crate::runtime_paths::data_dir(&app)
         .map_err(|error| format!("Không thể xác định cache model: {error}"))?;
     remove_model_cache(&data_root.join("models").join("huggingface"))
 }
@@ -295,9 +289,7 @@ fn preview_voice_inner(app: AppHandle, voice: String) -> Result<String, String> 
     if !env.voices.iter().any(|name| name == &voice) && profile.is_none() {
         return Err("Giọng VieNeu không hợp lệ.".to_string());
     }
-    let root = app
-        .path()
-        .app_data_dir()
+    let root = crate::runtime_paths::data_dir(&app)
         .map_err(|error| format!("Không thể xác định thư mục dữ liệu: {error}"))?;
     let cache = root.join("models").join("huggingface");
     let preview_dir = root.join("models").join("tts-preview");
@@ -405,7 +397,7 @@ pub fn add_voice_profile(
             "pcm_s16le",
         ])
         .arg(&temporary)
-        .output()
+        .output_contained(std::time::Duration::from_secs(300))
         .map_err(|error| format!("Không thể chạy FFmpeg để chuẩn hóa audio tham chiếu: {error}"))?;
     if !output.status.success() {
         let _ = fs::remove_file(&temporary);
@@ -464,9 +456,7 @@ pub fn delete_voice_profile(app: &AppHandle, profile_id: &str) -> Result<(), Str
 }
 
 fn voice_profiles_directory(app: &AppHandle) -> Result<PathBuf, String> {
-    let root = app
-        .path()
-        .app_data_dir()
+    let root = crate::runtime_paths::data_dir(app)
         .map_err(|error| format!("Không thể xác định thư mục voice profile: {error}"))?;
     let models = root.join("models");
     let dir = models.join("voice-profiles");
@@ -538,7 +528,7 @@ fn probe_audio(path: &Path) -> Result<f64, String> {
             "json",
         ])
         .arg(path)
-        .output()
+        .output_contained(std::time::Duration::from_secs(300))
         .map_err(|error| format!("Không thể chạy FFprobe để xác nhận audio: {error}"))?;
     if !output.status.success() {
         return Err("FFprobe không nhận diện được audio tham chiếu.".to_string());
@@ -679,7 +669,7 @@ pub fn start_generation(
         "tts",
         &resources,
         serde_json::to_value(&request).ok(),
-    );
+    ).map_err(|error| {if let Ok(mut entries)=jobs.inner.lock() {entries.remove(&job_id);} error})?;
     emit(
         &app,
         &job_id,
@@ -1015,9 +1005,7 @@ fn run_generation(
         return Ok(());
     }
 
-    let cache_dir = app
-        .path()
-        .app_data_dir()
+    let cache_dir = crate::runtime_paths::data_dir(&app)
         .map_err(|error| format!("Không thể xác định model cache: {error}"))?
         .join("models")
         .join("huggingface");
@@ -1047,13 +1035,14 @@ fn run_generation(
 
     let mut stderr_reader = Some(thread::spawn(move || read_worker_stderr_tail(stderr)));
 
-    let (tx, rx) = mpsc::channel::<String>();
+    let (tx, rx) = mpsc::sync_channel::<String>(8);
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
         loop {
             let mut bytes = Vec::new();
-            match reader.read_until(b'\n', &mut bytes) {
+            match reader.by_ref().take(8*1024*1024+1).read_until(b'\n', &mut bytes) {
                 Ok(0) | Err(_) => break,
+                Ok(_) if bytes.len()>8*1024*1024=>break,
                 Ok(_) => {
                     // Native runtimes may draw progress with carriage returns.
                     // Split those records so a human-readable progress line cannot
@@ -1758,9 +1747,7 @@ fn emit(
 }
 
 fn project_store(app: &AppHandle) -> Result<ProjectStore, String> {
-    let root = app
-        .path()
-        .app_data_dir()
+    let root = crate::runtime_paths::data_dir(app)
         .map_err(|error| format!("Không thể xác định thư mục dự án: {error}"))?
         .join("projects");
     Ok(ProjectStore::new(root))
@@ -1799,12 +1786,12 @@ fn worker_request(
         .take()
         .ok_or_else(|| "Không mở được log Python worker.".to_string())?;
     let stderr_reader = thread::spawn(move || read_worker_stderr_tail(stderr));
-    let (tx, rx) = mpsc::channel::<String>();
+    let (tx, rx) = mpsc::sync_channel::<String>(8);
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
         loop {
             let mut bytes = Vec::new();
-            match reader.read_until(b'\n', &mut bytes) {
+            match reader.by_ref().take(8*1024*1024+1).read_until(b'\n', &mut bytes) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {
                     // Some download libraries draw progress with carriage returns

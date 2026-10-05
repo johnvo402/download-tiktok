@@ -365,6 +365,21 @@ export default function TranslationView() {
     await importVideo(path, false);
   };
 
+  const restoreSource = async () => {
+    const project=currentProject(); if (!project || importing()) return;
+    const selected=await open({multiple:false,title:'Chọn đúng video nguồn ban đầu',filters:[{name:'Video',extensions:['mp4','mov','mkv','webm']}]});
+    if (typeof selected !== 'string') return;
+    setImporting(true);
+    try {
+      await flushVisualSettings(project.id);
+      const result=await projectService.importVideo(project.id,selected,true,true);
+      setCurrentProject(result.project);
+      setMediaError('');
+      setNotice({kind:'success',message:'Đã khôi phục video nguồn. Transcript, bản dịch và giọng đọc được giữ nguyên.'});
+    } catch (error) {setNotice({kind:'error',message:error instanceof Error?error.message:'Không khôi phục được video nguồn.'});}
+    finally {setImporting(false);}
+  };
+
   const importVideo = async (path: string, replace: boolean) => {
     const project = currentProject();
     if (!project || importing()) return;
@@ -714,7 +729,7 @@ export default function TranslationView() {
           <Show when={dragging()}><div class="drop-overlay"><div><Film size={25} /><strong>Thả video để nhập vào dự án</strong></div></div></Show>
           <Show when={activeAiPreview()}><div class="ai-removal-preview-badge" role="status">Đoạn đã xử lý bằng AI · {formatTime(activeAiPreview()!.startSeconds)}–{formatTime(activeAiPreview()!.endSeconds)}</div></Show>
           <Show when={mediaStatus() && videoUrl()}><div class="media-status-overlay" role="status"><span class="spin status-spinner media-status-spinner" aria-hidden="true" /><span class="media-status-message">{mediaStatus()}</span></div></Show>
-          <Show when={mediaError()}><div class="media-error-overlay" role="alert"><AlertTriangle size={17} /><span class="media-error-message">{mediaError()}</span><Show when={currentProject()?.source.videoPath}><button class="media-error-retry" type="button" onClick={retryPreview}>{usingProxy() ? 'Tạo lại preview' : 'Thử tạo preview'}</button></Show></div></Show>
+          <Show when={mediaError()}><div class="media-error-overlay" role="alert"><AlertTriangle size={17} /><span class="media-error-message">{mediaError()}</span><Show when={currentProject()?.source.videoPath}><button class="media-error-retry" type="button" onClick={retryPreview}>{usingProxy() ? 'Tạo lại preview' : 'Thử tạo preview'}</button><button class="media-error-retry" type="button" disabled={importing()} onClick={() => void restoreSource()}>Tìm lại video nguồn</button></Show></div></Show>
         </div>
       </div>
       <Show when={currentProject()?.source.videoPath && !audioPreview.ready() && !audioPreview.loading()}><button class="button button-quiet" type="button" onClick={audioPreview.retry}>Thử lại âm thanh</button></Show>

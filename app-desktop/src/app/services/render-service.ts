@@ -64,7 +64,7 @@ export interface ExportHistoryEntry {
 export interface ExportJobEvent {
   projectId: string;
   jobId: string;
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
   progress: number;
   elapsedSeconds: number;
   totalSeconds: number;

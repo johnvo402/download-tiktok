@@ -52,7 +52,8 @@ pub enum ModelFolderKind {
 /// cache root into the single Roaming app-data root. The old Roaming model
 /// cache is merged too. WebView2's own profile is intentionally not touched.
 pub fn migrate_local_storage(app: &AppHandle) -> Result<Vec<String>, String> {
-    let data_root = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    if cfg!(debug_assertions) && std::env::var_os("JC_QA_DATA_DIR").is_some() {return Ok(Vec::new());}
+    let data_root = crate::runtime_paths::data_dir(app).map_err(|error| error.to_string())?;
     let local_root = app.path().app_cache_dir().map_err(|error| error.to_string())?;
     let mappings = [
         (local_root.join("fw"), data_root.join("models").join("fw")),
@@ -203,9 +204,7 @@ fn is_reparse_point(metadata: &fs::Metadata) -> bool {
 }
 
 pub fn usage(app: &AppHandle, jobs: &JobStore) -> Result<StorageUsage, String> {
-    let data_root = app
-        .path()
-        .app_data_dir()
+    let data_root = crate::runtime_paths::data_dir(app)
         .map_err(|error| error.to_string())?;
     let app_cache = data_root.join("cache");
     let projects = ProjectStore::new(data_root.join("projects"));
@@ -300,10 +299,11 @@ pub fn usage(app: &AppHandle, jobs: &JobStore) -> Result<StorageUsage, String> {
 }
 
 pub fn clear_temporary(app: &AppHandle, jobs: &JobStore) -> Result<u64, String> {
+    if jobs.list()?.iter().any(|job| is_active(&job.status)) {
+        return Err("Hãy đợi hoặc dừng các tác vụ đang chạy trước khi dọn tệp tạm.".into());
+    }
     let before = usage(app, jobs)?.temporary_bytes;
-    let data_root = app
-        .path()
-        .app_data_dir()
+    let data_root = crate::runtime_paths::data_dir(app)
         .map_err(|error| error.to_string())?;
     let app_cache = data_root.join("cache");
     let projects = ProjectStore::new(data_root.join("projects"));
@@ -329,13 +329,13 @@ pub fn clear_temporary(app: &AppHandle, jobs: &JobStore) -> Result<u64, String> 
 }
 
 pub fn open_cache_folder(app: &AppHandle) -> Result<String, String> {
-    let folder = app.path().app_data_dir().map_err(|error| error.to_string())?.join("cache");
+    let folder = crate::runtime_paths::data_dir(app).map_err(|error| error.to_string())?.join("cache");
     open_directory(&folder)?;
     Ok(folder.to_string_lossy().into_owned())
 }
 
 pub fn open_ai_components_folder(app: &AppHandle) -> Result<String, String> {
-    let folder = app.path().app_data_dir().map_err(|error| error.to_string())?
+    let folder = crate::runtime_paths::data_dir(app).map_err(|error| error.to_string())?
         .join("runtimes").join("advanced");
     open_directory(&folder)?;
     Ok(folder.to_string_lossy().into_owned())
@@ -343,17 +343,14 @@ pub fn open_ai_components_folder(app: &AppHandle) -> Result<String, String> {
 
 pub fn open_model_folder(app: &AppHandle, kind: ModelFolderKind) -> Result<String, String> {
     let folder = match kind {
-        ModelFolderKind::FasterWhisper => app
-            .path().app_data_dir().map_err(|error| error.to_string())?.join("models").join("fw"),
-        ModelFolderKind::WhisperIntel => app.path().app_data_dir().map_err(|error| error.to_string())?.join("models").join("whisper"),
-        ModelFolderKind::VieNeuTts => app
-            .path()
-            .app_data_dir()
+        ModelFolderKind::FasterWhisper => crate::runtime_paths::data_dir(app).map_err(|error| error.to_string())?.join("models").join("fw"),
+        ModelFolderKind::WhisperIntel => crate::runtime_paths::data_dir(app).map_err(|error| error.to_string())?.join("models").join("whisper"),
+        ModelFolderKind::VieNeuTts => crate::runtime_paths::data_dir(app)
             .map_err(|error| error.to_string())?
             .join("models")
             .join("huggingface"),
-        ModelFolderKind::Ocr => app.path().app_data_dir().map_err(|error| error.to_string())?.join("models").join("rapidocr"),
-        ModelFolderKind::DialogueSeparation => app.path().app_data_dir().map_err(|error| error.to_string())?.join("models").join("audio-separation"),
+        ModelFolderKind::Ocr => crate::runtime_paths::data_dir(app).map_err(|error| error.to_string())?.join("models").join("rapidocr"),
+        ModelFolderKind::DialogueSeparation => crate::runtime_paths::data_dir(app).map_err(|error| error.to_string())?.join("models").join("audio-separation"),
     };
     open_directory(&folder)?;
     Ok(folder.to_string_lossy().into_owned())
@@ -432,8 +429,7 @@ fn remove_children_excluding(path: &Path, excluded: &[String]) -> Result<(), Str
     }
     if fs::symlink_metadata(path)
         .map_err(|error| error.to_string())?
-        .file_type()
-        .is_symlink()
+        .pipe_is_unsafe()
     {
         return Err(
             "Cache cleanup đã bỏ qua thư mục symlink để tránh xóa dữ liệu bên ngoài.".into(),
@@ -460,8 +456,7 @@ fn remove_children(path: &Path) -> Result<(), String> {
     }
     if fs::symlink_metadata(path)
         .map_err(|error| error.to_string())?
-        .file_type()
-        .is_symlink()
+        .pipe_is_unsafe()
     {
         return Err(
             "Cache cleanup đã bỏ qua thư mục symlink để tránh xóa dữ liệu bên ngoài.".into(),
@@ -479,14 +474,20 @@ fn remove_children(path: &Path) -> Result<(), String> {
 fn remove_managed_path(path: &PathBuf) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("Không thể xác minh cache tạm: {error}"))?;
-    if metadata.file_type().is_symlink() {
+    if metadata.pipe_is_unsafe() {
         return Err("Cache cleanup đã bỏ qua symlink để tránh xóa dữ liệu bên ngoài.".into());
     }
     if metadata.is_dir() {
+        crate::project_service::verify_tree_has_no_reparse_points(path)?;
         fs::remove_dir_all(path).map_err(|error| format!("Không thể xóa cache tạm: {error}"))
     } else {
         fs::remove_file(path).map_err(|error| format!("Không thể xóa cache tạm: {error}"))
     }
+}
+
+trait SafeMetadata { fn pipe_is_unsafe(&self) -> bool; }
+impl SafeMetadata for fs::Metadata {
+    fn pipe_is_unsafe(&self) -> bool { self.file_type().is_symlink() || is_reparse_point(self) }
 }
 
 #[cfg(test)]

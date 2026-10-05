@@ -75,7 +75,8 @@ def main():
         'redundantBytes': sum(files[0].stat().st_size * (len(files)-1) for files in duplicates),
         'files': [[str(p.relative_to(ROOT)) for p in files] for files in duplicates],
         'note': 'Intentional independent frozen environments; not removed without ABI/loader verification.'}
-    installer = ROOT / 'src-tauri/target/release/bundle/nsis/JC AI_0.1.13-preview_x64-setup.exe'
+    version = json.loads((ROOT / 'package.json').read_text(encoding='utf-8'))['version']
+    installer = ROOT / f'src-tauri/target/release/bundle/nsis/JC AI_{version}_x64-setup.exe'
     if installer.exists():
         report['installer'] = {'path': str(installer), 'bytes': installer.stat().st_size,
             'modifiedAt': datetime.fromtimestamp(installer.stat().st_mtime, timezone.utc).isoformat(),

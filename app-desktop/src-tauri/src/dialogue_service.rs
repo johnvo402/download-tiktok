@@ -4,12 +4,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Mutex;
 use std::time::SystemTime;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 const MODEL_FILE: &str = "checkpoint-multi.ckpt";
 const MODEL_BYTES: u64 = 446_680_129;
@@ -295,11 +295,8 @@ pub fn prepare_preview_stem(
     }
     let source = crate::video_service::resolve_video(store, project_id)?;
     let project = store.get(project_id)?;
-    let project_root = store.project_directory(project_id)?;
-    let cache_root = project_root.join("cache");
-    let cache_dir = cache_root.join("audio-separation");
-    fs::create_dir_all(&cache_dir)
-        .map_err(|error| format!("Không thể tạo cache tách thoại preview: {error}"))?;
+    let cache_root = store.data_directory(project_id,"cache")?;
+    let cache_dir = store.data_directory(project_id,"cache/audio-separation")?;
     for directory in [&cache_root, &cache_dir] {
         let metadata = fs::symlink_metadata(directory)
             .map_err(|error| format!("Không thể xác minh cache tách thoại preview: {error}"))?;
@@ -341,7 +338,7 @@ pub fn prepare_preview_stem(
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     let output = extract
-        .output()
+        .output_contained(std::time::Duration::from_secs(7200))
         .map_err(|error| format!("Không thể trích audio để preview BandIt: {error}"))?;
     if !output.status.success() || !input_wav.is_file() || fs::metadata(&input_wav).map(|meta| meta.len()).unwrap_or(0) <= 44 {
         let _ = fs::remove_file(&input_wav);
@@ -399,11 +396,13 @@ pub fn separate(
         .map_err(|error| format!("Không thể gửi yêu cầu tới worker tách thoại: {error}"))?;
     let stdout = child.stdout.take().ok_or("Worker tách thoại không mở stdout.")?;
     let stderr = child.stderr.take().ok_or("Worker tách thoại không mở stderr.")?;
-    let (send, receive) = std::sync::mpsc::channel::<String>();
-    std::thread::spawn(move || for line in BufReader::new(stdout).lines().flatten() { if send.send(line).is_err() { break; } });
-    let stderr_join = std::thread::spawn(move || { let mut data = String::new(); let _ = BufReader::new(stderr).read_to_string(&mut data); data });
+    let (send, receive) = std::sync::mpsc::sync_channel::<String>(8);
+    std::thread::spawn(move || for line in crate::worker_manager::bounded_lines(BufReader::new(stdout),8*1024*1024).map_while(Result::ok) { if send.send(line).is_err() { break; } });
+    let stderr_join = std::thread::spawn(move || { crate::worker_manager::read_tail(stderr,2*1024*1024).unwrap_or_default() });
     let mut terminal: Option<Value> = None;
+    let started = std::time::Instant::now();
     loop {
+        if started.elapsed() > std::time::Duration::from_secs(12 * 60 * 60) { let _ = child.kill(); let _ = child.wait(); return Err("Tách thoại đã vượt thời gian chờ; hãy thử lại với video ngắn hơn.".into()); }
         if canceled() { let _ = child.kill(); let _ = child.wait(); return Err("Đã hủy bước tách thoại.".into()); }
         match receive.recv_timeout(std::time::Duration::from_millis(200)) {
             Ok(line) => if let Ok(event) = serde_json::from_str::<Value>(&line) {
@@ -449,7 +448,7 @@ fn inspect_worker(worker: &Path) -> Result<Value, String> {
 }
 
 fn model_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app.path().app_data_dir().map_err(|error| format!("Không thể xác định thư mục Models: {error}"))?
+    Ok(crate::runtime_paths::data_dir(app).map_err(|error| format!("Không thể xác định thư mục Models: {error}"))?
         .join("models").join("audio-separation").join(MODEL_FILE))
 }
 

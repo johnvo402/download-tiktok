@@ -5,6 +5,9 @@ import type { AsrEnvironment, OcrEnvironment, TextRemovalEnvironment, Transcript
 function asUserMessage(error: unknown): Error {
   if (error instanceof Error) return error;
   if (typeof error === 'string') return new Error(error);
+  if (typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string') {
+    return Object.assign(new Error(error.message), error);
+  }
   return new Error('Đã xảy ra lỗi khi thao tác với dự án. Vui lòng thử lại.');
 }
 
@@ -13,7 +16,13 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     throw new Error('Quản lý dự án cần chạy trong ứng dụng desktop Tauri để truy cập dữ liệu trên thiết bị.');
   }
   try {
-    return await invoke<T>(command, args);
+    const result = await invoke<T>(command, args);
+    if (['list_projects','get_project','get_transcript'].includes(command)) {
+      void invoke<string[]>('get_recovery_notices').then(notices => {
+        if (notices.length) window.dispatchEvent(new CustomEvent('jc-data-recovered',{detail:notices.join('\n')}));
+      }).catch(() => undefined);
+    }
+    return result;
   } catch (error) {
     throw asUserMessage(error);
   }
@@ -25,11 +34,11 @@ export const projectService = {
   get: (id: string) => call<Project>('get_project', { id }),
   rename: (id: string, name: string) => call<Project>('rename_project', { id, name }),
   delete: (id: string) => call<void>('delete_project', { id }),
-  importVideo: (projectId: string, sourcePath: string, replace = false) => call<{
+  importVideo: (projectId: string, sourcePath: string, replace = false, restoreSource = false) => call<{
     project: Project;
     duplicate: boolean;
     replaced: boolean;
-  }>('import_video', { projectId, sourcePath, replace }),
+  }>('import_video', { projectId, sourcePath, replace, restoreSource }),
   getVideoAssetPath: (projectId: string) => call<string>('get_video_asset_path', { projectId }),
   createPreviewProxy: (projectId: string, forceRebuild = false) => call<string>('create_preview_proxy', { projectId, forceRebuild }),
   getVideoMetadata: (projectId: string) => call<Project['source']>('get_video_metadata', { projectId }),

@@ -1,3 +1,4 @@
+import { registerSaveTask } from '../../../app/save-guard';
 import { createEffect, createMemo, createSignal, For, Index, on, onCleanup, onMount, Show, untrack } from 'solid-js';
 import {
   AlertTriangle, AudioLines, Check, FileImage, FileText, Languages, LoaderCircle,
@@ -385,7 +386,7 @@ export default function TranslationPanel() {
     setSaveError('');
     try {
       const updated = await projectService.saveTranscript(project.id, snapshot);
-      if (currentProject()?.id === project.id) setCurrentProject(updated);
+      if (currentProject()?.id === project.id) mergeVisualProject(updated);
       if (saveRevision === revision) {
         setDirty(false);
         setSaveState('saved');
@@ -403,6 +404,16 @@ export default function TranslationPanel() {
       }
     }
   };
+
+  const unregisterSave = registerSaveTask('transcript-editor', async () => {
+    window.clearTimeout(saveTimer);
+    const deadline = Date.now() + 15_000;
+    while (saving && Date.now() < deadline) await new Promise<void>(resolve => window.setTimeout(resolve, 25));
+    if (saving) throw new Error('Việc lưu chưa hoàn tất. Hãy đợi rồi thử đóng lại.');
+    await persistTranscript();
+    if (dirty()) throw new Error(saveError() || 'Bản chép lời chưa được lưu. Hãy thử lưu lại.');
+  });
+  onCleanup(() => unregisterSave());
 
   const updateSegment = (id: string, changes: Partial<TranscriptSegment>) => {
     saveRevision += 1;
@@ -567,6 +578,8 @@ export default function TranslationPanel() {
     setTtsRunning(true);
     setTtsMessage('Đang khởi tạo VieNeu-TTS…');
     try {
+      window.clearTimeout(dubbingSaveTimer);
+      await persistDubbing();
       const jobId = await ttsService.start(project.id, { scope, segmentIds: ids });
       setTtsJobId(jobId);
     } catch (error) {
@@ -786,25 +799,29 @@ export default function TranslationPanel() {
     }
   };
 
-  const updateDubbingSettings = (changes: Partial<NonNullable<ReturnType<typeof currentProject>>['dubbing']>) => {
-    const project = currentProject();
-    if (!project) return;
-    const revision = ++dubbingSaveRevision;
-    const dubbing = { ...project.dubbing, ...changes };
-    setCurrentProject({ ...project, dubbing });
+  let pendingDubbing: {projectId: string; dubbing: Project['dubbing']; revision: number} | undefined;
+  let dubbingInFlight: Promise<void> | undefined;
+  const persistDubbing = async (): Promise<void> => {
+    if (dubbingInFlight) { await dubbingInFlight; if (pendingDubbing) await persistDubbing(); return; }
+    const task=pendingDubbing; if (!task) return;
+    dubbingInFlight=projectService.updateDubbingSettings(task.projectId,task.dubbing).then(updated => {
+      if (pendingDubbing?.revision===task.revision) {
+        pendingDubbing=undefined;
+        setCurrentProject(value => value?.id===task.projectId?{...value,dubbing:updated.dubbing,updatedAt:updated.updatedAt}:value);
+      }
+    });
+    try { await dubbingInFlight; } finally { dubbingInFlight=undefined; }
+    if (pendingDubbing) await persistDubbing();
+  };
+  const unregisterDubbingSave=registerSaveTask('dubbing-settings', async () => { window.clearTimeout(dubbingSaveTimer); await persistDubbing(); });
+  onCleanup(() => unregisterDubbingSave());
+  const updateDubbingSettings = (changes: Partial<Project['dubbing']>) => {
+    const project=currentProject(); if (!project) return;
+    const dubbing={...project.dubbing,...changes};
+    setCurrentProject({...project,dubbing});
+    pendingDubbing={projectId:project.id,dubbing,revision:++dubbingSaveRevision};
     window.clearTimeout(dubbingSaveTimer);
-    dubbingSaveTimer = window.setTimeout(() => {
-      const latest = currentProject();
-      if (!latest || latest.id !== project.id) return;
-      void projectService.updateDubbingSettings(project.id, latest.dubbing)
-        .then((updated) => {
-          if (revision !== dubbingSaveRevision) return;
-          setCurrentProject((value) => value?.id === project.id ? { ...value, dubbing: updated.dubbing, updatedAt: updated.updatedAt } : value);
-        })
-        .catch((error: unknown) => {
-          if (revision === dubbingSaveRevision) setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể lưu cấu hình lồng tiếng.' });
-        });
-    }, 400);
+    dubbingSaveTimer=window.setTimeout(() => void persistDubbing().catch(error => setNotice({kind:'error',message:error instanceof Error?error.message:'Không thể lưu cấu hình lồng tiếng.'})),400);
   };
 
   const updateAudioProcessing = (changes: Partial<NonNullable<Project['dubbing']['audioProcessing']>>) => {
@@ -828,21 +845,10 @@ export default function TranslationPanel() {
   });
 
   const fitAndRegenerate = async (segmentId: string) => {
-    const project = currentProject();
-    if (!project || ttsRunning()) return;
-    window.clearTimeout(dubbingSaveTimer);
-    const revision = ++dubbingSaveRevision;
-    const dubbing = { ...project.dubbing, fitMode: 'fit' as const };
-    setCurrentProject({ ...project, dubbing });
-    try {
-      const updated = await projectService.updateDubbingSettings(project.id, dubbing);
-      if (revision !== dubbingSaveRevision) return;
-      setCurrentProject((value) => value?.id === project.id ? { ...value, dubbing: updated.dubbing, updatedAt: updated.updatedAt } : value);
-      await launchTts('segment', [segmentId]);
-    } catch (error) {
-      if (revision !== dubbingSaveRevision) return;
-      setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể lưu chế độ Fit.' });
-    }
+    if (!currentProject() || ttsRunning()) return;
+    updateDubbingSettings({fitMode:'fit'});
+    try { window.clearTimeout(dubbingSaveTimer); await persistDubbing(); await launchTts('segment',[segmentId]); }
+    catch (error) { setNotice({kind:'error',message:error instanceof Error ? error.message : 'Không thể lưu chế độ Fit.'}); }
   };
 
   const extractSelectedSubtitle = () => {

@@ -1,3 +1,4 @@
+use crate::worker_manager::WorkerCommandExt;
 use crate::commands::projects_root;
 use crate::project_service::{Project, ProjectStore};
 use crate::settings_service::{
@@ -509,7 +510,7 @@ pub fn start_translation_job(
         "translate",
         &["network"],
         serde_json::to_value(&request).ok(),
-    );
+    ).map_err(|error| {if let Ok(mut entries)=jobs.inner.lock() {entries.remove(&job_id);} error})?;
 
     emit_event(
         &app,
@@ -990,7 +991,7 @@ fn run_codex_cli(
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = command.spawn_contained().map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             TranslationError::new(
                 "CLI_NOT_FOUND",

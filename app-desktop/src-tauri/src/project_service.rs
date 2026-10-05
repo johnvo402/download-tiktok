@@ -5,7 +5,6 @@ use std::fs::{self, Metadata};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tempfile::NamedTempFile;
 use uuid::Uuid;
 
 const SCHEMA_VERSION: u32 = 11;
@@ -697,6 +696,25 @@ impl ProjectStore {
         self.project_path(&id)
     }
 
+    /// Resolve/create owned subdirectories without following a junction even
+    /// when it points to another directory inside this project.
+    pub fn data_directory(&self, id: &str, relative: &str) -> Result<PathBuf, String> {
+        let root=self.project_directory(id)?.canonicalize().map_err(|e|e.to_string())?;
+        let mut current=root.clone();
+        for component in Path::new(relative).components() {
+            let std::path::Component::Normal(name)=component else {return Err("Đường dẫn thư mục dự án không hợp lệ.".into());};
+            current.push(name);
+            match fs::symlink_metadata(&current) {
+                Ok(metadata) if is_reparse_or_symlink(&metadata) || !metadata.is_dir()=>return Err("Thư mục dữ liệu là liên kết hoặc không hợp lệ.".into()),
+                Ok(_)=>{},
+                Err(error) if error.kind()==std::io::ErrorKind::NotFound=>fs::create_dir(&current).map_err(|e|format!("Không tạo được thư mục dữ liệu: {e}"))?,
+                Err(error)=>return Err(format!("Không kiểm tra được thư mục dữ liệu: {error}")),
+            }
+            if !current.canonicalize().map_err(|e|e.to_string())?.starts_with(&root) {return Err("Thư mục nằm ngoài dự án.".into());}
+        }
+        Ok(current)
+    }
+
     pub fn update_project(&self, project: &Project) -> Result<Project, String> {
         let id = canonical_project_id(&project.id)?;
         let path = self.project_path(&id)?;
@@ -798,14 +816,9 @@ impl ProjectStore {
 
     fn read_location_registry(&self) -> Result<ProjectLocationRegistry, String> {
         let path = self.location_registry_path();
-        match fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map_err(|error| format!("File đăng ký thư mục project không hợp lệ: {error}")),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Ok(ProjectLocationRegistry::default())
-            }
-            Err(error) => Err(format!("Không thể đọc đăng ký thư mục project: {error}")),
-        }
+        if !path.exists() && !crate::recovery_store::backup_path(&path,1).exists() { return Ok(ProjectLocationRegistry::default()); }
+        crate::recovery_store::read(&path, None, |bytes| serde_json::from_slice(bytes)
+            .map_err(|_| "File đăng ký thư mục project không hợp lệ.".to_string()))
     }
 
     fn write_location_registry(&self, registry: &ProjectLocationRegistry) -> Result<(), String> {
@@ -817,16 +830,7 @@ impl ProjectStore {
             .map_err(|error| format!("Không thể tạo thư mục đăng ký project: {error}"))?;
         let bytes = serde_json::to_vec_pretty(registry)
             .map_err(|error| format!("Không thể tạo danh sách thư mục project: {error}"))?;
-        let mut temporary = tempfile::NamedTempFile::new_in(parent)
-            .map_err(|error| format!("Không thể tạo file đăng ký project tạm: {error}"))?;
-        temporary
-            .write_all(&bytes)
-            .and_then(|_| temporary.as_file().sync_all())
-            .map_err(|error| format!("Không thể ghi đăng ký thư mục project: {error}"))?;
-        temporary
-            .persist(&path)
-            .map_err(|error| format!("Không thể lưu đăng ký thư mục project: {}", error.error))?;
-        Ok(())
+        crate::recovery_store::write(&path, &bytes)
     }
 
     fn registered_root(&self, id: &str) -> Result<Option<PathBuf>, String> {
@@ -954,38 +958,43 @@ fn canonical_project_id(id: &str) -> Result<String, String> {
 
 fn read_project(project_dir: &Path, expected_id: &str) -> Result<Project, String> {
     let metadata = project_dir.join("project.json");
-    let file_metadata = fs::symlink_metadata(&metadata)
-        .map_err(|_| "Không tìm thấy file project.json hoặc không thể đọc file.".to_string())?;
-    if is_reparse_or_symlink(&file_metadata) || !file_metadata.is_file() {
-        return Err("File project.json không hợp lệ hoặc là symlink/reparse point.".to_string());
-    }
-    let bytes = fs::read(&metadata)
-        .map_err(|_| "Không tìm thấy file project.json hoặc không thể đọc file.".to_string())?;
-    let mut project: Project = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("File project.json bị lỗi hoặc không hợp lệ: {error}"))?;
-    if project.id != expected_id {
-        return Err("Mã dự án trong project.json không khớp với thư mục.".to_string());
-    }
-    if project.schema_version > SCHEMA_VERSION || project.schema_version == 0 {
-        return Err(format!(
-            "Phiên bản dữ liệu {} chưa được hỗ trợ (ứng dụng hỗ trợ {}).",
-            project.schema_version, SCHEMA_VERSION
-        ));
-    }
-    validate_project_name(&project.name)?;
+    let mut project = crate::recovery_store::read(&metadata, Some(SCHEMA_VERSION), |bytes| {
+        let mut project: Project = serde_json::from_slice(bytes)
+            .map_err(|_| "File project.json bị lỗi hoặc không hợp lệ.".to_string())?;
+        if project.id != expected_id { return Err("Mã dự án trong project.json không khớp với thư mục.".into()); }
+        if project.schema_version == 0 { return Err("Phiên bản dữ liệu dự án không hợp lệ.".into()); }
+        // Early projects used free-form overlay IDs. Give them stable UUIDs
+        // once during migration; coordinates and subtitle roles stay intact.
+        if project.schema_version < SCHEMA_VERSION {
+            for region in &mut project.blur_regions {
+                if Uuid::parse_str(&region.id).is_err() { region.id = Uuid::new_v4().to_string(); }
+            }
+        }
+        validate_project_document(&project)?;
+        Ok(project)
+    })?;
+    let bytes = fs::read(&metadata).map_err(|e| format!("Không thể đọc dự án để nâng cấp: {e}"))?;
     if project.schema_version < SCHEMA_VERSION {
         let old_version = project.schema_version;
         backup_project_before_migration(&metadata, old_version, &bytes)?;
-        if old_version < 5
-            && project.dubbing.voice_profile_id.is_none()
-            && project.dubbing.voice.as_deref() == Some(LEGACY_TTS_VOICE)
-        {
-            project.dubbing.voice = Some(DEFAULT_TTS_VOICE.to_string());
-        }
-        project.schema_version = SCHEMA_VERSION;
+        migrate_project(&mut project)?;
         write_project_file(&metadata, &project)?;
     }
     Ok(project)
+}
+
+/// Versioned migrations are additive. Serde defaults supply fields introduced
+/// in versions 2–11; only the v5 built-in voice alias changes an existing value.
+fn migrate_project(project: &mut Project) -> Result<(),String> {
+    if !(1..=SCHEMA_VERSION).contains(&project.schema_version) {return Err("Phiên bản dữ liệu dự án chưa được hỗ trợ.".into());}
+    while project.schema_version < SCHEMA_VERSION {
+        let next=project.schema_version+1;
+        if next==5 && project.dubbing.voice_profile_id.is_none() && project.dubbing.voice.as_deref()==Some(LEGACY_TTS_VOICE) {
+            project.dubbing.voice=Some(DEFAULT_TTS_VOICE.to_string());
+        }
+        project.schema_version=next;
+    }
+    validate_project_document(project)
 }
 
 fn backup_project_before_migration(
@@ -1014,21 +1023,50 @@ fn backup_project_before_migration(
 fn write_project_file(path: &Path, project: &Project) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(project)
         .map_err(|error| format!("Không thể chuyển dữ liệu dự án thành JSON: {error}"))?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| "Đường dẫn project.json không hợp lệ.".to_string())?;
-    let mut temporary = NamedTempFile::new_in(parent)
-        .map_err(|error| format!("Không thể ghi dữ liệu dự án tạm thời: {error}"))?;
-    temporary
-        .write_all(&bytes)
-        .map_err(|error| format!("Không thể ghi project.json: {error}"))?;
-    temporary
-        .as_file()
-        .sync_all()
-        .map_err(|error| format!("Không thể lưu project.json: {error}"))?;
-    temporary
-        .persist(path)
-        .map_err(|error| format!("Không thể cập nhật project.json: {}", error.error))?;
+    validate_project_document(project)?;
+    crate::recovery_store::write(path, &bytes)
+}
+
+fn validate_project_document(project: &Project) -> Result<(), String> {
+    validate_project_name(&project.name)?;
+    validate_translation_custom_prompt(&project.translation.custom_prompt)?;
+    validate_translation_context(&project.translation.context)?;
+    for time in [&project.created_at, &project.updated_at] {
+        chrono::DateTime::parse_from_rfc3339(time).map_err(|_| "Ngày lưu dự án không hợp lệ.".to_string())?;
+    }
+    if project.source.duration.is_some_and(|v| !v.is_finite() || v <= 0.0)
+        || project.source.fps.is_some_and(|v| !v.is_finite() || v <= 0.0)
+        || project.source.width == Some(0) || project.source.height == Some(0) {
+        return Err("Thông tin kích thước hoặc thời lượng video không hợp lệ.".into());
+    }
+    if let Some(path) = &project.source.video_path { validate_relative_asset(path, "media")?; }
+    if let Some(transcript) = &project.transcript { validate_relative_asset(&transcript.path, "subtitles")?; }
+    crate::overlays_service::validate_blur_regions(&project.blur_regions)?;
+    crate::overlays_service::validate_text_overlays(&project.text_overlays)?;
+    crate::overlays_service::validate_subtitle_settings(&project.subtitle)?;
+    let mut ids = HashSet::new();
+    for logo in &project.logos {
+        validate_relative_asset(&logo.relative_path, "media/overlays")?;
+        if !ids.insert(&logo.id) || Uuid::parse_str(&logo.id).is_err()
+            || !logo.opacity.is_finite() || !(0.0..=1.0).contains(&logo.opacity)
+            || ![logo.x,logo.y,logo.width,logo.height].into_iter().all(f64::is_finite)
+            || logo.x < 0.0 || logo.y < 0.0 || logo.width <= 0.0 || logo.height <= 0.0
+            || logo.x + logo.width > 1.0 + 1e-9 || logo.y + logo.height > 1.0 + 1e-9 {
+            return Err("Thuộc tính logo không hợp lệ.".into());
+        }
+    }
+    // Missing assets remain editable. Presence is checked when that feature is used.
+    Ok(())
+}
+
+pub(crate) fn validate_relative_asset(relative: &str, prefix: &str) -> Result<(), String> {
+    let normalized = relative.replace('\\', "/");
+    if relative.is_empty() || relative.contains(':') || relative.chars().any(char::is_control)
+        || !normalized.starts_with(&format!("{prefix}/"))
+        || normalized.split('/').any(|p| p.is_empty() || p == "." || p == "..")
+        || Path::new(relative).is_absolute() {
+        return Err("Đường dẫn dữ liệu dự án không an toàn.".into());
+    }
     Ok(())
 }
 
@@ -1051,7 +1089,7 @@ fn verify_direct_child(root: &Path, candidate: &Path, expected_name: &str) -> Re
     Ok(())
 }
 
-fn verify_tree_has_no_reparse_points(path: &Path) -> Result<(), String> {
+pub(crate) fn verify_tree_has_no_reparse_points(path: &Path) -> Result<(), String> {
     let mut pending = vec![path.to_path_buf()];
     while let Some(current) = pending.pop() {
         let metadata = fs::symlink_metadata(&current)
@@ -1155,6 +1193,33 @@ mod tests {
         store.delete(&project.id).unwrap();
         assert!(!temp.path().join("projects").join(&project.id).exists());
         assert!(store.get(&project.id).is_err());
+    }
+
+    #[test]
+    fn recovery_and_newer_schema_guard_are_applied_to_real_projects() {
+        let temp=tempdir().unwrap();let store=ProjectStore::new(temp.path().join("projects"));let project=store.create("Old name").unwrap();
+        store.rename(&project.id,"New name").unwrap();
+        let file=store.project_directory(&project.id).unwrap().join("project.json");fs::write(&file,b"broken").unwrap();
+        assert_eq!(store.get(&project.id).unwrap().name,"Old name");
+        let mut value=serde_json::to_value(&project).unwrap();value["schemaVersion"]=serde_json::json!(99);value["source"]=serde_json::json!("unknown future source format");
+        let bytes=serde_json::to_vec(&value).unwrap();fs::write(&file,&bytes).unwrap();assert!(store.rename(&project.id,"Must not save").is_err());assert_eq!(fs::read(file).unwrap(),bytes);
+    }
+    #[test]
+    fn owned_directory_rejects_traversal_before_creating_outside_data() {
+        let temp=tempdir().unwrap();let store=ProjectStore::new(temp.path().join("projects"));let project=store.create("Safe dirs").unwrap();
+        assert!(store.data_directory(&project.id,"../../outside").is_err());assert!(!temp.path().join("outside").exists());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn junction_subdirectory_is_never_written_or_deleted_through() {
+        let temp=tempdir().unwrap();let store=ProjectStore::new(temp.path().join("projects"));let project=store.create("Junction guard").unwrap();
+        let outside=temp.path().join("outside");fs::create_dir(&outside).unwrap();fs::write(outside.join("keep.txt"),b"keep").unwrap();
+        let link=store.project_directory(&project.id).unwrap().join("media/source");fs::remove_dir(&link).unwrap();
+        use std::os::windows::process::CommandExt;
+        // Paths are generated by tempdir, never taken from a project document.
+        let status=std::process::Command::new("cmd.exe").arg("/c").arg("mklink").arg("/J").arg(&link).arg(&outside).creation_flags(0x08000000).output().unwrap();assert!(status.status.success());
+        assert!(store.data_directory(&project.id,"media/source").is_err());assert!(store.delete(&project.id).is_err());assert_eq!(fs::read(outside.join("keep.txt")).unwrap(),b"keep");
+        fs::remove_dir(link).unwrap();
     }
 
     #[test]

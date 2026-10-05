@@ -1,3 +1,4 @@
+use crate::worker_manager::WorkerCommandExt;
 use super::{signal, ProcessingSettings, RATE};
 use std::{fs, path::Path};
 
@@ -157,7 +158,7 @@ pub fn process(
         .arg(decoded.path())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .spawn()
+        .spawn_contained()
         .map_err(|e| format!("Không xử lý được giọng đọc: {e}"))?;
     loop {
         if cancel() {

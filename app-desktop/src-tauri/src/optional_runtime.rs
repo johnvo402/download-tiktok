@@ -60,6 +60,21 @@ pub struct RuntimeStatus {
     pub nvidia_detected: bool,
     pub feature_profiles: std::collections::BTreeMap<String, String>,
     pub runtime_version: u32,
+    pub health: std::collections::BTreeMap<String, RuntimeHealthState>,
+}
+
+#[derive(Clone,Copy,Serialize,PartialEq,Eq)]
+#[serde(rename_all="snake_case")]
+pub enum RuntimeHealthState { Ready, Missing, Broken, UpdateRequired }
+fn quick_feature_health(feature:&str) -> RuntimeHealthState {
+    let Ok(root)=feature_root(feature) else {return RuntimeHealthState::Missing;};
+    let Some(marker)=read_marker_at(&root) else {
+        return if root.join("current.json").exists() {RuntimeHealthState::Broken} else {RuntimeHealthState::Missing};
+    };
+    if !marker.features.iter().any(|f|f==feature) {return RuntimeHealthState::Missing;}
+    if marker.runtime_version!=RUNTIME_VERSION {return RuntimeHealthState::UpdateRequired;}
+    if active_runtime_for(feature).is_none() {return RuntimeHealthState::Broken;}
+    RuntimeHealthState::Ready
 }
 
 fn root() -> Result<PathBuf, String> {
@@ -194,6 +209,7 @@ pub fn status() -> RuntimeStatus {
         nvidia_detected: nvidia_detected(),
         feature_profiles: FEATURES.iter().filter_map(|f| active_runtime_for(f).map(|(_,_,p)| (f.to_string(), p))).collect(),
         runtime_version: RUNTIME_VERSION,
+        health: FEATURES.iter().map(|f|(f.to_string(),quick_feature_health(f))).collect(),
     }
 }
 
@@ -1208,15 +1224,15 @@ pub fn plan(feature: &str, profile: &str) -> Result<crate::runtime_registry::Ins
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FeatureHealth { pub feature: String, pub installed: bool, pub verified: bool, pub backend: Option<String>, pub message: String }
+pub struct FeatureHealth { pub state: RuntimeHealthState, pub feature: String, pub installed: bool, pub verified: bool, pub backend: Option<String>, pub message: String }
 pub fn check_feature(app: &AppHandle, feature: &str) -> Result<FeatureHealth, String> {
     if !FEATURES.contains(&feature) { return Err("Tính năng không hợp lệ.".into()); }
     let Some((python, source, profile)) = active_runtime_for(feature) else {
-        return Ok(FeatureHealth { feature:feature.into(), installed:false, verified:false, backend:None, message:"Chưa cài bộ xử lý.".into() });
+        return Ok(FeatureHealth { state:quick_feature_health(feature), feature:feature.into(), installed:false, verified:false, backend:None, message:match quick_feature_health(feature) {RuntimeHealthState::UpdateRequired=>"Bộ xử lý cần cập nhật. Hãy cài lại tính năng này; các model được giữ nguyên.",RuntimeHealthState::Broken=>"Bộ xử lý bị lỗi hoặc thiếu tệp. Hãy dùng Sửa bộ xử lý.",_=>"Chưa cài bộ xử lý."}.into() });
     };
     let verification_profile = if matches!(feature, "ocr_openvino" | "whisper_openvino") { "openvino" } else { &profile };
     let result = verify(app, &python, &source, &[feature.into()], verification_profile);
-    Ok(FeatureHealth { feature:feature.into(), installed:true, verified:result.is_ok(), backend:Some(profile), message:result.err().unwrap_or_else(|| "Bộ xử lý đã sẵn sàng.".into()) })
+    Ok(FeatureHealth { state:if result.is_ok() {RuntimeHealthState::Ready} else {RuntimeHealthState::Broken}, feature:feature.into(), installed:true, verified:result.is_ok(), backend:Some(profile), message:result.err().unwrap_or_else(|| "Bộ xử lý đã sẵn sàng.".into()) })
 }
 
 pub fn uninstall(app: &AppHandle, feature: &str) -> Result<RuntimeStatus, String> {

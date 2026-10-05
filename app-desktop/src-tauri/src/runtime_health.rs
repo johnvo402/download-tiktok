@@ -3,7 +3,7 @@ use serde::Serialize;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize)]
@@ -11,6 +11,8 @@ use uuid::Uuid;
 pub struct RuntimeHealth {
     pub app_version: String,
     pub build_commit: String,
+    pub build_date: String,
+    pub release_channel: String,
     pub os: String,
     pub architecture: String,
     pub project_storage_available: bool,
@@ -26,12 +28,8 @@ pub struct RuntimeHealth {
 pub fn check(app: &AppHandle) -> RuntimeHealth {
     check_scoped(app, true)
 }
-pub fn check_scoped(app: &AppHandle, deep: bool) -> RuntimeHealth {
-    let projects = app
-        .path()
-        .app_data_dir()
-        .map(|path| path.join("projects"))
-        .ok();
+pub fn check_scoped(_app: &AppHandle, deep: bool) -> RuntimeHealth {
+    let projects = runtime_paths::app_data_dir().map(|path|path.join("projects"));
     let storage_available = projects.as_ref().is_some_and(storage_writable);
     let ffmpeg = runtime_paths::resolve_ffmpeg();
     let ffprobe = runtime_paths::resolve_ffprobe();
@@ -44,6 +42,8 @@ pub fn check_scoped(app: &AppHandle, deep: bool) -> RuntimeHealth {
     RuntimeHealth {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         build_commit: option_env!("GIT_COMMIT").unwrap_or("unknown").to_string(),
+        build_date: option_env!("JC_BUILD_EPOCH").and_then(|v|v.parse::<i64>().ok()).and_then(|v|chrono::DateTime::from_timestamp(v,0)).map(|v|v.to_rfc3339()).unwrap_or_else(||"unknown".into()),
+        release_channel: if env!("CARGO_PKG_VERSION").contains("-rc") {"rc"} else if env!("CARGO_PKG_VERSION").contains('-') {"beta"} else {"stable"}.into(),
         os: std::env::consts::OS.to_string(),
         architecture: std::env::consts::ARCH.to_string(),
         project_storage_available: storage_available,

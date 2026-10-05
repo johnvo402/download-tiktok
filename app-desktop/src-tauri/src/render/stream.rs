@@ -1,13 +1,14 @@
 //! Bounded RGBA pipe bridge. FFmpeg supplies real PTS via showinfo; no intermediate frames.
+use crate::worker_manager::WorkerCommandExt;
 use super::{
     frame::{byte_len, PixelFormat, VideoFrame},
     renderer::Renderer,
 };
 use crate::text_removal_service::AiTextRemovalPatch;
 use std::{
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufReader, Read, Write},
     path::Path,
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc, Arc, Mutex,
@@ -38,7 +39,7 @@ pub struct Stats {
     pub readback_bytes: u64,
     pub child_cpu_seconds: Option<f64>,
 }
-struct Process(Arc<Mutex<Child>>);
+struct Process(Arc<Mutex<crate::worker_manager::ManagedWorker>>);
 impl Process {
     fn cpu_seconds(&self) -> Option<f64> {
         #[cfg(windows)]
@@ -98,7 +99,7 @@ pub fn compatible_input(source: &Path) -> Result<f64, String> {
             "json",
         ])
         .arg(source)
-        .output()
+        .output_contained(std::time::Duration::from_secs(30))
         .map_err(|_| "Không kiểm tra được định dạng video để render GPU.")?;
     if !output.status.success() {
         return Err("Không đọc được metadata video.".into());
@@ -204,7 +205,7 @@ pub fn run(
     let started = Instant::now();
     encoder.stdin(Stdio::piped());
     let mut enc = encoder
-        .spawn()
+        .spawn_contained()
         .map_err(|e| StreamFailure::render(format!("Không khởi chạy được bộ mã hóa: {e}")))?;
     let mut input = enc
         .stdin
@@ -217,7 +218,7 @@ pub fn run(
     let encout = enc.stdout.take();
     let encoder = Process(Arc::new(Mutex::new(enc)));
     let mut dec = decoder
-        .spawn()
+        .spawn_contained()
         .map_err(|e| StreamFailure::render(format!("Không giải mã được video: {e}")))?;
     let mut decoded = dec
         .stdout
@@ -252,7 +253,7 @@ pub fn run(
     let tail = Arc::new(Mutex::new(std::collections::VecDeque::new()));
     let err_tail = tail.clone();
     let errors = thread::spawn(move || {
-        for line in BufReader::new(encerr).lines().map_while(Result::ok) {
+        for line in crate::worker_manager::bounded_lines(BufReader::new(encerr),8*1024*1024).map_while(Result::ok) {
             if let Ok(mut tail) = err_tail.lock() {
                 tail.push_back(line);
                 if tail.len() > 24 {
@@ -264,7 +265,7 @@ pub fn run(
     if let Some(output) = encout {
         thread::spawn(
             move || {
-                for _ in BufReader::new(output).lines().map_while(Result::ok) {}
+                for _ in crate::worker_manager::bounded_lines(BufReader::new(output),8*1024*1024).map_while(Result::ok) {}
             },
         );
     }
@@ -273,7 +274,7 @@ pub fn run(
     let decoder_log = decoder_tail.clone();
     thread::spawn(move || {
         let mut time_base = None;
-        for line in BufReader::new(decerr).lines().map_while(Result::ok) {
+        for line in crate::worker_manager::bounded_lines(BufReader::new(decerr),8*1024*1024).map_while(Result::ok) {
             if let Some(config) = line.split("config in time_base:").nth(1) {
                 time_base = config
                     .split_whitespace()
@@ -345,6 +346,7 @@ pub fn run(
         patch_rects.push(patch.rect);patch_layers.push(layer);
     }
     let mut encode_failed = false;
+    let mut last_frame=Instant::now();
     loop {
         if state.load(Ordering::SeqCst) == 2 {
             return Err(StreamFailure::render("Đã hủy export."));
@@ -365,13 +367,16 @@ pub fn run(
                     encode_failed = true;
                     break;
                 }
+                if last_frame.elapsed()>Duration::from_secs(600) {return Err(StreamFailure::render("Bộ giải mã không có khung hình mới trong 10 phút."));}
                 continue;
             }
         };
+        last_frame=Instant::now();
         let pts = loop {
             match time_rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(pts) => break pts,
                 Err(mpsc::RecvTimeoutError::Timeout) if state.load(Ordering::SeqCst) != 2 => {
+                    if last_frame.elapsed()>Duration::from_secs(30) {return Err(StreamFailure::render("Không nhận được timestamp của khung hình trong 30 giây."));}
                     continue
                 }
                 _ => {

@@ -1,3 +1,5 @@
+use crate::hardware_acceleration::VideoCodec;
+use crate::worker_manager::WorkerCommandExt;
 use crate::hardware_acceleration::{self, EncodingProfile, VideoEncoder};
 use crate::project_service::{BlurEffect, BlurRegionRole, Project, ProjectStore};
 use crate::render_spec::{self, ExportOptions, RenderSpecification};
@@ -9,7 +11,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -184,7 +186,7 @@ pub fn start_export(
         "export",
         if spec.output.encoder.hardware() || crate::render::RenderBackend::configured()? != crate::render::RenderBackend::Legacy { &["gpu", "cpu", "ffmpeg", "disk"] } else { &["cpu", "ffmpeg", "disk"] },
         serde_json::to_value(&options).ok(),
-    );
+    )?;
     let state = Arc::new(AtomicU8::new(JOB_RUNNING));
     jobs.inner
         .lock()
@@ -283,28 +285,15 @@ pub fn cancel_export(jobs: &RenderJobs, job_id: &str) -> Result<bool, String> {
 pub fn history(store: &ProjectStore, project_id: &str) -> Result<Vec<ExportHistoryEntry>, String> {
     let root = store.project_directory(project_id)?;
     let path = root.join("exports").join("history.json");
-    if !path.exists() {
+    if !path.exists() && !crate::recovery_store::backup_path(&path,1).exists() {
         return Ok(Vec::new());
     }
-    let bytes =
-        fs::read(&path).map_err(|error| format!("Không thể đọc export history: {error}"))?;
-    serde_json::from_slice(&bytes).map_err(|error| format!("Export history bị lỗi: {error}"))
+    crate::recovery_store::read(&path,None,|bytes|serde_json::from_slice(bytes).map_err(|e|format!("Export history bị lỗi: {e}")))
 }
 
 pub fn export_directory(store: &ProjectStore, project_id: &str) -> Result<PathBuf, String> {
     store.get(project_id)?;
-    let project_root = store.project_directory(project_id)?;
-    let export_dir = project_root.join("exports");
-    fs::create_dir_all(&export_dir)
-        .map_err(|error| format!("Không thể mở thư mục exports của dự án: {error}"))?;
-    let canonical_root = fs::canonicalize(&project_root)
-        .map_err(|error| format!("Không thể xác minh thư mục project: {error}"))?;
-    let canonical_exports = fs::canonicalize(&export_dir)
-        .map_err(|error| format!("Không thể xác minh thư mục exports: {error}"))?;
-    if !canonical_exports.starts_with(&canonical_root) {
-        return Err("Thư mục exports nằm ngoài phạm vi project được quản lý.".into());
-    }
-    Ok(canonical_exports)
+    store.data_directory(project_id,"exports")
 }
 
 fn resolve_export_directory(
@@ -590,26 +579,16 @@ fn run_export(
         message: Some(message.clone()),
     };
     if let Err(error) = write_history(store, project_id, history_entry) {
-        emit_event(
-            &app,
-            event(
-                project_id,
-                job_id,
-                "failed",
-                0.0,
-                started.elapsed().as_secs_f64(),
-                total,
-                None,
-                None,
-                format!("{message} Lưu lịch sử export thất bại: {error}"),
-                Vec::new(),
-            ),
-        );
-        return Err(error);
+        log::error!("Export history persistence failed: {error}");
+        if result.is_ok() {
+            emit_event(&app,event(project_id,job_id,"partial",1.0,started.elapsed().as_secs_f64(),total,None,output,
+                format!("Video đã xuất và xác minh; không lưu được lịch sử. {error}"),Vec::new()));
+            return Ok(());
+        }
     }
     if result.is_err() {
-        if let Ok(root) = store.project_directory(project_id) {
-            let _ = fs::remove_dir_all(root.join("cache").join("render").join(job_id));
+        if let Ok(directory)=store.data_directory(project_id,&format!("cache/render/{job_id}")) {
+            if crate::project_service::verify_tree_has_no_reparse_points(&directory).is_ok() {let _=fs::remove_dir_all(directory);}
         }
     }
     let progress = if status == "completed" { 1.0 } else { 0.0 };
@@ -651,13 +630,14 @@ fn run_export_inner(
             .join(", ");
         return Err(format!("Một số phụ đề không vừa Subtitle Blur ở cỡ tối thiểu. Segment: {ids}. Hãy mở rộng vùng blur hoặc giảm cỡ chữ/dịch ngắn hơn; không có chữ nào bị cắt."));
     }
-    let project_root = store.project_directory(project_id)?;
     let source_path = resolve_video(store, project_id)?;
-    let render_dir = project_root.join("cache").join("render").join(job_id);
-    fs::create_dir_all(&render_dir)
-        .map_err(|error| format!("Không thể tạo thư mục render tạm: {error}"))?;
+    let render_dir = store.data_directory(project_id, &format!("cache/render/{job_id}"))?;
     let export_dir =
         resolve_export_directory(store, project_id, options.output_directory.as_deref())?;
+    let bitrate=options.video_bitrate_kbps.map(u64::from).unwrap_or_else(||project.source.file_size.unwrap_or(0).saturating_mul(8).checked_div(spec.duration.max(1.0) as u64).unwrap_or(0)/1000).max(500);
+    let expected_video_bytes=(spec.duration*bitrate as f64*250.0) as u64;
+    crate::disk_space::require(&export_dir,expected_video_bytes)?;
+    crate::disk_space::require(&render_dir,(spec.duration*384_000.0) as u64)?;
     let ass_path = render_dir.join("translated.ass");
     if spec.subtitle.enabled || spec.text_overlays.iter().any(|overlay| overlay.enabled && !overlay.text.trim().is_empty()) {
         fs::write(&ass_path, render_spec::generate_ass(&spec)?)
@@ -723,11 +703,12 @@ fn run_export_inner(
     .map_err(|error| format!("Không thể ghi manifest audio: {error}"))?;
     let final_path = unique_output_path(&export_dir, &options.output_file_name);
     let staging_file = tempfile::Builder::new()
-        .prefix(".avl-render-")
+        .prefix(&format!(".avl-render-{job_id}-"))
         .suffix(".partial.mp4")
         .tempfile_in(&export_dir)
         .map_err(|error| format!("Không thể tạo tệp render tạm trong thư mục đích: {error}"))?;
     let staging_path = staging_file.into_temp_path();
+    crate::recovery_store::write(&render_dir.join("temporary-output.json"), &serde_json::to_vec(&serde_json::json!({"jobId":job_id,"outputPath":staging_path.to_string_lossy()})).map_err(|e|e.to_string())?)?;
     let render_backend = crate::render::RenderBackend::configured()?;
     let media_preference = crate::media_gpu::pipeline::Preference::configured()?;
     let mut native_video: Option<tempfile::TempPath> = None;
@@ -864,7 +845,7 @@ fn run_export_inner(
         if state.load(Ordering::SeqCst) == JOB_CANCELLED {
             return Err("Đã hủy export.".into());
         }
-        let mut child = command.spawn().map_err(|error| {
+        let mut child = command.spawn_contained().map_err(|error| {
             format!("Không thể chạy FFmpeg. Kiểm tra cài đặt FFmpeg và PATH: {error}")
         })?;
         let stdout = child
@@ -875,9 +856,9 @@ fn run_export_inner(
             .stderr
             .take()
             .ok_or("Không đọc được thông báo lỗi từ FFmpeg.")?;
-        let (tx, rx) = mpsc::channel::<String>();
+        let (tx, rx) = mpsc::sync_channel::<String>(256);
         thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().flatten() {
+            for line in crate::worker_manager::bounded_lines(BufReader::new(stdout),8*1024*1024).map_while(Result::ok) {
                 if tx.send(line).is_err() {
                     break;
                 }
@@ -886,7 +867,7 @@ fn run_export_inner(
         let stderr_tail = Arc::new(Mutex::new(VecDeque::<String>::new()));
         let stderr_tail_reader = stderr_tail.clone();
         let stderr_reader = thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().flatten() {
+            for line in crate::worker_manager::bounded_lines(BufReader::new(stderr),8*1024*1024).map_while(Result::ok) {
                 if let Ok(mut tail) = stderr_tail_reader.lock() {
                     tail.push_back(line);
                     while tail.len() > 16 {
@@ -899,6 +880,7 @@ fn run_export_inner(
         let mut encoded_frames = 0_u64;
         let mut last_emit = Instant::now();
         let mut speed: Option<f64> = None;
+        let mut last_progress = Instant::now();
         loop {
             if state.load(Ordering::SeqCst) == JOB_CANCELLED {
                 let _ = child.kill();
@@ -909,9 +891,15 @@ fn run_export_inner(
             }
             while let Ok(line) = rx.try_recv() {
                 if let Some((key, value)) = line.split_once('=') {
-                    if key == "frame" { encoded_frames = value.trim().parse().unwrap_or(encoded_frames); }
+                    if key == "frame" {
+                        let frames = value.trim().parse().unwrap_or(encoded_frames);
+                        if frames > encoded_frames { last_progress = Instant::now(); }
+                        encoded_frames = frames;
+                    }
                     if key == "out_time_ms" {
-                        out_seconds = value.parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
+                        let seconds = value.parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
+                        if seconds > out_seconds { last_progress = Instant::now(); }
+                        out_seconds = seconds;
                     }
                     if key == "speed" {
                         speed = value.trim_end_matches('x').parse().ok();
@@ -937,6 +925,10 @@ fn run_export_inner(
                         last_emit = Instant::now();
                     }
                 }
+            }
+            if last_progress.elapsed() > Duration::from_secs(600) {
+                let _ = child.kill(); let _ = child.wait(); let _ = stderr_reader.join();
+                return Err("FFmpeg không tiến thêm trong 10 phút. Tệp nguồn và dữ liệu dự án được giữ nguyên; hãy thử lại hoặc chọn bộ mã hóa khác.".into());
             }
             if let Some(status) = child
                 .try_wait()
@@ -976,7 +968,9 @@ fn run_export_inner(
         spec.height,
         source_duration,
         audio_expected,
+        spec.output.video_codec,
     )?;
+    fs::OpenOptions::new().read(true).write(true).open(&staging_path).and_then(|file| file.sync_all()).map_err(|e|format!("Không thể lưu bền vững video export: {e}"))?;
     if state
         .compare_exchange(
             JOB_RUNNING,
@@ -997,7 +991,7 @@ fn run_export_inner(
                 error.error
             )
         })?;
-    let _ = fs::remove_dir_all(&render_dir);
+    if crate::project_service::verify_tree_has_no_reparse_points(&render_dir).is_ok() { let _ = fs::remove_dir_all(&render_dir); }
     Ok((final_path.to_string_lossy().into_owned(), source_duration))
 }
 
@@ -1049,7 +1043,7 @@ fn prepare_dialogue_stem(
         .arg(&input_wav)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let mut child = extract.spawn().map_err(|error| format!("Không thể trích audio để tách thoại: {error}"))?;
+    let mut child = extract.spawn_contained().map_err(|error| format!("Không thể trích audio để tách thoại: {error}"))?;
     loop {
         if state.load(Ordering::SeqCst) == JOB_CANCELLED {
             let _ = child.kill(); let _ = child.wait();
@@ -1350,13 +1344,13 @@ pub(crate) fn register_auxiliary_job(
         );
     crate::job_service::register_job(
         app,
-        job_id,
+        job_id.clone(),
         project_id,
         project_name,
         job_type,
         resources,
         None,
-    );
+    ).map_err(|error| {if let Ok(mut entries)=jobs.inner.lock() {entries.remove(&job_id);} error})?;
     Ok(())
 }
 
@@ -1473,6 +1467,7 @@ fn validate_output(
     height: u32,
     expected_duration: f64,
     audio_expected: bool,
+    expected_codec: VideoCodec,
 ) -> Result<(), String> {
     if !path.is_file()
         || fs::metadata(path)
@@ -1492,7 +1487,7 @@ fn validate_output(
             "json",
         ])
         .arg(path)
-        .output()
+        .output_contained(Duration::from_secs(30))
         .map_err(|error| format!("Không thể xác minh export bằng FFprobe: {error}"))?;
     if !output.status.success() {
         return Err("FFprobe không thể đọc video export.".into());
@@ -1506,6 +1501,9 @@ fn validate_output(
         .iter()
         .find(|stream| stream["codec_type"] == "video")
         .ok_or("Video export thiếu video stream.")?;
+    if video["codec_name"].as_str() != Some(expected_codec.name()) {
+        return Err("Codec của video export không khớp với cấu hình đã chọn.".into());
+    }
     if video["width"].as_u64() != Some(width as u64)
         || video["height"].as_u64() != Some(height as u64)
     {
@@ -1520,7 +1518,7 @@ fn validate_output(
                 .and_then(|value| value.parse::<f64>().ok())
         })
         .ok_or("Không đọc được thời lượng video export.")?;
-    if duration <= 0.0 || (duration - expected_duration).abs() > expected_duration.max(2.0) * 0.03 {
+    if !duration.is_finite() || !expected_duration.is_finite() || duration <= 0.0 || (duration - expected_duration).abs() > ((expected_duration * 0.001).clamp(0.15, 2.0)) {
         return Err("Thời lượng video export không hợp lệ hoặc lệch quá mức so với nguồn.".into());
     }
     let audio = streams.iter().any(|stream| stream["codec_type"] == "audio");
@@ -1566,28 +1564,10 @@ fn write_history(
     project_id: &str,
     item: ExportHistoryEntry,
 ) -> Result<(), String> {
-    let root = store.project_directory(project_id)?;
-    let path = root.join("exports").join("history.json");
-    let mut items = if path.exists() {
-        serde_json::from_slice::<Vec<ExportHistoryEntry>>(
-            &fs::read(&path).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| format!("Export history lỗi: {error}"))?
-    } else {
-        Vec::new()
-    };
-    items.insert(0, item);
-    items.truncate(100);
-    let mut temp =
-        tempfile::NamedTempFile::new_in(path.parent().ok_or("Thư mục history không hợp lệ.")?)
-            .map_err(|error| error.to_string())?;
-    temp.write_all(&serde_json::to_vec_pretty(&items).map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())?;
-    temp.as_file()
-        .sync_all()
-        .map_err(|error| error.to_string())?;
-    temp.persist(&path)
-        .map_err(|error| format!("Không thể lưu export history: {}", error.error))?;
+    let path=store.data_directory(project_id,"exports")?.join("history.json");
+    let mut items=history(store,project_id)?;
+    items.insert(0,item);items.truncate(100);
+    crate::recovery_store::write(&path,&serde_json::to_vec_pretty(&items).map_err(|e|e.to_string())?)?;
     Ok(())
 }
 
@@ -2054,6 +2034,7 @@ mod tests {
             height,
             project.source.duration.unwrap(),
             true,
+            codec,
         )
         .unwrap();
         assert!(fs::metadata(&output_path).unwrap().len() > 2048);

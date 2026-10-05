@@ -1,3 +1,9 @@
+mod file_integrity;
+mod disk_space;
+mod startup_recovery;
+mod app_session;
+mod app_error;
+mod recovery_store;
 mod worker_manager;
 mod runtime_registry;
 mod asr_service;
@@ -33,7 +39,7 @@ mod video_tools_service;
 use tauri::Manager;
 
 pub fn run() {
-    tauri::Builder::default()
+    let application=tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(preview::PreviewManager::default())
         .manage(audio::transport::AudioManager::default())
@@ -48,17 +54,21 @@ pub fn run() {
             let app_data = if cfg!(debug_assertions) {
                 std::env::var_os("JC_QA_DATA_DIR").map(std::path::PathBuf::from).unwrap_or(app.path().app_data_dir()?)
             } else { app.path().app_data_dir()? };
+            let session = match app_session::AppSession::begin(&app_data) {
+                Ok(session) => session,
+                Err(error) if error == "JC AI đã mở." => { app.handle().exit(0); return Ok(()); }
+                Err(error) => return Err(std::io::Error::other(error).into()),
+            };
+            app.manage(session);
             runtime_paths::initialize(resource_dir, app_data.clone());
+            let logs = log_service::logs_directory(&app_data);
+            if let Err(error) = log_service::initialize(&logs) { eprintln!("Application file logger unavailable: {error}"); }
             if let Err(error)=optional_runtime::recover_installations() {
                 log::warn!("Optional runtime recovery deferred: {error}");
             }
             std::fs::create_dir_all(app_data.join("projects"))?;
             if let Err(error) = settings_service::migrate_legacy_custom_prompt(app.handle()) {
                 log::warn!("Could not migrate legacy project translation prompt: {error}");
-            }
-            let logs = log_service::logs_directory(&app_data);
-            if let Err(error) = log_service::initialize(&logs) {
-                eprintln!("Application file logger unavailable: {error}");
             }
             match text_removal_service::cleanup_legacy_lama_assets(app.handle()) {
                 Ok(bytes) if bytes > 0 => log::info!("Removed retired LaMa model files ({bytes} bytes)"),
@@ -74,16 +84,31 @@ pub fn run() {
             app.state::<job_service::JobStore>()
                 .initialize(path)
                 .map_err(std::io::Error::other)?;
-            std::panic::set_hook(Box::new(|info| {
+            let recovered_jobs=app.state::<job_service::JobStore>().list().unwrap_or_default();
+            let projects=project_service::ProjectStore::new(app_data.join("projects"));
+            std::thread::spawn(move || startup_recovery::cleanup(&projects,&recovered_jobs));
+            let crash_directory=app_data.join("crashes");
+            std::panic::set_hook(Box::new(move |info| {
                 let location = info
                     .location()
                     .map(|location| format!("{}:{}", location.file(), location.line()))
                     .unwrap_or_else(|| "unknown location".to_string());
                 log::error!("Application panic at {location}; panic payload omitted from logs");
+                // Local only: omit panic payload, transcripts, credentials and
+                // user paths. Diagnostics bundles never copy raw crash files.
+                if std::fs::create_dir_all(&crash_directory).is_ok() {
+                    let path=crash_directory.join(format!("crash-{}.json",uuid::Uuid::new_v4()));
+                    let report=serde_json::json!({"code":"APP_PANIC","sessionId":app_session::id(),"appVersion":env!("CARGO_PKG_VERSION"),"commit":option_env!("GIT_COMMIT"),"location":location,"date":chrono::Utc::now().to_rfc3339(),"backtrace":std::backtrace::Backtrace::force_capture().to_string()});
+                    if let Ok(bytes)=serde_json::to_vec_pretty(&report) {
+                        use std::io::Write;
+                        if let Ok(mut file)=std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {let _=file.write_all(&bytes).and_then(|_|file.sync_all());}
+                    }
+                }
             }));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::get_recovery_notices,
             audio::commands::audio_preview_open,
             audio::commands::audio_preview_close,
             audio::commands::audio_preview_status,
@@ -103,6 +128,8 @@ pub fn run() {
             commands::install_optional_runtime,
             commands::clear_ai_installation_cache,
             commands::get_runtime_health,
+            commands::get_session_status,
+            commands::report_frontend_error,
             commands::export_diagnostics,
             commands::list_projects,
             commands::create_project,
@@ -188,7 +215,19 @@ pub fn run() {
             commands::open_cache_folder,
             commands::open_model_folder
         ])
-        .build(tauri::generate_context!())
-        .expect("failed to build JC AI")
-        .run(|app,event| { if matches!(event,tauri::RunEvent::Exit) { app.state::<preview::PreviewManager>().close(None,None); app.state::<audio::transport::AudioManager>().close(None); worker_manager::shutdown(); } });
+        .build(tauri::generate_context!());
+    let application=match application {
+        Ok(application)=>application,
+        Err(error)=>{
+            log::error!("Application startup failed: {}",log_service::redact(&error.to_string()));
+            #[cfg(windows)] unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW,MB_OK,MB_ICONERROR};
+                let message:Vec<u16>="JC AI không mở được dữ liệu ứng dụng. Hãy kiểm tra quyền ghi và dung lượng ổ đĩa; dữ liệu hiện có được giữ nguyên.".encode_utf16().chain(Some(0)).collect();
+                let title:Vec<u16>="JC AI".encode_utf16().chain(Some(0)).collect();
+                MessageBoxW(None,windows::core::PCWSTR(message.as_ptr()),windows::core::PCWSTR(title.as_ptr()),MB_OK|MB_ICONERROR);
+            }
+            return;
+        }
+    };
+    application.run(|app,event| { if matches!(event,tauri::RunEvent::Exit) { app.state::<preview::PreviewManager>().close(None,None); app.state::<audio::transport::AudioManager>().close(None); worker_manager::shutdown(); if let Some(session)=app.try_state::<app_session::AppSession>() { if let Err(error)=session.finish() { log::warn!("Session shutdown marker could not be saved: {error}"); } } } });
 }

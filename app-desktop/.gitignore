@@ -28,3 +28,17 @@ src-tauri/resources/optional-runtime/wheels/
 src-tauri/resources/optional-runtime/THIRD_PARTY_NOTICES.txt
 .DS_Store
 Thumbs.db
+
+# Private credentials, diagnostic dumps, models and install caches
+.env
+.env.*
+!.env.example
+cookies*.txt
+*.pem
+*.pfx
+*.key
+models/
+cache/
+runtimes/
+logs/
+crashes/

@@ -176,3 +176,11 @@ Unit tests không tải model và không gọi VieNeu thật. VieNeu inference e
 ## Audio Engine v2 (Task 7)
 
 Preview Windows và export dùng chung Rust audio mixer. Kiến trúc, kết quả kiểm thử, benchmark và giới hạn hiện tại: [TASK_07_AUDIO_ENGINE.md](TASK_07_AUDIO_ENGINE.md).
+
+
+## Production stability — Task 10
+
+Bản beta `0.1.14-beta.1` thêm backup/khôi phục JSON, kiểm tra lưu khi đóng,
+lịch sử job gián đoạn, export an toàn và chẩn đoán có lọc thông tin riêng tư.
+Xem [báo cáo và release gates](docs/TASK_10_PRODUCTION_STABILITY.md).
+Không coi kết quả trên CPU/Intel là kiểm thử NVIDIA/AMD hoặc cài đặt trên máy sạch.

@@ -74,3 +74,7 @@ export function mergeVisualProject(updated: Project) {
   setCurrentProject((current) => current?.id === updated.id ? merged : current);
   setProjects((items) => items.map((item) => item.id === updated.id ? merged : item));
 }
+
+export async function flushAllVisualSettings() {
+  for (const projectId of [...pending.keys()]) await flushVisualSettings(projectId);
+}

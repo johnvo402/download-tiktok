@@ -1019,7 +1019,7 @@ export default function SettingsView() {
             <div class="settings-card about-card">
               <SettingRow icon={<Sparkles size={17} />} title="JC AI" description="Ứng dụng dịch và lồng tiếng video trên Windows."><span class="version-chip">{runtimeHealth()?.appVersion ?? '…'}</span></SettingRow>
               <div class="settings-row-divider" />
-              <SettingRow icon={<SlidersHorizontal size={17} />} title="Phiên bản phát hành" description="Thông tin phiên bản để hỗ trợ khi cần."><span class="version-chip">{runtimeHealth()?.buildCommit ?? '—'} · {runtimeHealth()?.os ?? '—'} {runtimeHealth()?.architecture ?? ''}</span></SettingRow>
+              <SettingRow icon={<SlidersHorizontal size={17} />} title="Phiên bản phát hành" description="Thông tin phiên bản để hỗ trợ khi cần."><span class="version-chip">{runtimeHealth()?.releaseChannel ?? '—'} · {runtimeHealth()?.buildDate?.slice(0,10) ?? '—'} · {runtimeHealth()?.buildCommit?.slice(0,8) ?? '—'} · {runtimeHealth()?.os ?? '—'} {runtimeHealth()?.architecture ?? ''}</span></SettingRow>
               <div class="settings-row-divider" />
               <SettingRow icon={<Cpu size={17} />} title="Xử lý video" description="Dùng để đọc, xem trước và xuất video."><span class="version-chip">{runtimeHealth()?.ffmpegVersion ?? 'Không khả dụng'}</span></SettingRow>
               <div class="settings-row-divider" />

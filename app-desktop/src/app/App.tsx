@@ -1,3 +1,8 @@
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { registerSaveTask, flushPendingSaves } from './save-guard';
+import { flushAllVisualSettings } from '../features/overlays/overlay-state';
+import { setNotice } from './project-state';
 import { Route, Router } from '@solidjs/router';
 import { createEffect, createSignal, lazy, onCleanup, onMount } from 'solid-js';
 import type { JSX } from 'solid-js';
@@ -32,7 +37,33 @@ export default function App() {
   let minimumSplashTimer: number | undefined;
   let dismissSplashTimer: number | undefined;
   let alive = true;
+  let allowClose = false;
+  let closing = false;
+  let unlistenJobWarning: (()=>void) | undefined;
+  let unlistenClose: (() => void) | undefined;
+  const unregisterVisualSave = registerSaveTask('visual-settings', flushAllVisualSettings);
+  const reportError = (kind: string, message: string) => { if (isTauri()) void invoke('report_frontend_error', { kind, message }).catch(() => undefined); };
+  const onError = (event: ErrorEvent) => reportError('error', event.message);
+  const onRejection = (event: PromiseRejectionEvent) => reportError('unhandledrejection', event.reason instanceof Error ? event.reason.message : 'Unhandled rejection');
+  const onRecovery = (event: Event) => setNotice({kind:'info',message:(event as CustomEvent<string>).detail});
   onMount(() => {
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onRejection);
+    window.addEventListener('jc-data-recovered', onRecovery);
+    if (isTauri()) {
+      void getCurrentWindow().onCloseRequested(event => {
+        if (allowClose) return;
+        event.preventDefault();
+        if (closing) return;
+        closing = true;
+        void flushPendingSaves().then(() => { allowClose = true; return getCurrentWindow().close(); })
+          .catch((error: unknown) => { closing = false; allowClose = false; setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Chưa lưu được thay đổi. Ứng dụng được giữ mở để thử lại.' }); });
+      }).then(unlisten => { if (alive) unlistenClose = unlisten; else unlisten(); }).catch(() => setNotice({kind:'error', message:'Không thiết lập được kiểm tra lưu khi đóng. Hãy lưu thay đổi trước khi thoát ứng dụng.'}));
+      void invoke<{previousSessionInterrupted: boolean}>('get_session_status').then(status => {
+        if (status.previousSessionInterrupted) setNotice({ kind: 'info', message: 'Phiên trước đã dừng bất ngờ. Các tác vụ chưa xong được đánh dấu gián đoạn; bạn có thể thử lại trong hàng đợi.' });
+      }).catch(() => undefined);
+    }
+    void listen<string>('job-history-warning',event => setNotice({kind:'error',message:event.payload})).then(unlisten => {if(alive) unlistenJobWarning=unlisten; else unlisten();}).catch(() => undefined);
     minimumSplashTimer = window.setTimeout(() => setMinimumSplashElapsed(true), 520);
     void listen<TranscriptionEvent>('transcription-progress', (event) => setTranscriptionEvent(event.payload))
       .then((unlisten) => {
@@ -60,6 +91,12 @@ export default function App() {
   });
   onCleanup(() => {
     alive = false;
+    unregisterVisualSave();
+    unlistenClose?.();
+    unlistenJobWarning?.();
+    window.removeEventListener('error', onError);
+    window.removeEventListener('unhandledrejection', onRejection);
+    window.removeEventListener('jc-data-recovered', onRecovery);
     if (minimumSplashTimer !== undefined) window.clearTimeout(minimumSplashTimer);
     if (dismissSplashTimer !== undefined) window.clearTimeout(dismissSplashTimer);
     unlistenTranscription?.();

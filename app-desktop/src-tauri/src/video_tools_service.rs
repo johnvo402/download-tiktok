@@ -6,14 +6,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "webm", "m4v", "avi"];
@@ -232,12 +232,7 @@ pub fn cancel(jobs: &VideoToolsJobs, job_id: &str) -> Result<bool, String> {
 
 pub fn default_drama_directory(store: &ProjectStore, project_id: &str) -> Result<String, String> {
     store.get(project_id)?;
-    let project_root = store.project_directory(project_id)?;
-    let directory = project_root.join("media").join("tiktok-drama");
-    fs::create_dir_all(&directory)
-        .map_err(|error| format!("Không thể tạo thư mục TikTok trong dự án: {error}"))?;
-    ensure_child_directory(&project_root, &directory)
-        .map(|path| path.to_string_lossy().into_owned())
+    store.data_directory(project_id,"media/tiktok-drama").map(|path|path.to_string_lossy().into_owned())
 }
 
 pub fn inspect_tiktok_cookie_file(cookie_file: &str) -> Result<TikTokCookieInfo, String> {
@@ -294,8 +289,7 @@ pub fn inspect_tiktok_cookie_file(cookie_file: &str) -> Result<TikTokCookieInfo,
 }
 
 fn tiktok_browser_profile_directory(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
+    crate::runtime_paths::data_dir(app)
         .map(|directory| directory.join("browser-profiles").join("tiktok"))
         .map_err(|error| format!("Không xác định được nơi lưu phiên TikTok: {error}"))
 }
@@ -329,7 +323,7 @@ pub fn start_tiktok_browser_login(
     let job_id = Uuid::new_v4().to_string();
     let cancelled = Arc::new(AtomicBool::new(false));
     insert_job(jobs, &job_id, &project_id, cancelled.clone())?;
-    crate::job_service::register_job(&app, job_id.clone(), project_id.clone(), project.name, "tiktok_cookie_login", &["network", "browser"], None);
+    crate::job_service::register_job(&app, job_id.clone(), project_id.clone(), project.name, "tiktok_cookie_login", &["network", "browser"], None).map_err(|error| {if let Ok(mut entries)=jobs.inner.lock() {entries.remove(&job_id);} error})?;
     emit_video_tool_event(&app, VideoToolEvent {
         project_id: project_id.clone(), job_id: job_id.clone(), status: "queued".into(), progress: 0.0,
         message: "Đang chuẩn bị cửa sổ đăng nhập TikTok…".into(), stage: Some("queued".into()), details: None, output: None,
@@ -407,7 +401,7 @@ fn probe_merge_video(path: &Path) -> Result<MergeVideoInfo, String> {
             "-of", "json",
         ])
         .arg(path)
-        .output()
+        .output_contained(Duration::from_secs(30))
         .map_err(|error| format!("Không chạy được FFprobe: {error}"))?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -481,16 +475,6 @@ fn canonical_directory(value: &str, label: &str) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
-fn ensure_child_directory(project_root: &Path, child: &Path) -> Result<PathBuf, String> {
-    let canonical_root = fs::canonicalize(project_root).map_err(|error| format!("Không xác minh được thư mục dự án: {error}"))?;
-    let canonical_child = fs::canonicalize(child).map_err(|error| format!("Không xác minh được thư mục lưu: {error}"))?;
-    if canonical_child == canonical_root || !canonical_child.starts_with(&canonical_root) {
-        return Err("Thư mục lưu mặc định phải nằm bên trong dự án.".into());
-    }
-    ensure_writable(&canonical_child)?;
-    Ok(canonical_child)
-}
-
 fn resolve_output_directory(store: &ProjectStore, project_id: &str, requested: Option<&str>, default: fn(&ProjectStore, &str) -> Result<String, String>) -> Result<PathBuf, String> {
     store.get(project_id)?;
     let Some(value) = requested.map(str::trim).filter(|value| !value.is_empty()) else {
@@ -550,7 +534,7 @@ pub fn start_tiktok_download(
     let request = json!({ "operation": "tiktok_drama_download", "url": url, "outputDirectory": destination, "cookieFile": cookie_file, "browserProfileDirectory": browser_profile, "useBrowserCookies": use_browser_cookies });
     let cancelled = Arc::new(AtomicBool::new(false));
     insert_job(jobs, &job_id, &project_id, cancelled.clone())?;
-    crate::job_service::register_job(&app, job_id.clone(), project_id.clone(), project.name, "tiktok_download", &["network", "browser", "disk"], None);
+    crate::job_service::register_job(&app, job_id.clone(), project_id.clone(), project.name, "tiktok_download", &["network", "browser", "disk"], None).map_err(|error| {if let Ok(mut entries)=jobs.inner.lock() {entries.remove(&job_id);} error})?;
     emit_video_tool_event(&app, VideoToolEvent { project_id: project_id.clone(), job_id: job_id.clone(), status: "queued".into(), progress: 0.0, message: "Đang xếp hàng tải TikTok Drama…".into(), stage: Some("queued".into()), details: None, output: None });
 
     let jobs_for_thread = jobs.clone();
@@ -609,7 +593,7 @@ pub fn start_video_merge(
     let cancelled = Arc::new(AtomicBool::new(false));
     insert_job(jobs, &job_id, &project_id, cancelled.clone())?;
     let resources: &[&str] = if encoder != VideoEncoder::Cpu { &["cpu", "gpu", "ffmpeg", "disk"] } else { &["cpu", "ffmpeg", "disk"] };
-    crate::job_service::register_job(&app, job_id.clone(), project_id.clone(), project.name, "video_merge", resources, None);
+    crate::job_service::register_job(&app, job_id.clone(), project_id.clone(), project.name, "video_merge", resources, None).map_err(|error| {if let Ok(mut entries)=jobs.inner.lock() {entries.remove(&job_id);} error})?;
     emit_video_tool_event(&app, VideoToolEvent { project_id: project_id.clone(), job_id: job_id.clone(), status: "queued".into(), progress: 0.0, message: "Đang chuẩn bị gộp video…".into(), stage: Some("queued".into()), details: None, output: None });
 
     let jobs_for_thread = jobs.clone();
@@ -734,11 +718,12 @@ fn run_tiktok_worker(
     cancelled: &AtomicBool,
 ) -> Result<(), String> {
     let mut child = crate::runtime_paths::downloader_command(worker)
+        .env("JC_FFPROBE_PATH", crate::runtime_paths::resolve_ffprobe()?)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
         .spawn_worker().map_err(|error| format!("Không thể khởi chạy downloader worker: {error}. Hãy kiểm tra thành phần tải video trong ứng dụng."))?;
     let stdout = child.stdout.take().ok_or_else(|| "Không mở được output của downloader.".to_string())?;
-    let (tx, rx) = mpsc::channel::<String>();
-    thread::spawn(move || for line in BufReader::new(stdout).lines().flatten() { if tx.send(line).is_err() { break; } });
+    let (tx, rx) = mpsc::sync_channel::<String>(256);
+    thread::spawn(move || for line in crate::worker_manager::bounded_lines(BufReader::new(stdout),8*1024*1024).map_while(Result::ok) { if tx.send(line).is_err() { break; } });
     let mut stdin = child.stdin.take().ok_or_else(|| "Không mở được input của downloader.".to_string())?;
     let mut bytes = serde_json::to_vec(request).map_err(|error| error.to_string())?;
     bytes.push(b'\n');
@@ -810,6 +795,7 @@ fn cleanup_tiktok_download_partials(request: &Value) {
         if !file_type.is_file() || !is_tiktok_partial_name(&path) {
             continue;
         }
+        let _ = fs::remove_file(path.with_extension("partial.json"));
         let _ = fs::remove_file(path);
     }
 }
@@ -963,7 +949,30 @@ fn run_merge_job(
         // A project may have been removed while FFmpeg was running; do not report success
         // against a stale job or leave a file in a recreated project directory.
         store.get(project_id).map_err(|_| "Dự án đã bị xóa trong lúc gộp video.".to_string())?;
-        fs::rename(&temporary, &output).map_err(|error| format!("Không thể hoàn tất file gộp: {error}"))?;
+        let file = OpenOptions::new()
+    .read(true)
+    .write(true)
+    .open(&temporary)
+    .map_err(|error| format!(
+        "Không thể mở file gộp để lưu bền vững: {error}"
+    ))?;
+
+file.sync_all()
+    .map_err(|error| format!(
+        "Không thể lưu bền vững file gộp: {error}"
+    ))?;
+
+drop(file);
+
+tempfile::TempPath::try_from_path(&temporary)
+    .map_err(|error| format!(
+        "Không thể quản lý file gộp tạm: {error}"
+    ))?
+    .persist_noclobber(&output)
+    .map_err(|error| format!(
+        "Không thể hoàn tất file gộp mà không ghi đè: {}",
+        error.error
+    ))?;
         Ok(output.clone())
     })();
     let _ = fs::remove_file(&manifest);
@@ -1142,33 +1151,35 @@ fn run_ffmpeg_merge(
     cancelled: &AtomicBool,
 ) -> Result<(), String> {
     let mut command = build_merge_command(videos, logos, manifest, filter_script, temporary_output, stream_copy, video_codec, encoder)?;
-    let mut child = command.spawn().map_err(|error| format!("Không thể khởi chạy FFmpeg để gộp video: {error}"))?;
+    let mut child = command.spawn_contained().map_err(|error| format!("Không thể khởi chạy FFmpeg để gộp video: {error}"))?;
     let stdout = child.stdout.take().ok_or_else(|| "Không mở được tiến trình FFmpeg.".to_string())?;
     let stderr = child.stderr.take().ok_or_else(|| "Không đọc được lỗi FFmpeg.".to_string())?;
-    let (tx, rx) = mpsc::channel::<String>();
-    thread::spawn(move || for line in BufReader::new(stdout).lines().flatten() { if tx.send(line).is_err() { break; } });
+    let (tx, rx) = mpsc::sync_channel::<String>(256);
+    thread::spawn(move || for line in crate::worker_manager::bounded_lines(BufReader::new(stdout),8*1024*1024).map_while(Result::ok) { if tx.send(line).is_err() { break; } });
     let stderr_tail = Arc::new(Mutex::new(VecDeque::<String>::new()));
     let stderr_tail_thread = stderr_tail.clone();
     let stderr_reader = thread::spawn(move || {
-        let mut reader = BufReader::new(stderr);
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match reader.read_line(&mut line) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    if let Ok(mut tail) = stderr_tail_thread.lock() {
-                        tail.push_back(line.trim().to_string());
-                        while tail.len() > 12 { tail.pop_front(); }
-                    }
-                }
+        for line in crate::worker_manager::bounded_lines(BufReader::new(stderr),64*1024).map_while(Result::ok) {
+            if let Ok(mut tail) = stderr_tail_thread.lock() {
+                tail.push_back(line.trim().to_string());
+                while tail.len() > 12 { tail.pop_front(); }
             }
         }
     });
 
     let mut out_time_seconds = 0.0_f64;
     let mut encoded_frames = 0_u64;
+    let mut last_advance = std::time::Instant::now();
+    let mut last_position = (0_u64, 0.0_f64);
     loop {
+        if encoded_frames > last_position.0 || out_time_seconds > last_position.1 {
+            last_advance = std::time::Instant::now(); last_position = (encoded_frames, out_time_seconds);
+        }
+        if last_advance.elapsed() > Duration::from_secs(600) {
+            kill_process_tree(&mut child); let _ = stderr_reader.join();
+            let _ = fs::remove_file(temporary_output);
+            return Err("Gộp video không tiến thêm trong 10 phút; đã dừng an toàn, hãy kiểm tra ổ đĩa và thử lại.".into());
+        }
         if cancelled.load(Ordering::SeqCst) {
             kill_process_tree(&mut child);
             let _ = stderr_reader.join();
@@ -1228,7 +1239,7 @@ fn probe_merge_output(path: &Path) -> Result<(f64, bool, bool, String), String> 
     }
     let output = crate::runtime_paths::ffprobe_command()?
         .args(["-v", "error", "-show_entries", "format=duration:stream=codec_type,codec_name", "-of", "json"])
-        .arg(path).output().map_err(|error| format!("Không chạy được FFprobe để kiểm tra video gộp: {error}"))?;
+        .arg(path).output_contained(Duration::from_secs(30)).map_err(|error| format!("Không chạy được FFprobe để kiểm tra video gộp: {error}"))?;
     if !output.status.success() { return Err("FFprobe không xác minh được file video gộp.".into()); }
     let value: Value = serde_json::from_slice(&output.stdout).map_err(|error| format!("Metadata video gộp không hợp lệ: {error}"))?;
     let duration = value["format"]["duration"].as_str().and_then(|value| value.parse::<f64>().ok())

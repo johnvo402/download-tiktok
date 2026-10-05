@@ -1,7 +1,8 @@
+use crate::worker_manager::WorkerCommandExt;
 use std::{
-    io::{BufRead, BufReader, Read},
+    io::{BufReader, Read},
     path::{Path, PathBuf},
-    process::{Child, Stdio},
+    process::Stdio,
     sync::mpsc,
     thread,
     time::Duration,
@@ -13,7 +14,7 @@ pub struct Frame {
 pub struct SoftwareSource {
     path: PathBuf,
     size: (u32, u32),
-    child: Option<Child>,
+    child: Option<crate::worker_manager::ManagedWorker>,
     rx: Option<mpsc::Receiver<Frame>>,
     threads: Vec<thread::JoinHandle<()>>,
     next: Option<Frame>,
@@ -83,7 +84,7 @@ impl SoftwareSource {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::null())
-            .spawn()
+            .spawn_contained()
             .map_err(|_| "Không mở được video bằng bộ giải mã tương thích.")?;
         let mut out = child.stdout.take().unwrap();
         let err = child.stderr.take().unwrap();
@@ -92,7 +93,7 @@ impl SoftwareSource {
         let length = crate::render::frame::byte_len(self.size.0, self.size.1)?;
         self.threads.push(thread::spawn(move || {
             let mut base = None;
-            for line in BufReader::new(err).lines().map_while(Result::ok) {
+            for line in crate::worker_manager::bounded_lines(BufReader::new(err),8*1024*1024).map_while(Result::ok) {
                 if let Some(config) = line.split("config in time_base:").nth(1) {
                     base = config.split_whitespace().next().and_then(|v| {
                         let (n, d) = v.trim_end_matches(',').split_once('/')?;

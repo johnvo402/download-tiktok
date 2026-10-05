@@ -3,6 +3,8 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 export interface RuntimeHealth {
   appVersion: string;
   buildCommit: string;
+  buildDate: string;
+  releaseChannel: string;
   os: string;
   architecture: string;
   projectStorageAvailable: boolean;

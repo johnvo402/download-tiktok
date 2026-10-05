@@ -10,6 +10,7 @@ export interface OptionalRuntimeStatus {
   nvidiaDetected: boolean;
   featureProfiles: Partial<Record<OptionalFeature, RuntimeProfile>>;
   runtimeVersion: number;
+  health: Partial<Record<OptionalFeature,'ready'|'missing'|'broken'|'update_required'>>;
 }
 
 export interface RuntimeInstallPlan {
@@ -17,7 +18,7 @@ export interface RuntimeInstallPlan {
   missingComponents: { label: string; downloadBytes: number; installedBytes: number }[];
   reusedComponents: string[]; estimatedDownloadBytes: number; estimatedInstalledBytes: number; stagingBytes: number;
 }
-export interface FeatureHealth { feature: OptionalFeature; installed: boolean; verified: boolean; backend: RuntimeProfile | null; message: string }
+export interface FeatureHealth { state:'ready'|'missing'|'broken'|'update_required'; feature: OptionalFeature; installed: boolean; verified: boolean; backend: RuntimeProfile | null; message: string }
 
 export const optionalRuntimeService = {
   status: () => invoke<OptionalRuntimeStatus>('get_optional_runtime_status'),

@@ -1,3 +1,4 @@
+import { flushPendingSaves } from '../../app/save-guard';
 import { A, useLocation, useNavigate, useParams } from '@solidjs/router';
 import { createEffect, createSignal, Show, onCleanup } from 'solid-js';
 import {
@@ -52,9 +53,13 @@ export default function WorkspaceLayout() {
   });
 
   const section = (): Section => params.section === 'import' ? 'import' : 'translate';
+  const leave = async (path: string) => {
+    try { await flushPendingSaves(); navigate(path); }
+    catch (error) { setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Chưa lưu được thay đổi.' }); }
+  };
   const setSection = (next: Section) => {
     if (!params.projectId) return;
-    navigate(`/project/${params.projectId}/${next}`);
+    void leave(`/project/${params.projectId}/${next}`);
   };
 
   const startResize = (event: PointerEvent) => {
@@ -123,13 +128,13 @@ export default function WorkspaceLayout() {
       <div class="workspace-main">
         <header class="workspace-topbar">
           <div class="workspace-breadcrumbs">
-            <A class="back-to-projects" href="/"><ArrowLeft size={15} /><span>Dự án</span></A>
+            <A class="back-to-projects" href="/" onClick={event => { event.preventDefault(); void leave('/'); }}><ArrowLeft size={15} /><span>Dự án</span></A>
             <span class="breadcrumb-divider">/</span>
             <strong>{currentProject()?.name ?? (loading() ? 'Đang mở...' : 'Dự án')}</strong>
           </div>
           <div class="workspace-topbar-right">
             <button class="button button-quiet workspace-settings-button" type="button" onClick={() => setProjectSettingsOpen(true)}><SlidersHorizontal size={14} /> Cài đặt dự án</button>
-            <button class="button button-quiet workspace-settings-button" type="button" onClick={() => navigate(`/settings?returnTo=${encodeURIComponent(location.pathname)}`)}><Settings2 size={14} /> Cài đặt ứng dụng</button>
+            <button class="button button-quiet workspace-settings-button" type="button" onClick={() => void leave(`/settings?returnTo=${encodeURIComponent(location.pathname)}`)}><Settings2 size={14} /> Cài đặt ứng dụng</button>
             <Show when={currentProject()}><button class="button button-quiet workspace-batch-button" type="button" aria-label="Dịch hàng loạt video" onClick={() => setBatchOpen(true)} title="Thêm video và xử lý lần lượt bằng cấu hình mẫu"><Layers3 size={14} /> Dịch hàng loạt</button></Show>
             <Show when={currentProject()?.source.videoPath}>
               <button class="button button-primary workspace-export-button" type="button" onClick={() => setExportOpen(true)}><Download size={14} /> Export</button>

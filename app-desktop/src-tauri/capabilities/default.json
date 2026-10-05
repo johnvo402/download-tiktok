@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default permissions for the JC AI application.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": ["core:default", "core:window:allow-close", "core:window:allow-destroy", "dialog:allow-open"]
 }

@@ -1,0 +1,97 @@
+{
+  "measuredAt": "2026-10-04T14:51:31.680Z",
+  "isolatedRoot": "D:\\Tiktok\\tool-dowload\\app-desktop\\.release-cache\\task10-desktop\\48ee32be-3a7e-4af6-bf05-1d868569f025",
+  "channel": "beta",
+  "checks": [
+    {
+      "name": "A second desktop instance cannot open the same data root",
+      "passed": true
+    },
+    {
+      "name": "Immediate desktop close flushes edited transcript and marks clean shutdown",
+      "passed": true
+    },
+    {
+      "name": "Failed close save keeps app open and draft; retry saves after storage repaired",
+      "passed": true
+    },
+    {
+      "name": "Corrupt transcript recovered from valid rotating backup with notice",
+      "passed": true
+    },
+    {
+      "name": "Relink identical missing source preserves transcript",
+      "passed": true
+    },
+    {
+      "name": "Real CPU H264/AAC export validates duration and preserves source",
+      "passed": true,
+      "wallMs": 2549.6077000000005,
+      "sizeBytes": 94279
+    },
+    {
+      "name": "Existing final export is not overwritten",
+      "passed": true
+    },
+    {
+      "name": "Killing desktop terminates its owned FFmpeg children",
+      "passed": true
+    },
+    {
+      "name": "Restart marks interrupted export, cleans owned partials, preserves completed output",
+      "passed": true
+    },
+    {
+      "name": "Retry requires explicit action and cancellation leaves no final output",
+      "passed": true
+    },
+    {
+      "name": "Local shareable diagnostics excludes project names, transcript and user paths",
+      "passed": true,
+      "file": "\\\\?\\D:\\Tiktok\\tool-dowload\\app-desktop\\.release-cache\\task10-desktop\\48ee32be-3a7e-4af6-bf05-1d868569f025\\JC-AI-Diagnostics-20261004-145206-cc021e6ed43e40b387c7b6a5390f2a4c"
+    },
+    {
+      "name": "Desktop opens 1000-segment editor on 2-hour source",
+      "passed": true,
+      "editorReadyMs": 3054.7343000000037,
+      "treeRssBytes": 1410084864,
+      "definition": "Warm debug/Vite, all 1000 editors present; not sustained playback FPS or 2-hour export."
+    }
+  ],
+  "startupDebugWarmMs": 7144.4169,
+  "initialProcessMemory": [
+    {
+      "name": "ai-video-localization.exe",
+      "rssBytes": 37511168
+    },
+    {
+      "name": "conhost.exe",
+      "rssBytes": 9011200
+    },
+    {
+      "name": "msedgewebview2.exe",
+      "rssBytes": 145104896
+    },
+    {
+      "name": "msedgewebview2.exe",
+      "rssBytes": 13864960
+    },
+    {
+      "name": "msedgewebview2.exe",
+      "rssBytes": 202850304
+    },
+    {
+      "name": "msedgewebview2.exe",
+      "rssBytes": 60555264
+    },
+    {
+      "name": "msedgewebview2.exe",
+      "rssBytes": 23973888
+    },
+    {
+      "name": "msedgewebview2.exe",
+      "rssBytes": 214634496
+    }
+  ],
+  "passed": true
+}

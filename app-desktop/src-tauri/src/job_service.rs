@@ -2,7 +2,6 @@ use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -51,6 +50,8 @@ struct JobStoreData {
     file: Option<PathBuf>,
     jobs: Vec<JobRecord>,
     last_event_persist: Option<Instant>,
+    persistence_failed: bool,
+    pending_warning: Option<String>,
 }
 
 impl JobStore {
@@ -61,28 +62,23 @@ impl JobStore {
         fs::create_dir_all(parent)
             .map_err(|error| format!("Không thể tạo thư mục lưu job history: {error}"))?;
 
-        let mut jobs = if file.exists() {
-            match fs::read(&file)
-                .map_err(|error| format!("Không thể đọc job history: {error}"))
-                .and_then(|bytes| {
-                    serde_json::from_slice::<Vec<JobRecord>>(&bytes)
-                        .map_err(|error| format!("Job history không hợp lệ: {error}"))
-                }) {
+        let mut jobs = if file.exists() || crate::recovery_store::backup_path(&file,1).exists() {
+            match crate::recovery_store::read(&file, None, |bytes| serde_json::from_slice::<Vec<JobRecord>>(bytes).map_err(|_| "Job history không hợp lệ.".to_string())) {
                 Ok(jobs) => jobs,
-                Err(_) => {
-                    let corrupt = file
-                        .with_extension(format!("corrupt-{}", Utc::now().format("%Y%m%d%H%M%S")));
-                    let _ = fs::rename(&file, corrupt);
+                Err(error) => {
+                    // History is not project data. Preserve unreadable data and
+                    // continue only when an invalid JSON file can be backed up.
+                    let bytes=fs::read(&file).map_err(|e|e.to_string())?;
+                    if serde_json::from_slice::<Vec<JobRecord>>(&bytes).is_ok() { return Err(error); }
+                    crate::recovery_store::preserve_corrupt(&file,&bytes)?;
+                    log::warn!("Invalid job history preserved; starting empty history");
                     Vec::new()
                 }
             }
-        } else {
-            Vec::new()
-        };
-
+        } else { Vec::new() };
         let now = timestamp();
         for job in &mut jobs {
-            if matches!(job.status.as_str(), "running" | "queued" | "waiting") {
+            if matches!(job.status.as_str(), "running" | "queued" | "waiting" | "cancelling") {
                 job.status = "interrupted".into();
                 job.completed_at = Some(now.clone());
                 job.message = "Ứng dụng đã đóng trước khi tác vụ hoàn tất. Có thể thử lại.".into();
@@ -104,15 +100,15 @@ impl JobStore {
         persist(&state)
     }
 
-    pub fn register(&self, record: JobRecord) {
-        if let Ok(mut state) = self.inner.lock() {
-            state.jobs.retain(|job| job.id != record.id);
-            state.jobs.push(record.clone());
-            trim_history(&mut state.jobs);
-            let _ = persist(&state);
-        }
+    pub fn register(&self, record: JobRecord) -> Result<(),String> {
+        let mut state=self.inner.lock().map_err(|_|"Không truy cập được lịch sử tác vụ.")?;
+        let previous=state.jobs.clone();
+        state.jobs.retain(|job|job.id!=record.id);state.jobs.push(record);trim_history(&mut state.jobs);
+        if let Err(error)=persist(&state) {state.jobs=previous;return Err(format!("Không lưu được lịch sử tác vụ; chưa bắt đầu xử lý. {error}"));}
+        Ok(())
     }
 
+    pub fn take_warning(&self) -> Option<String> {self.inner.lock().ok()?.pending_warning.take()}
     pub fn get(&self, id: &str) -> Result<JobRecord, String> {
         self.inner
             .lock()
@@ -164,6 +160,9 @@ impl JobStore {
         let now = timestamp();
         let mut state = self.inner.lock().ok()?;
         let record = state.jobs.iter_mut().find(|job| job.id == id)?;
+        // Delayed events from a stopped attempt must not resurrect a job.
+        if is_terminal(&record.status) { return None; }
+        if record.status == "cancelling" && !is_terminal(status) { return None; }
         record.status = status.into();
         record.message = event
             .get("message")
@@ -181,8 +180,8 @@ impl JobStore {
             let code = event
                 .get("errorCode")
                 .and_then(Value::as_str)
-                .unwrap_or("JOB_FAILED")
-                .to_string();
+                .map(str::to_string)
+                .unwrap_or_else(|| crate::app_error::AppError::classify(&record.message,crate::app_error::ErrorContext::default()).code);
             record.error = Some(JobError {
                 code,
                 message: record.message.clone(),
@@ -205,7 +204,7 @@ impl JobStore {
                 last.elapsed() >= std::time::Duration::from_millis(500)
             });
         if should_persist {
-            let _ = persist(&state);
+            persist_event(&mut state);
             state.last_event_persist = Some(Instant::now());
         }
         Some(result)
@@ -222,7 +221,7 @@ impl JobStore {
             if let Some(job) = state.jobs.iter_mut().find(|job| job.id == new_id) {
                 job.retry_of = Some(old_id.to_string());
                 job.attempt = previous_attempt;
-                let _ = persist(&state);
+                persist_event(&mut state);
             }
         }
     }
@@ -243,7 +242,7 @@ impl JobStore {
                     retryable: false,
                 });
             }
-            let _ = persist(&state);
+            persist_event(&mut state);
         }
     }
 }
@@ -256,7 +255,7 @@ pub fn register_job(
     job_type: &str,
     resources: &[&str],
     retry_payload: Option<Value>,
-) {
+) -> Result<(),String> {
     let record = JobRecord {
         id,
         project_id: Some(project_id),
@@ -279,9 +278,10 @@ pub fn register_job(
         retry_payload,
     };
     if let Some(store) = app.try_state::<JobStore>() {
-        store.register(record.clone());
+        store.register(record.clone())?;
         let _ = app.emit("job-record-updated", record);
     }
+    Ok(())
 }
 
 pub fn sync_app_event(app: &AppHandle, event_type: &str, event: &impl Serialize) {
@@ -294,10 +294,25 @@ pub fn sync_app_event(app: &AppHandle, event_type: &str, event: &impl Serialize)
     if let Some(record) = store.sync_event(event_type, &value) {
         let _ = app.emit("job-record-updated", record);
     }
+    if let Some(message)=store.take_warning() {let _=app.emit("job-history-warning",message);}
 }
 
+/// Model/runtime installs have a journal even though pip/extraction cannot be
+/// safely cancelled at every step. No credentials or request payloads are saved.
+pub fn maintenance<T>(app: &AppHandle, job_type: &str, action: impl FnOnce() -> Result<T,String>) -> Result<T,String> {
+    let id=uuid::Uuid::new_v4().to_string();
+    let record=JobRecord {id:id.clone(),project_id:None,project_name:None,job_type:job_type.into(),status:"running".into(),priority:"normal".into(),resources:vec!["network".into(),"disk".into()],progress:0.0,
+        message:"Đang cài thành phần. Không thể dừng ở bước cài đặt này.".into(),created_at:timestamp(),started_at:Some(timestamp()),completed_at:None,attempt:1,retry_of:None,error:None,retry_payload:None};
+    if let Some(store)=app.try_state::<JobStore>() {store.register(record.clone())?;let _=app.emit("job-record-updated",record);}
+    let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(action)).unwrap_or_else(|_|Err("Bộ cài đã dừng bất ngờ. Bản cài đang dùng được giữ nguyên; hãy thử lại trong Cài đặt.".into()));
+    let message=result.as_ref().err().cloned().unwrap_or_else(||"Đã cài thành phần được chọn.".into());
+    sync_app_event(app,"maintenance",&json_value(&id,if result.is_ok(){"completed"}else{"failed"},&message));
+    result
+}
+fn json_value(id: &str,status: &str,message: &str) -> Value {serde_json::json!({"jobId":id,"status":status,"message":message})}
+
 pub fn is_active(status: &str) -> bool {
-    matches!(status, "queued" | "waiting" | "running")
+    matches!(status, "queued" | "waiting" | "running" | "cancelling")
 }
 
 pub fn timestamp() -> String {
@@ -309,6 +324,7 @@ fn normalized_status(event_type: &str, status: &str) -> &'static str {
         ("transcription", "progress") | (_, "running") => "running",
         (_, "queued") => "queued",
         (_, "waiting") => "waiting",
+        (_, "cancelling") => "cancelling",
         (_, "completed") => "completed",
         (_, "partial") => "partial",
         (_, "failed") => "failed",
@@ -370,6 +386,17 @@ fn trim_history(jobs: &mut Vec<JobRecord>) {
     });
 }
 
+fn persist_event(state:&mut JobStoreData) {
+    match persist(state) {
+        Ok(())=>state.persistence_failed=false,
+        Err(error)=>{
+            log::error!("Job history save failed: {error}");
+            if !state.persistence_failed {state.pending_warning=Some("Không lưu được lịch sử tác vụ. Dữ liệu đã xử lý được giữ lại, nhưng tiến trình gần nhất có thể không khôi phục sau khi đóng. Hãy kiểm tra dung lượng và quyền ghi.".into());}
+            state.persistence_failed=true;
+        }
+    }
+}
+
 fn persist(state: &JobStoreData) -> Result<(), String> {
     let Some(path) = state.file.as_deref() else {
         return Ok(());
@@ -381,16 +408,7 @@ fn persist(state: &JobStoreData) -> Result<(), String> {
         .map_err(|error| format!("Không thể tạo thư mục lưu job history: {error}"))?;
     let contents = serde_json::to_vec_pretty(&state.jobs)
         .map_err(|error| format!("Không thể mã hóa job history: {error}"))?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .map_err(|error| format!("Không thể tạo file job history tạm: {error}"))?;
-    temporary
-        .write_all(&contents)
-        .and_then(|_| temporary.as_file().sync_all())
-        .map_err(|error| format!("Không thể ghi job history: {error}"))?;
-    temporary
-        .persist(path)
-        .map_err(|error| format!("Không thể lưu job history: {}", error.error))?;
-    Ok(())
+    crate::recovery_store::write(path, &contents)
 }
 
 #[cfg(test)]
@@ -398,6 +416,29 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tempfile::tempdir;
+
+    #[test]
+    fn failed_initial_journal_write_does_not_register_a_job() {
+        let temp=tempdir().unwrap();let store=JobStore::default();store.inner.lock().unwrap().file=Some(temp.path().join("blocked.json"));
+        fs::create_dir(temp.path().join("blocked.json")).unwrap();assert!(store.register(record("job","queued")).is_err());assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn stopped_attempt_cannot_be_resurrected_by_late_progress() {
+        let store=JobStore::default();store.register(record("old","cancelled")).unwrap();
+        assert!(store.sync_event("tts",&json!({"jobId":"old","status":"running","progress":0.9})).is_none());
+        assert_eq!(store.get("old").unwrap().status,"cancelled");
+        store.register(record("current","running")).unwrap();
+        store.sync_event("cancel",&json!({"jobId":"current","status":"cancelling"})).unwrap();
+        assert!(store.sync_event("tts",&json!({"jobId":"current","status":"running"})).is_none());
+        assert_eq!(store.sync_event("tts",&json!({"jobId":"current","status":"cancelled"})).unwrap().status,"cancelled");
+    }
+
+    #[test]
+    fn cancelling_jobs_are_interrupted_after_restart() {
+        let dir=tempdir().unwrap();let path=dir.path().join("jobs.json");let first=JobStore::default();first.initialize(path.clone()).unwrap();first.register(record("job","cancelling")).unwrap();
+        let reopened=JobStore::default();reopened.initialize(path).unwrap();assert_eq!(reopened.get("job").unwrap().status,"interrupted");
+    }
 
     fn record(id: &str, status: &str) -> JobRecord {
         JobRecord {
@@ -426,7 +467,7 @@ mod tests {
         let path = temp.path().join("jobs.json");
         let initial = JobStore::default();
         initial.inner.lock().unwrap().file = Some(path.clone());
-        initial.register(record("job-a", "running"));
+        initial.register(record("job-a", "running")).unwrap();
 
         let recovered = JobStore::default();
         recovered.initialize(path).unwrap();
@@ -438,7 +479,7 @@ mod tests {
     #[test]
     fn event_updates_progress_and_terminal_error() {
         let store = JobStore::default();
-        store.register(record("job-a", "queued"));
+        store.register(record("job-a", "queued")).unwrap();
         let updated = store
             .sync_event(
                 "translation",
@@ -456,7 +497,7 @@ mod tests {
         let payload = json!({ "scope":"missing", "segmentIds":[] });
         let mut job = record("job-a", "running");
         job.retry_payload = Some(payload.clone());
-        store.register(job);
+        store.register(job).unwrap();
         assert_eq!(
             store
                 .find_active_duplicate("project-1", "translate", &payload)

@@ -3,9 +3,7 @@ use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use tempfile::NamedTempFile;
 
 const BATCH_QUEUE_FILE: &str = "batch-video-queue.json";
 const QUEUE_SCHEMA_VERSION: u32 = 1;
@@ -42,14 +40,13 @@ pub struct BatchVideoItem {
 
 pub fn load(store: &ProjectStore, project_id: &str) -> Result<Option<BatchVideoQueue>, String> {
     let path = queue_path(store, project_id)?;
-    if !path.exists() {
+    if !path.exists() && !crate::recovery_store::backup_path(&path,1).exists() {
         return Ok(None);
     }
-    let bytes =
-        fs::read(&path).map_err(|error| format!("Không thể đọc hàng đợi video: {error}"))?;
-    let mut queue: BatchVideoQueue = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("Dữ liệu hàng đợi video bị lỗi: {error}"))?;
-    validate(&queue, project_id)?;
+    let mut queue:BatchVideoQueue=crate::recovery_store::read(&path,Some(QUEUE_SCHEMA_VERSION),|bytes|{
+        let queue=serde_json::from_slice(bytes).map_err(|e|format!("Dữ liệu hàng đợi video bị lỗi: {e}"))?;
+        validate(&queue,project_id)?;Ok(queue)
+    })?;
 
     let mut recovered = false;
     for item in &mut queue.items {
@@ -83,8 +80,8 @@ pub fn save(
 
 pub fn clear(store: &ProjectStore, project_id: &str) -> Result<(), String> {
     let path = queue_path(store, project_id)?;
-    if path.exists() {
-        fs::remove_file(path).map_err(|error| format!("Không thể xóa hàng đợi video: {error}"))?;
+    for file in std::iter::once(path.clone()).chain((1..=3).map(|i|crate::recovery_store::backup_path(&path,i))) {
+        if file.exists() {fs::remove_file(file).map_err(|error|format!("Không thể xóa hàng đợi video: {error}"))?;}
     }
     Ok(())
 }
@@ -148,45 +145,13 @@ fn validate(queue: &BatchVideoQueue, project_id: &str) -> Result<(), String> {
 }
 
 fn queue_path(store: &ProjectStore, project_id: &str) -> Result<PathBuf, String> {
-    // Resolve through ProjectStore first: this validates the UUID and any registered custom root.
-    let project = store.get(project_id)?;
-    let project_dir = store.project_directory(&project.id)?;
-    let canonical_project = project_dir
-        .canonicalize()
-        .map_err(|error| format!("Không thể xác minh thư mục dự án: {error}"))?;
-    let cache = canonical_project.join("cache");
-    if !cache.exists() {
-        fs::create_dir_all(&cache)
-            .map_err(|error| format!("Không thể tạo thư mục cache project: {error}"))?;
-    }
-    let metadata = fs::symlink_metadata(&cache)
-        .map_err(|error| format!("Không thể xác minh thư mục cache project: {error}"))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err("Thư mục cache của project không an toàn.".into());
-    }
-    let canonical_cache = cache
-        .canonicalize()
-        .map_err(|error| format!("Không thể xác minh thư mục cache project: {error}"))?;
-    if canonical_cache.parent() != Some(canonical_project.as_path()) {
-        return Err("Thư mục cache nằm ngoài project.".into());
-    }
-    Ok(canonical_cache.join(BATCH_QUEUE_FILE))
+    store.get(project_id)?;
+    Ok(store.data_directory(project_id,"cache")?.join(BATCH_QUEUE_FILE))
 }
 
 fn persist(path: &Path, queue: &BatchVideoQueue) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| "Không xác định được thư mục hàng đợi.".to_string())?;
-    let contents = serde_json::to_vec_pretty(queue)
-        .map_err(|error| format!("Không thể mã hóa hàng đợi video: {error}"))?;
-    let mut temp = NamedTempFile::new_in(parent)
-        .map_err(|error| format!("Không thể tạo file hàng đợi tạm: {error}"))?;
-    temp.write_all(&contents)
-        .and_then(|_| temp.as_file().sync_all())
-        .map_err(|error| format!("Không thể ghi hàng đợi video: {error}"))?;
-    temp.persist(path)
-        .map_err(|error| format!("Không thể lưu hàng đợi video: {}", error.error))?;
-    Ok(())
+    let contents=serde_json::to_vec_pretty(queue).map_err(|e|e.to_string())?;
+    crate::recovery_store::write(path,&contents)
 }
 
 fn timestamp() -> String {

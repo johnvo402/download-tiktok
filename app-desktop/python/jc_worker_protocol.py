@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import logging
+import os
 import sys
 from collections.abc import Callable
 
@@ -25,11 +26,12 @@ def serve(kind: str, version: str, handler: Callable) -> int:
             stream.reconfigure(encoding='utf-8', errors='strict' if stream is sys.stdin else 'backslashreplace')
         except (AttributeError, OSError):
             pass
-    logging.basicConfig(stream=sys.stderr, level=logging.INFO)
+    session_id = os.environ.get('JC_SESSION_ID', 'standalone')[:128]
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format=f'%(levelname)s session={session_id} %(message)s')
     request_id = None
     def emit(message: dict) -> None:
         envelope = {**message, 'protocolVersion': PROTOCOL_VERSION, 'workerVersion': version,
-                    'workerKind': kind, 'requestId': request_id}
+                    'workerKind': kind, 'requestId': request_id, 'sessionId': session_id}
         output.write(json.dumps(sanitize_unicode(envelope), ensure_ascii=False, separators=(',', ':')) + '\n')
         output.flush()
     # Bounded readline avoids allocating an unbounded malicious/malformed request.
