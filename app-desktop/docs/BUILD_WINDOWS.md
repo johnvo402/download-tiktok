@@ -18,7 +18,35 @@ when it is not already available.
   installer output
 
 The AI model weights are not embedded in the installer. They are installed on
-demand from Settings and stored in the operating system app data directory.
+demand from Settings and stored in the data folder selected during installation.
+
+## Application storage
+
+The NSIS storage page defaults to `Documents\JC AI` for new installs. It stores
+the absolute selection as UTF-16LE in `jc-ai-data-dir.txt` next to the app
+executable, and remembers it under the per-user registry key
+`Software\com.ai.video-localization\Storage`. Upgrades/reinstalls reuse this
+selection; older installs default to their existing Roaming app-data folder.
+Selecting another folder does not move existing projects or models. The data
+folder must be writable and outside the app installation directory.
+
+Silent/passive installations can select a folder explicitly:
+
+```powershell
+.\JC-AI-setup.exe /S /DATADIR="D:\JC AI\Data"
+```
+
+The app resolves storage before creating its window, including the WebView2
+profile, and redirects subprocess temporary files to `cache/tmp` within that
+root. An invalid or inaccessible configured folder fails startup instead of
+silently writing elsewhere. Releases without the selection file retain the
+legacy app-data fallback for compatibility with older installations.
+
+Development uses `JC_AI_DATA_DIR` from the process environment, `.env.local`,
+or `.env`, in that order, defaulting to the repository's ignored `.app-data/`.
+Relative paths resolve from the repository root. The existing `JC_QA_DATA_DIR`
+test override has higher priority. Release builds ignore these dev overrides.
+Development/custom roots never migrate caches from a separate installation.
 
 ## Build
 

@@ -39,9 +39,6 @@ pub async fn clear_ai_installation_cache() -> Result<u64, String> {
 pub(crate) fn store(app: &tauri::AppHandle) -> Result<ProjectStore, String> {
     let mut root = crate::runtime_paths::data_dir(app)
         .map_err(|error| format!("Không thể xác định thư mục dữ liệu ứng dụng: {error}"))?;
-    if cfg!(debug_assertions) {
-        if let Some(directory) = std::env::var_os("JC_QA_DATA_DIR") { root = std::path::PathBuf::from(directory); }
-    }
     root.push("projects");
     Ok(ProjectStore::new(root))
 }
@@ -836,7 +833,9 @@ pub async fn preview_tts_voice(
         let _guard = PROJECT_JOB_START_LOCK
             .lock()
             .map_err(|_| "Không thể khóa trạng thái project jobs.".to_string())?;
-        tts_service::preview_voice(app, &jobs, voice)
+        let path = tts_service::preview_voice(app.clone(), &jobs, voice)?;
+        allow_verified_media_asset(&app, std::path::Path::new(&path))?;
+        Ok(path)
     })
     .await
     .map_err(|error| format!("Không thể nghe thử giọng VieNeu: {error}"))?
@@ -1401,9 +1400,6 @@ pub fn cancel_transcription(
 pub fn projects_root(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let mut root = crate::runtime_paths::data_dir(app)
         .map_err(|error| format!("Không thể xác định thư mục dữ liệu ứng dụng: {error}"))?;
-    if cfg!(debug_assertions) {
-        if let Some(directory) = std::env::var_os("JC_QA_DATA_DIR") { root = std::path::PathBuf::from(directory); }
-    }
     root.push("projects");
     Ok(root)
 }

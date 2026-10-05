@@ -45,7 +45,7 @@ pub fn optional_installer() -> Option<PathBuf> {
 }
 
 /// All storage consumers share the root resolved during application startup.
-/// The isolated QA override is enabled only by the debug startup path.
+/// New installs use the installer selection; development uses JC_AI_DATA_DIR.
 pub fn data_dir(app: &tauri::AppHandle) -> tauri::Result<PathBuf> {
     use tauri::Manager;
     if let Some(root)=app_data_dir() {Ok(root.to_path_buf())} else {app.path().app_data_dir()}

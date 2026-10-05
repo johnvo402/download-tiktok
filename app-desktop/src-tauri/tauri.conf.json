@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "JC AI",
+        "create": false,
         "width": 1440,
         "height": 900,
         "minWidth": 920,
@@ -26,13 +27,7 @@
       "devCsp": "default-src 'self' asset: http://127.0.0.1:1420; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:1420 ws://127.0.0.1:1420; img-src 'self' asset: http://asset.localhost blob: data:; media-src 'self' asset: http://asset.localhost blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' http://127.0.0.1:1420;",
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "$APPDATA/projects/*/media/source/**/*",
-          "$APPDATA/projects/*/media/overlays/**/*",
-          "$APPDATA/projects/*/cache/preview/**/*",
-          "$APPDATA/projects/*/audio/tts/**/*",
-          "$APPDATA/models/tts-preview/*"
-        ]
+        "scope": []
       }
     }
   },
@@ -59,6 +54,7 @@
       },
       "nsis": {
         "installMode": "currentUser",
+        "installerHooks": "windows/storage-hooks.nsh",
         "displayLanguageSelector": false,
         "languages": [
           "English",

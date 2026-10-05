@@ -26,6 +26,7 @@ pub mod render_spec;
 mod resource_scheduler;
 mod runtime_health;
 mod runtime_paths;
+mod app_storage;
 mod settings_service;
 mod storage_service;
 mod transcript_service;
@@ -51,9 +52,8 @@ pub fn run() {
         .manage(job_service::JobStore::default())
         .setup(|app| {
             let resource_dir = app.path().resource_dir()?;
-            let app_data = if cfg!(debug_assertions) {
-                std::env::var_os("JC_QA_DATA_DIR").map(std::path::PathBuf::from).unwrap_or(app.path().app_data_dir()?)
-            } else { app.path().app_data_dir()? };
+            let app_data = app_storage::resolve(app.handle())?;
+            app_storage::prepare(&app_data)?;
             let session = match app_session::AppSession::begin(&app_data) {
                 Ok(session) => session,
                 Err(error) if error == "JC AI đã mở." => { app.handle().exit(0); return Ok(()); }
@@ -61,6 +61,11 @@ pub fn run() {
             };
             app.manage(session);
             runtime_paths::initialize(resource_dir, app_data.clone());
+            // Third-party tools and WebView subprocesses inherit this location.
+            // Set it once at startup, before opening the application's window.
+            for key in ["TEMP", "TMP", "TMPDIR"] {
+                std::env::set_var(key, app_data.join("cache/tmp"));
+            }
             let logs = log_service::logs_directory(&app_data);
             if let Err(error) = log_service::initialize(&logs) { eprintln!("Application file logger unavailable: {error}"); }
             if let Err(error)=optional_runtime::recover_installations() {
@@ -105,6 +110,13 @@ pub fn run() {
                     }
                 }
             }));
+            // Build manually after storage selection; automatic Tauri windows
+            // otherwise create a WebView2 profile in Local AppData first.
+            for config in &app.config().app.windows {
+                tauri::WebviewWindowBuilder::from_config(app.handle(), config)?
+                    .data_directory(app_data.join("webview").join(&config.label))
+                    .build()?;
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -52,8 +52,13 @@ pub enum ModelFolderKind {
 /// cache root into the single Roaming app-data root. The old Roaming model
 /// cache is merged too. WebView2's own profile is intentionally not touched.
 pub fn migrate_local_storage(app: &AppHandle) -> Result<Vec<String>, String> {
-    if cfg!(debug_assertions) && std::env::var_os("JC_QA_DATA_DIR").is_some() {return Ok(Vec::new());}
+    // Development/custom storage must never consume another installation's
+    // cache. Keep this compatibility migration only for the legacy root.
+    if cfg!(debug_assertions) { return Ok(Vec::new()); }
     let data_root = crate::runtime_paths::data_dir(app).map_err(|error| error.to_string())?;
+    if data_root != app.path().app_data_dir().map_err(|error| error.to_string())? {
+        return Ok(Vec::new());
+    }
     let local_root = app.path().app_cache_dir().map_err(|error| error.to_string())?;
     let mappings = [
         (local_root.join("fw"), data_root.join("models").join("fw")),

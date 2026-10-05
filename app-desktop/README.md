@@ -44,6 +44,21 @@ npm run tauri -- dev
 
 `npm run dev` chỉ chạy giao diện trong trình duyệt để phát triển CSS/UI; quyền project filesystem chỉ hoạt động trong ứng dụng Tauri.
 
+Khi chạy dev, toàn bộ dữ liệu ứng dụng (project, settings, model, runtime AI,
+cache, log và hồ sơ WebView) mặc định lưu trong `.app-data/` ở gốc repo,
+đã được Git bỏ qua. Đổi nơi lưu bằng biến môi trường trước khi chạy:
+
+```powershell
+$env:JC_AI_DATA_DIR = "D:/JC AI/dev-data"
+npm run tauri -- dev
+```
+
+Hoặc sao chép `.env.example` thành `.env` rồi sửa `JC_AI_DATA_DIR`.
+Thứ tự ưu tiên: biến môi trường → `.env.local` → `.env` → `.app-data/`.
+Đường dẫn tương đối tính từ gốc repo. `JC_QA_DATA_DIR` vẫn được ưu tiên cao
+nhất cho các script kiểm thử. Bản release đọc nơi lưu đã chọn từ installer,
+không đọc các biến dev hay `.env`. Đổi nơi lưu không tự di chuyển dữ liệu cũ.
+
 Preview trên Windows dùng renderer wgpu chung với Export. Kiến trúc, tùy chọn tương thích và kết quả kiểm thử nằm trong [docs/NATIVE_PREVIEW_ENGINE.md](docs/NATIVE_PREVIEW_ENGINE.md).
 
 ### Python worker / downloader / Speech Recognition (development only)

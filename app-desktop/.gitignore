@@ -8,6 +8,7 @@ scripts/**/__pycache__/
 *.egg-info/
 *.tsbuildinfo
 .release-cache/
+.app-data/
 release/
 python/.release-venv/
 python/.release-ai-venv/

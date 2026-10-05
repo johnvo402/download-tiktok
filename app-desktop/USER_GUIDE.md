@@ -2,7 +2,20 @@
 
 ## Cài đặt và dữ liệu
 
-Cài file `JC-AI-*-windows-x64-setup.exe` dưới tài khoản Windows hiện tại. Ứng dụng đóng gói FFmpeg/FFprobe và AI Worker; không cần Node.js, Rust, Python hoặc FFmpeg riêng. Dự án, settings, logs, models và exports lưu ngoài thư mục cài ứng dụng trong AppData. Gỡ ứng dụng mặc định giữ nguyên dữ liệu.
+Cài file `JC-AI-*-windows-x64-setup.exe` dưới tài khoản Windows hiện tại. Ứng dụng đóng gói FFmpeg/FFprobe và AI Worker; không cần Node.js, Rust, Python hoặc FFmpeg riêng.
+
+Ở bước **Nơi lưu dữ liệu ứng dụng**, chọn thư mục có quyền ghi và đủ dung lượng,
+ví dụ `D:\JC AI\Data`. Mặc định khi cài mới là `Documents\JC AI`. Dự án,
+settings, logs, models, runtime AI, cache và hồ sơ WebView đều nằm trong thư mục
+này. Thư mục cài file ứng dụng được chọn ở bước riêng; nơi lưu dữ liệu phải nằm
+ngoài thư mục cài ứng dụng. Export vẫn dùng nơi xuất do bạn chọn.
+
+Installer nhớ lựa chọn khi nâng cấp/cài lại. Với bản cũ, mặc định chọn thư mục
+AppData đang có dữ liệu để giữ truy cập project. Nếu chọn thư mục khác, dữ liệu
+cũ được giữ nguyên và không tự di chuyển; chọn lại thư mục cũ để dùng tiếp.
+Đóng app trước khi sao chép dữ liệu sang ổ khác. Gỡ ứng dụng mặc định giữ dữ liệu.
+Nếu ổ dữ liệu không có hoặc không ghi được, app báo lỗi để bạn khôi phục ổ hoặc
+chạy lại installer chọn nơi lưu phù hợp.
 
 ## Bắt đầu dự án
 
