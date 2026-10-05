@@ -273,7 +273,6 @@ button:disabled { cursor: not-allowed; }
 .workspace-nav-item.active::before { position: absolute; top: 9px; bottom: 9px; left: -1px; width: 2px; border-radius: 3px; background: #d8ec77; content: ""; box-shadow: 0 0 8px #d8ec7755; }
 .workspace-nav-item.active svg { color: #dbe988; }
 .workspace-nav-item > span:nth-of-type(1) { flex: 1; }
-.nav-coming-soon { padding: 3px 4px; border: 1px solid #3b3c40; border-radius: 4px; color: #85878e; font-family: var(--font-mono); font-size: 7px; letter-spacing: .04em; }
 .workspace-sidebar-collapsed .sidebar-group-label { margin: 23px 0 9px; text-align: center; }
 .workspace-sidebar-collapsed .workspace-nav-item { justify-content: center; padding: 0; }
 .sidebar-bottom { display: grid; gap: 3px; margin-top: auto; }
@@ -496,7 +495,7 @@ button:disabled { cursor: not-allowed; }
 .placeholder-drop-area { display: flex; min-height: 87px; align-items: center; justify-content: center; gap: 10px; margin-top: 21px; border: 1px dashed #484a4c; border-radius: 8px; color: #999ba2; background: #ffffff03; font-size: 10px; }
 .placeholder-card > .button { margin-top: 17px; }
 
-/* Kéo video workflows */
+/* Download and merge video workflows */
 .video-tools-page { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 18px; overflow: auto; padding: 28px clamp(20px, 3.1vw, 46px) 36px; background: radial-gradient(ellipse at 48% 0%, #22241b 0%, #141517 47%, #111214 100%); }
 .video-tools-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .video-tools-heading { display: flex; min-width: 0; align-items: center; gap: 15px; }
@@ -506,11 +505,7 @@ button:disabled { cursor: not-allowed; }
 .video-tools-heading p, .video-tool-card-header p { margin: 0; color: #93959c; font-size: 11px; line-height: 1.65; }
 .video-tools-project-chip { display: inline-flex; max-width: 240px; align-items: center; gap: 8px; overflow: hidden; padding: 8px 11px; border: 1px solid #303137; border-radius: 999px; color: #c3c4ca; background: #191a1d; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .video-tools-project-chip > span { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #c8d97d; box-shadow: 0 0 10px #c8d97d55; }
-.video-tools-tabs { display: flex; width: fit-content; max-width: 100%; gap: 4px; padding: 4px; border: 1px solid #2d2e33; border-radius: 10px; background: #17181a; }
-.video-tools-tabs button { display: flex; min-height: 36px; align-items: center; gap: 8px; padding: 0 13px; border: 1px solid transparent; border-radius: 7px; color: #95969d; background: transparent; font-size: 11px; font-weight: 560; cursor: pointer; transition: color .14s ease, background .14s ease, border-color .14s ease; }
-.video-tools-tabs button:hover { color: #e6e7e8; background: #ffffff07; }
-.video-tools-tabs button.active { border-color: #424634; color: #e8edcf; background: #c8d97d14; }
-.video-tools-tabs button:focus-visible, .video-tool-page button:focus-visible { outline: 2px solid #c8d97d; outline-offset: 2px; }
+.video-tools-page button:focus-visible { outline: 2px solid #c8d97d; outline-offset: 2px; }
 .video-tools-body { display: grid; min-height: 0; grid-template-columns: minmax(0, 1.08fr) minmax(290px, .92fr); align-items: start; gap: 15px; }
 .video-tool-card { min-width: 0; padding: 20px; border: 1px solid #303136; border-radius: 12px; background: linear-gradient(145deg, #1b1c1f 0%, #18191b 100%); box-shadow: 0 13px 36px #00000012; }
 .video-tool-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 17px; border-bottom: 1px solid #2b2c31; }
@@ -656,8 +651,6 @@ button:disabled { cursor: not-allowed; }
   .video-tools-page { padding: 20px 14px 28px; }
   .video-tools-header { align-items: flex-start; }
   .video-tools-project-chip { display: none; }
-  .video-tools-tabs { width: 100%; }
-  .video-tools-tabs button { flex: 1; justify-content: center; padding: 0 8px; font-size: 9px; }
   .video-tool-card { padding: 15px; }
   .video-tool-form-footer, .merge-action-row { align-items: stretch; flex-direction: column; }
   .video-tool-form-footer > .button, .merge-action-row > .button { justify-content: center; }

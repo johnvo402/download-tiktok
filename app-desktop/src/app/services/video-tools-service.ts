@@ -84,7 +84,7 @@ export interface VideoToolProgress {
 }
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  if (!isTauri()) throw new Error('Tính năng Kéo video chỉ khả dụng trong ứng dụng desktop.');
+  if (!isTauri()) throw new Error('Tính năng Tải video và Gộp Video chỉ khả dụng trong ứng dụng desktop.');
   try { return await invoke<T>(command, args); }
   catch (error) {
     if (error instanceof Error) throw error;

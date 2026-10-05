@@ -2,7 +2,7 @@ import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show }
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
-  ArrowDown, ArrowUp, Check, CircleAlert, Clapperboard, Download, FileVideo,
+  ArrowDown, ArrowUp, Check, CircleAlert, Download, FileVideo,
   FolderOpen, GripVertical, ImagePlus, LoaderCircle, Merge, RefreshCw, ShieldCheck,
   X,
 } from 'lucide-solid';
@@ -13,7 +13,7 @@ import VideoEncoderSelect from '../../shared/components/VideoEncoderSelect';
 import { videoToolsService, type MergeEncoder, type MergeFrameMode, type MergeLogoSettings, type MergeTextSettings, type MergeVideoCodec, type MergeVideoInfo, type TikTokCookieInfo, type TikTokDramaInfo, type VideoToolProgress } from '../../app/services/video-tools-service';
 import { mergeVisualProject } from '../overlays/overlay-state';
 
-type Tab = 'tiktok' | 'merge';
+type VideoToolsProps = { workflow: 'tiktok' | 'merge' };
 
 function formatTime(value: number) {
   const seconds = Math.max(0, Math.floor(value));
@@ -39,8 +39,7 @@ function directoryLabel(path: string) {
   return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : path;
 }
 
-export default function ImportPlaceholder() {
-  const [tab, setTab] = createSignal<Tab>('tiktok');
+export default function VideoToolsView(props: VideoToolsProps) {
   const [tiktokOutput, setTiktokOutput] = createSignal('');
   const [mergeOutput, setMergeOutput] = createSignal('');
   const [mergeFrameMode, setMergeFrameMode] = createSignal<MergeFrameMode>('source');
@@ -472,18 +471,13 @@ export default function ImportPlaceholder() {
     <main class="video-tools-page">
       <header class="video-tools-header">
         <div class="video-tools-heading">
-          <div class="video-tools-heading-icon"><Clapperboard size={19} /></div>
-          <div><span class="eyebrow">VIDEO WORKFLOWS</span><h1>Kéo video</h1><p>Tải series TikTok hoặc sắp xếp và gộp các video trong một thư mục.</p></div>
+          <div class="video-tools-heading-icon" aria-hidden="true">{props.workflow === 'merge' ? <Merge size={19} /> : <Download size={19} />}</div>
+          <div><span class="eyebrow">VIDEO WORKFLOWS</span><h1>{props.workflow === 'merge' ? 'Gộp Video' : 'Tải video'}</h1><p>{props.workflow === 'merge' ? 'Sắp xếp và gộp các video trong một thư mục.' : 'Tải trọn bộ series TikTok và lưu video theo thứ tự tập.'}</p></div>
         </div>
         <span class="video-tools-project-chip"><span />{currentProject()?.name ?? 'Dự án'}</span>
       </header>
 
-      <div class="video-tools-tabs" role="tablist" aria-label="Chọn công cụ video">
-        <button classList={{ active: tab() === 'tiktok' }} type="button" role="tab" aria-selected={tab() === 'tiktok'} onClick={() => setTab('tiktok')}><Download size={15} /><span>TikTok Drama Downloader</span></button>
-        <button classList={{ active: tab() === 'merge' }} type="button" role="tab" aria-selected={tab() === 'merge'} onClick={() => setTab('merge')}><Merge size={15} /><span>Gộp video</span></button>
-      </div>
-
-      <Show when={tab() === 'tiktok'}>
+      <Show when={props.workflow === 'tiktok'}>
         <div class="video-tools-body">
           <section class="video-tool-card tiktok-tool-card">
             <div class="video-tool-card-header"><div><span class="eyebrow">TIKTOK SHORT DRAMA</span><h2>Tải trọn bộ series</h2><p>Dán liên kết một tập. App sẽ đọc danh sách tập, thông tin series và lưu các video theo thứ tự EP.</p></div><div class="video-tool-header-icon"><Download size={18} /></div></div>
@@ -507,7 +501,7 @@ export default function ImportPlaceholder() {
         </div>
       </Show>
 
-      <Show when={tab() === 'merge'}>
+      <Show when={props.workflow === 'merge'}>
         <div class="video-tools-body merge-tool-body">
           <section class="video-tool-card merge-source-card">
             <div class="video-tool-card-header"><div><span class="eyebrow">01 · VIDEO NGUỒN</span><h2>Chọn thư mục video</h2><p>Các video ở ngay trong thư mục sẽ được quét và sắp xếp ban đầu theo tên A–Z.</p></div><div class="video-tool-header-icon"><FileVideo size={18} /></div></div>

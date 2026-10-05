@@ -3,20 +3,20 @@ import { A, useLocation, useNavigate, useParams } from '@solidjs/router';
 import { createEffect, createSignal, Show, onCleanup } from 'solid-js';
 import {
   ArrowLeft, AudioLines, ChevronRight, CircleHelp, PanelLeftClose,
-  PanelLeftOpen, Settings2, Video, SlidersHorizontal,
+  PanelLeftOpen, Settings2, Merge, SlidersHorizontal,
   Download, Layers3,
 } from 'lucide-solid';
 import { currentProject, projectSaveState, setAppStartupReady, setCurrentProject, setNotice } from '../../app/project-state';
 import { projectService } from '../../app/services/project-service';
 import TranslationView from './translation/TranslationView';
 import TranslationPanel from './translation/TranslationPanel';
-import ImportPlaceholder from './ImportPlaceholder';
+import VideoToolsView from './VideoToolsView';
 import ExportDialog from './ExportDialog';
 import ProjectSettingsDialog from './ProjectSettingsDialog';
 import BatchVideoDialog from './batch/BatchVideoDialog';
 import jcAiLogo from '../../shared/assets/jc-ai-logo.png';
 
-type Section = 'translate' | 'import';
+type Section = 'translate' | 'download' | 'merge';
 
 export default function WorkspaceLayout() {
   const params = useParams<{ projectId: string; section: string }>();
@@ -52,7 +52,10 @@ export default function WorkspaceLayout() {
     onCleanup(() => { active = false; });
   });
 
-  const section = (): Section => params.section === 'import' ? 'import' : 'translate';
+  const section = (): Section => {
+    if (params.section === 'download' || params.section === 'import') return 'download';
+    return params.section === 'merge' ? 'merge' : 'translate';
+  };
   const leave = async (path: string) => {
     try { await flushPendingSaves(); navigate(path); }
     catch (error) { setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Chưa lưu được thay đổi.' }); }
@@ -108,8 +111,11 @@ export default function WorkspaceLayout() {
         </div>
         <div class="sidebar-group-label">WORKSPACE</div>
         <nav class="workspace-nav" aria-label="Điều hướng dự án">
-          <button class="workspace-nav-item" classList={{ active: section() === 'import' }} type="button" title={collapsed() ? 'Kéo video · Sắp có' : undefined} aria-current={section() === 'import' ? 'page' : undefined} onClick={() => setSection('import')}>
-            <Video size={18} strokeWidth={1.8} /><Show when={!collapsed()}><span>Kéo video</span><span class="nav-coming-soon">SẮP CÓ</span></Show>
+          <button class="workspace-nav-item" classList={{ active: section() === 'download' }} type="button" aria-label="Tải video" title={collapsed() ? 'Tải video' : undefined} aria-current={section() === 'download' ? 'page' : undefined} onClick={() => setSection('download')}>
+            <Download size={18} strokeWidth={1.8} aria-hidden="true" /><Show when={!collapsed()}><span>Tải video</span></Show>
+          </button>
+          <button class="workspace-nav-item" classList={{ active: section() === 'merge' }} type="button" aria-label="Gộp Video" title={collapsed() ? 'Gộp Video' : undefined} aria-current={section() === 'merge' ? 'page' : undefined} onClick={() => setSection('merge')}>
+            <Merge size={18} strokeWidth={1.8} aria-hidden="true" /><Show when={!collapsed()}><span>Gộp Video</span></Show>
           </button>
           <button class="workspace-nav-item" classList={{ active: section() === 'translate' }} type="button" title={collapsed() ? 'Dịch' : undefined} aria-current={section() === 'translate' ? 'page' : undefined} onClick={() => setSection('translate')}>
             <AudioLines size={18} strokeWidth={1.8} /><Show when={!collapsed()}><span>Dịch</span></Show>
@@ -165,7 +171,9 @@ export default function WorkspaceLayout() {
             <div class="workspace-right-panel"><TranslationPanel /></div>
           </main>
         </Show>
-        <Show when={section() === 'import'}><ImportPlaceholder /></Show>
+        <Show when={section() === 'download' || section() === 'merge'}>
+          <VideoToolsView workflow={section() === 'merge' ? 'merge' : 'tiktok'} />
+        </Show>
       </div>
       <Show when={exportOpen()}><ExportDialog onClose={() => setExportOpen(false)} /></Show>
       <Show when={projectSettingsOpen() && currentProject()}><ProjectSettingsDialog project={currentProject()!} onClose={() => setProjectSettingsOpen(false)} /></Show>
