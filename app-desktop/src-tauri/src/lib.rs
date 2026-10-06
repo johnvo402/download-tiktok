@@ -29,6 +29,7 @@ mod runtime_paths;
 mod app_storage;
 mod settings_service;
 mod storage_service;
+mod studio_service;
 mod transcript_service;
 mod text_removal_service;
 mod text_removal_cache;
@@ -120,6 +121,15 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            studio_service::load_studio_draft,
+            studio_service::has_studio_draft,
+            studio_service::save_studio_draft,
+            studio_service::studio_ai,
+            studio_service::studio_import_image,
+            studio_service::studio_asset,
+            studio_service::studio_voice,
+            studio_service::studio_export,
+            studio_service::cancel_studio_job,
             commands::get_recovery_notices,
             audio::commands::audio_preview_open,
             audio::commands::audio_preview_close,

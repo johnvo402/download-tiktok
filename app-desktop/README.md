@@ -44,6 +44,10 @@ npm run tauri -- dev
 
 `npm run dev` chỉ chạy giao diện trong trình duyệt để phát triển CSS/UI; quyền project filesystem chỉ hoạt động trong ứng dụng Tauri.
 
+Dev dùng Python trong `.venv` và FFmpeg/FFprobe trên `PATH`, không cần build
+worker thành `.exe`. Build installer cần các worker đã đóng gói bằng
+`scripts/build-worker.ps1`.
+
 Khi chạy dev, toàn bộ dữ liệu ứng dụng (project, settings, model, runtime AI,
 cache, log và hồ sơ WebView) mặc định lưu trong `.app-data/` ở gốc repo,
 đã được Git bỏ qua. Đổi nơi lưu bằng biến môi trường trước khi chạy:
@@ -68,7 +72,7 @@ Tạo môi trường riêng ở thư mục gốc repository và cài worker cho 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -e .\python
+.\.venv\Scripts\python.exe -m pip install -e ".\python[downloader]"
 ```
 
 Lệnh này cài faster-whisper cùng dependency cho TikTok Drama Downloader (Playwright và curl-cffi). Downloader dùng Chrome đã cài để mở series, nhận diện URL video trực tiếp từ trang và truyền dữ liệu vào file theo từng khối. Worker giao tiếp với Rust qua JSON Lines trên stdin/stdout; log chẩn đoán chỉ đi qua stderr. Nếu dùng một Python khác, đặt biến `LOCALIZATION_PYTHON` tới executable trước khi chạy Tauri. FFmpeg dùng executable `ffmpeg`/`ffprobe` trên `PATH`.

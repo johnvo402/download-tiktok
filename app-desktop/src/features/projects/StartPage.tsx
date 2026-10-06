@@ -8,6 +8,7 @@ import {
 import Brand from '../../shared/components/Brand';
 import ProjectDialog, { type ProjectDialogMode } from './ProjectDialog';
 import { projectService } from '../../app/services/project-service';
+import { studioService } from '../../app/services/studio-service';
 import {
   applyProjectList, currentProject, projects, projectsLoading, projectLoadWarnings,
   setAppStartupReady, setCurrentProject, setNotice, setProjects, setProjectsLoading,
@@ -20,6 +21,7 @@ export default function StartPage() {
   const navigate = useNavigate();
   const [query, setQuery] = createSignal('');
   const [dialogMode, setDialogMode] = createSignal<ProjectDialogMode>();
+  const [createForStudio, setCreateForStudio] = createSignal(false);
   const [dialogProject, setDialogProject] = createSignal<Project>();
   const [openMenu, setOpenMenu] = createSignal<string>();
   const [openingId, setOpeningId] = createSignal<string>();
@@ -64,8 +66,9 @@ export default function StartPage() {
     setOpenMenu(undefined);
     try {
       const loaded = await projectService.get(project.id);
+      const studio = await studioService.exists(loaded.id);
       setCurrentProject(loaded);
-      navigate(`/project/${loaded.id}/translate`);
+      navigate(`/project/${loaded.id}/${studio ? 'studio' : 'translate'}`);
     } catch (error) {
       setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể mở dự án.' });
       void refresh();
@@ -78,7 +81,7 @@ export default function StartPage() {
     setProjects((items) => [project, ...items]);
     setDialogMode(undefined);
     setCurrentProject(project);
-    navigate(`/project/${project.id}/translate`);
+    navigate(`/project/${project.id}/${createForStudio() ? 'studio' : 'translate'}`);
   };
 
   const renamed = (project: Project) => {
@@ -101,6 +104,7 @@ export default function StartPage() {
   };
 
   const showDialog = (mode: ProjectDialogMode, project?: Project) => {
+    setCreateForStudio(false);
     setOpenMenu(undefined);
     setDialogProject(project);
     setDialogMode(mode);
@@ -175,6 +179,7 @@ export default function StartPage() {
               <h1>Project Manager<span class="heading-period">.</span></h1>
               <p class="welcome-subtitle">Chọn nơi bạn muốn tiếp tục — hoặc bắt đầu một dự án mới.</p>
             </div>
+            <button class="button button-quiet" type="button" onClick={() => { showDialog('create'); setCreateForStudio(true); }}><Sparkles size={17} /> Tạo video AI</button>
             <button class="button button-primary create-project-button" type="button" onClick={() => showDialog('create')}>
               <FolderPlus size={17} /> Tạo dự án mới
             </button>

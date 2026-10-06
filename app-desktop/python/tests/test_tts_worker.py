@@ -59,7 +59,7 @@ class TtsWorkerTests(unittest.TestCase):
             }
             with patch.object(service.importlib.util, "find_spec", return_value=object()), patch(
                 "worker.tts.service._cuda_available", return_value=False
-            ), patch.dict(sys.modules, {"vieneu": fake_module}):
+            ), patch.object(service, "_local_model_info", return_value=(True, "test")), patch.dict(sys.modules, {"vieneu": fake_module}):
                 service.synthesize(request, events.append)
 
             self.assertTrue(output.is_file())
@@ -92,11 +92,21 @@ class TtsWorkerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "audio.wav"
             request = {"cacheDir": directory, "device": "cpu", "segments": [{"id": "a", "text": "Chào bạn", "outputPath": str(output)}]}
-            with patch.object(service.importlib.util, "find_spec", return_value=object()), patch.dict(sys.modules, {"vieneu": fake_module}):
+            with patch.object(service.importlib.util, "find_spec", return_value=object()), patch.object(
+                service, "_local_model_info", return_value=(True, "test")
+            ), patch.dict(sys.modules, {"vieneu": fake_module}):
                 service.synthesize(request, events.append)
             self.assertFalse(output.exists())
         self.assertTrue(any(event["type"] == "segment_failed" and "model load failed" in event["message"] for event in events))
         self.assertFalse(any(event["type"] == "segment_completed" for event in events))
+
+    def test_invalid_model_cache_does_not_start_synthesis(self):
+        with patch.object(service.importlib.util, "find_spec", return_value=object()), patch.object(
+            service, "_local_model_info", return_value=(False, None)
+        ), patch.object(service, "VieNeuTTSProvider") as provider:
+            with self.assertRaisesRegex(RuntimeError, "Model VieNeu-TTS chưa sẵn sàng"):
+                service.synthesize({"cacheDir": "unused", "device": "cpu"}, lambda _event: None)
+        provider.assert_not_called()
 
 
 if __name__ == "__main__":

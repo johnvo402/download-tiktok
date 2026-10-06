@@ -8,7 +8,8 @@ from pathlib import Path
 import time
 from typing import Any, Callable
 
-from worker.model_manifest import create_manifest, verify_manifest
+from worker.model_manifest import _sha256, create_manifest, verify_manifest
+from worker.tts.onnx_cache import materialize_onnx_files
 from worker.tts.providers import VieNeuTTSProvider
 
 log = logging.getLogger(__name__)
@@ -63,7 +64,21 @@ def _validate_and_manifest(cache_root: Path, model_path: Path, codec_path: Path)
             for path in files
         }
         if current != recorded:
-            return False, None
+            # Recover a layout migration interrupted after replacing graph
+            # symlinks. The old blob manifest must still be valid, and every
+            # graph must have identical content before we replace its manifest.
+            expected = {(entry["size"], entry["sha256"]) for entry in payload["files"]}
+            actual = {(path.stat().st_size, _sha256(path)) for path in files}
+            if actual != expected:
+                return False, None
+        changed = materialize_onnx_files(cache_root, model_path, codec_path)
+        if changed or current != recorded:
+            create_manifest(
+                cache_root, manifest, identity, files,
+                model_id="vieneu-v3-turbo+moss-audio-tokenizer-onnx",
+                version=f"{model_path.name}+{codec_path.name}",
+                download=f"https://huggingface.co/{MODEL_REPO} ; https://huggingface.co/{CODEC_REPO}",
+            )
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return False, None
     return True, f"{model_path.name}+{codec_path.name}"
@@ -160,6 +175,8 @@ def synthesize(request: dict[str, Any], emit: Callable[[dict[str, Any]], None]) 
     device = str(request.get("device", "auto"))
     if device == "cuda" and not _cuda_available():
         raise RuntimeError("CUDA chưa khả dụng hoặc chưa cài PyTorch CUDA. Chọn Auto hoặc CPU.")
+    if not _local_model_info(str(request["cacheDir"]))[0]:
+        raise RuntimeError("Model VieNeu-TTS chưa sẵn sàng hoặc không vượt qua kiểm tra integrity. Hãy tải model trong Cài đặt giọng đọc.")
     tts = VieNeuTTSProvider(device)
     items = request.get("segments", [])
     if not isinstance(items, list) or not items:

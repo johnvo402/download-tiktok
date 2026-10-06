@@ -4,7 +4,7 @@ import { createEffect, createSignal, Show, onCleanup } from 'solid-js';
 import {
   ArrowLeft, AudioLines, ChevronRight, CircleHelp, PanelLeftClose,
   PanelLeftOpen, Settings2, Merge, SlidersHorizontal,
-  Download, Layers3,
+  Download, Layers3, Film,
 } from 'lucide-solid';
 import { currentProject, projectSaveState, setAppStartupReady, setCurrentProject, setNotice } from '../../app/project-state';
 import { projectService } from '../../app/services/project-service';
@@ -15,8 +15,10 @@ import ExportDialog from './ExportDialog';
 import ProjectSettingsDialog from './ProjectSettingsDialog';
 import BatchVideoDialog from './batch/BatchVideoDialog';
 import jcAiLogo from '../../shared/assets/jc-ai-logo.png';
+import { lazy } from 'solid-js';
+const VideoStudioView = lazy(() => import('../video-studio/VideoStudioView'));
 
-type Section = 'translate' | 'download' | 'merge';
+type Section = 'translate' | 'download' | 'merge' | 'studio';
 
 export default function WorkspaceLayout() {
   const params = useParams<{ projectId: string; section: string }>();
@@ -53,6 +55,7 @@ export default function WorkspaceLayout() {
   });
 
   const section = (): Section => {
+    if (params.section === 'studio') return 'studio';
     if (params.section === 'download' || params.section === 'import') return 'download';
     return params.section === 'merge' ? 'merge' : 'translate';
   };
@@ -111,6 +114,9 @@ export default function WorkspaceLayout() {
         </div>
         <div class="sidebar-group-label">WORKSPACE</div>
         <nav class="workspace-nav" aria-label="Điều hướng dự án">
+          <button class="workspace-nav-item" classList={{ active: section() === 'studio' }} type="button" aria-label="Tạo video AI" title={collapsed() ? 'Tạo video AI' : undefined} aria-current={section() === 'studio' ? 'page' : undefined} onClick={() => setSection('studio')}>
+            <Film size={18} strokeWidth={1.8} aria-hidden="true" /><Show when={!collapsed()}><span>Tạo video AI</span></Show>
+          </button>
           <button class="workspace-nav-item" classList={{ active: section() === 'download' }} type="button" aria-label="Tải video" title={collapsed() ? 'Tải video' : undefined} aria-current={section() === 'download' ? 'page' : undefined} onClick={() => setSection('download')}>
             <Download size={18} strokeWidth={1.8} aria-hidden="true" /><Show when={!collapsed()}><span>Tải video</span></Show>
           </button>
@@ -153,6 +159,7 @@ export default function WorkspaceLayout() {
           </div>
         </header>
 
+        <Show when={section() === 'studio'}><VideoStudioView /></Show>
         <Show when={section() === 'translate'}>
           <main class="workspace-content translation-layout" style={{ '--preview-ratio': `${previewRatio()}fr`, '--panel-ratio': `${100 - previewRatio()}fr` }}>
             <TranslationView />

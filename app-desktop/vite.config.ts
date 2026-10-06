@@ -10,7 +10,7 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     watch: {
-      ignored: ['**/src-tauri/target/**', '**/src-tauri/resources/**', '**/.release-cache/**', '**/.venv/**', '**/python/build/**', '**/python/dist/**', '**/python/.release*-venv/**', '**/release/**'],
+      ignored: ['**/src-tauri/target/**', '**/src-tauri/resources/**', '**/.app-data/**', '**/.release-cache/**', '**/.venv/**', '**/python/build/**', '**/python/dist/**', '**/python/.release*-venv/**', '**/release/**'],
     },
   },
   envPrefix: ['VITE_', 'TAURI_ENV_*'],

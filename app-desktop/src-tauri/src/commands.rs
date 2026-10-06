@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use tauri::Manager;
 use transcript_service::Transcript;
 
-static PROJECT_JOB_START_LOCK: Mutex<()> = Mutex::new(());
+pub(crate) static PROJECT_JOB_START_LOCK: Mutex<()> = Mutex::new(());
 
 #[tauri::command]
 pub async fn get_optional_runtime_status() -> Result<optional_runtime::RuntimeStatus, String> {
@@ -166,6 +166,7 @@ pub fn cancel_unified_job(
         "transcribe" => asr_service::cancel_transcription(asr_jobs, job_id),
         "translate" => translation_service::cancel_translation(translation_jobs, job_id),
         "tts" => tts_service::cancel(&tts_jobs, &job_id),
+        "studio" => Ok(crate::studio_service::cancel_studio_job(job_id)),
         "export" | "text_removal_preview" => render_service::cancel_export(&render_jobs, &job_id),
         "video_merge" | "tiktok_download" | "tiktok_cookie_login" => video_tools_service::cancel(&video_tools_jobs, &job_id),
         _ => Err("Loại job này chưa hỗ trợ hủy từ hàng đợi.".into()),
@@ -321,6 +322,9 @@ pub async fn delete_project(
         let _start_guard = PROJECT_JOB_START_LOCK
             .lock()
             .map_err(|_| "Không thể khóa trạng thái project jobs.".to_string())?;
+        if crate::studio_service::has_active(&id) {
+            return Err("Dự án đang có tác vụ tạo video. Hãy dừng tác vụ trước khi xóa.".into());
+        }
         asr_service::set_project_deleting(&asr_jobs, &id)?;
         if let Err(error) = translation_service::set_project_deleting(&translation_jobs, &id) {
             asr_service::clear_project_deleting(&asr_jobs, &id);

@@ -157,7 +157,7 @@ pub fn remove_model(app: AppHandle, jobs: &TtsJobs) -> Result<(), String> {
         .inner
         .lock()
         .map_err(|_| "Không thể kiểm tra TTS jobs.".to_string())?;
-    if !active.is_empty() {
+    if !active.is_empty() || crate::studio_service::has_active_voice() {
         return Err("Không thể gỡ VieNeu-TTS khi đang chạy một tác vụ giọng đọc.".to_string());
     }
     drop(active);
@@ -1753,7 +1753,7 @@ fn project_store(app: &AppHandle) -> Result<ProjectStore, String> {
     Ok(ProjectStore::new(root))
 }
 
-fn worker_root(_app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn worker_root(_app: &AppHandle) -> Result<PathBuf, String> {
     crate::runtime_paths::ai_worker_dir()
 }
 
@@ -1770,7 +1770,7 @@ fn launch_worker(worker: &Path) -> Result<crate::worker_manager::ManagedWorker, 
         })
 }
 
-fn worker_request(
+pub(crate) fn worker_request(
     worker: &Path,
     request: Value,
     canceled: Option<Arc<AtomicBool>>,

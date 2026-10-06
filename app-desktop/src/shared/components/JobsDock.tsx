@@ -6,6 +6,7 @@ import { setNotice } from '../../app/project-state';
 type Filter = 'all' | 'active' | 'failed' | 'completed';
 
 const jobLabel = (type: string) => ({
+  studio: 'Tạo video AI',
   transcribe: 'Nhận dạng lời thoại', translate: 'Dịch', tts: 'Tạo giọng đọc', export: 'Xuất video', runtime_install: 'Cài bộ xử lý', model_install: 'Cài model',
 } as Record<string, string>)[type] ?? type;
 const statusLabel = (status: UnifiedJobStatus) => ({

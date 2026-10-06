@@ -30,6 +30,22 @@ chạy lại installer chọn nơi lưu phù hợp.
 
 Translated subtitle trong video cuối luôn nằm trong vùng blur có role Subtitle Blur. Nếu subtitle tắt, blur vẫn có thể được render nhưng không có text dịch.
 
+## Tạo video AI từ ý tưởng
+
+1. Chọn **Tạo video AI** ở Project Manager, hoặc mở **Tạo video AI** trong dự án.
+2. Nhập chủ đề, chọn Tiếng Việt / English và thời lượng từ **2 phút**. Codex đưa đúng **5 ý tưởng**, đánh sao một ý tưởng được đề xuất, kèm mô tả, câu mở đầu và lý do chọn.
+3. Chọn **Thực hiện ý tưởng** để chuyển sang màn hình biên tập trong cùng cửa sổ. Sửa tiêu đề, mô tả, ngôn ngữ, phong cách ảnh và giọng đọc.
+4. Chọn **Lập dàn ý**, sửa tên / nội dung chương rồi **Duyệt dàn ý**. Chọn **Viết các chương còn thiếu**; mỗi chương được lưu ngay sau khi viết xong. Để bỏ một chương, chọn chương đó, bấm **Xóa chương** trong **Dàn ý & kịch bản** rồi xác nhận. Các cảnh của chương được bỏ khỏi kịch bản; cần duyệt lại dàn ý sau khi xóa.
+5. Chọn từng cảnh, sửa lời kể và prompt ảnh. Chọn **Sao chép prompt**, dán vào Codex desktop để tạo ảnh, lưu ảnh rồi chọn **Nhập ảnh từ Codex**. Hỗ trợ PNG, JPG và WebP; ảnh nhập được sao chép vào dự án.
+6. Tạo giọng cho một cảnh có ảnh, nghe / xem thử rồi **Duyệt cảnh mẫu**. Chọn **Tạo / tiếp tục giọng đọc còn thiếu** để xử lý các cảnh còn lại. Cần cài bộ xử lý và tải model VieNeu-TTS trong **Cài đặt → Voice / TTS**.
+7. Preview phát ảnh và audio trực tiếp, có thể phát một chương hoặc toàn video và tua theo thời gian. Kéo phụ đề, logo, text để đổi vị trí hoặc dùng thanh chỉnh trong bảng bên phải. Có thể sửa chữ, thời điểm phụ đề, màu, cỡ chữ, thời gian xuất hiện logo / text và bật zoom nhẹ.
+8. Sửa một cảnh và tạo lại riêng giọng / ảnh của cảnh đó nếu cần. Có thể khôi phục tối đa 5 phiên bản ảnh / giọng trước. Đổi lời kể, ngôn ngữ hoặc giọng làm audio cũ hết hiệu lực; cần tạo lại trước khi xuất.
+9. **Lưu video** chỉ bật khi mọi chương có cảnh, mọi cảnh có ảnh / giọng phù hợp và tổng thời lượng lời kể thực tế đạt mục tiêu đã chọn. Nếu chưa đủ mục tiêu, thêm chương / cảnh hoặc bổ sung lời kể rồi tạo giọng lại. Ứng dụng không kéo dài audio bằng khoảng lặng để đủ thời lượng.
+
+Preview không tạo MP4. Chỉ **Lưu video** mới xuất video 1080p, H.264 + AAC vào thư mục `exports` của dự án, kèm bản nháp JSON đúng phiên bản dùng để xuất. Mỗi lần xuất tạo tệp mới. Bản nháp tự lưu, có bản dự phòng và mở lại ở màn hình Tạo video AI. Bấm **Dừng** rồi tiếp tục để xử lý phần còn thiếu.
+
+Codex CLI cần được cài / đăng nhập và cấu hình đường dẫn, model, timeout tại **Cài đặt → Translation → Codex CLI**. Tạo ý tưởng / kịch bản dùng tài khoản Codex hiện tại. Phiên bản này nhập ảnh được tạo trong Codex desktop; chưa tự gọi công cụ tạo ảnh qua CLI. Thời điểm phụ đề được tính theo từng đoạn lời kể do TTS tạo, không căn chỉnh từng từ. Với nội dung lịch sử, kiểm tra các dữ kiện được đánh dấu chưa chắc chắn trước khi xuất.
+
 ## Models, storage và offline
 
 Model weights không đi kèm installer. Mỗi download yêu cầu xác nhận; model cache dùng chung giữa các projects. Settings → Speech Recognition / Voice TTS cho phép gỡ model đã cài. Không thể gỡ model khi job tương ứng chạy; gỡ model không xóa project hoặc audio đã tạo.

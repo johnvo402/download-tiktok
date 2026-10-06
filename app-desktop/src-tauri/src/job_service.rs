@@ -351,7 +351,7 @@ fn progress_for(event_type: &str, event: &Value) -> f64 {
             }
         }
         "transcription" => event.get("progress").and_then(Value::as_f64).unwrap_or(0.0),
-        "tts" => event.get("progress").and_then(Value::as_f64).unwrap_or(0.0),
+        "tts" | "studio" => event.get("progress").and_then(Value::as_f64).unwrap_or(0.0),
         "export" | "video_tools" => event.get("progress").and_then(Value::as_f64).unwrap_or(0.0),
         _ => 0.0,
     }

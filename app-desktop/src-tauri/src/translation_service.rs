@@ -928,6 +928,18 @@ fn run_codex_cli(
     timeout: Duration,
     canceled: &Arc<AtomicBool>,
 ) -> Result<String, TranslationError> {
+    run_codex_structured(executable, model, prompt, CODEX_OUTPUT_SCHEMA, timeout, canceled)
+}
+
+/// Reuse the contained, text-only CLI transport for script creation.
+pub(crate) fn run_codex_structured(
+    executable: &str,
+    model: Option<&str>,
+    prompt: &str,
+    schema: &str,
+    timeout: Duration,
+    canceled: &Arc<AtomicBool>,
+) -> Result<String, TranslationError> {
     let resolved = resolve_codex_executable(executable)?;
     let temp = tempdir().map_err(|_| {
         TranslationError::new(
@@ -938,7 +950,7 @@ fn run_codex_cli(
     })?;
     let schema_path = temp.path().join("translation-schema.json");
     let output_path = temp.path().join("translation-output.json");
-    fs::write(&schema_path, CODEX_OUTPUT_SCHEMA).map_err(|_| {
+    fs::write(&schema_path, schema).map_err(|_| {
         TranslationError::new(
             "CLI_FAILED",
             "Không thể chuẩn bị schema cho Codex CLI.",
