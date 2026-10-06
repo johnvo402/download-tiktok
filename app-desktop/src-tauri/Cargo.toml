@@ -1,6 +1,6 @@
 [package]
 name = "ai-video-localization"
-version = "0.1.14-beta.1"
+version = "0.1.14-beta.2"
 description = "JC AI desktop app"
 authors = ["JC AI"]
 edition = "2021"
