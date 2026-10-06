@@ -30,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "ai-video-localization"
-version = "0.1.14-beta.2"
+version = "0.1.14"
 dependencies = [
  "async-trait",
  "bytemuck",
