@@ -88,12 +88,25 @@ jobs:
       - name: Check frontend production build
         working-directory: app-desktop
         run: npm run build
+      - name: Restore pinned FFmpeg archive for media tests
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            app-desktop/.release-cache/ffmpeg-*.zip
+            app-desktop/.release-cache/checksums.sha256
+          key: ffmpeg-windows-x64-${{ hashFiles('app-desktop/scripts/build-ffmpeg.ps1') }}
+      - name: Prepare verified FFmpeg and FFprobe for tests
+        working-directory: app-desktop
+        run: |
+          ./scripts/build-ffmpeg.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          (Resolve-Path "src-tauri/resources/ffmpeg").Path >> $env:GITHUB_PATH
       - name: Prepare worker resource path for Rust tests
         run: New-Item -ItemType Directory -Force -Path app-desktop/src-tauri/resources/ai-worker, app-desktop/src-tauri/resources/downloader-worker | Out-Null
       - name: Run Rust tests
         run: cargo test --locked --manifest-path app-desktop/src-tauri/Cargo.toml --lib
       - name: Install model-free media fixture dependencies
-        run: python -m pip install "av==18.1.0" "numpy==2.5.3" "packaging==26.3"
+        run: python -m pip install "av==18.1.0" "numpy==2.5.3" "packaging==26.3" "opencv-python-headless==5.0.0.93"
       - name: Run Python worker and cache tests
         working-directory: app-desktop
         run: |
