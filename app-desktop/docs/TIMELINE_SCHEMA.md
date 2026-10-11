@@ -42,7 +42,7 @@ T03 AI commands use explicit content IDs through a scoped ProjectStore view; see
 - First import creates the source binding. Restoring the same checksum updates its path/metadata while preserving content and clip identity.
 - Replacement by a different source creates new IDs and is rejected if other clips or content still depend on the bound source.
 
-Existing visual overlay settings are stored within the video's settings during this foundation task. T06 will expose them as editable timeline layers with the corresponding time/transform rules.
+Existing source overlay settings remain within the video's settings and source editor. T06 adds independently timed image/logo, text and caption clips with per-instance transforms. It does not silently convert or duplicate source overlays. `Clip.style` is optional for text/subtitle clips (font family/size/weight, foreground/background colors, background opacity, alignment); old clips without it remain readable. Canvas settings and clip styles participate in layout undo/redo, while source content and regions remain authoritative outside history.
 
 ## Validation
 

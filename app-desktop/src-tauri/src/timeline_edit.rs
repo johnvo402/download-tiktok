@@ -1,6 +1,8 @@
 //! Compare-and-swap editor layout; source content and track controls stay authoritative.
 use crate::project_service::{Project, ProjectStore};
-use crate::timeline::{self, Clip, LegacyBinding, TimelineDocument, Track, TrackKind};
+use crate::timeline::{
+    self, Clip, LegacyBinding, TimelineDocument, TimelineSettings, Track, TrackKind,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -14,6 +16,7 @@ pub struct TrackLayout {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EditLayout {
+    pub settings: TimelineSettings,
     pub clips: Vec<Clip>,
     pub tracks: Vec<TrackLayout>,
     pub legacy_binding: Option<LegacyBinding>,
@@ -21,6 +24,7 @@ pub struct EditLayout {
 impl EditLayout {
     pub fn from_document(doc: &TimelineDocument) -> Self {
         Self {
+            settings: doc.settings.clone(),
             clips: doc.clips.clone(),
             tracks: doc
                 .tracks
@@ -98,10 +102,14 @@ pub fn apply_layout(
             })
             .collect();
         let previous_binding = doc.legacy_binding.clone();
+        doc.settings = next.settings.clone();
         doc.clips = next.clips.clone();
         doc.tracks = tracks;
         doc.legacy_binding = next.legacy_binding.clone();
-        if previous_binding.is_none() && project.source.video_path.is_none() {
+        if previous_binding.is_none()
+            && project.source.video_path.is_none()
+            && expected.settings == TimelineSettings::default()
+        {
             if let Some(binding) = &doc.legacy_binding {
                 if let Some(asset) = doc.assets.iter().find(|a| a.id == binding.asset_id) {
                     if let Some(width) = asset.metadata.width {
@@ -142,16 +150,129 @@ pub async fn apply_timeline_edit(
 mod tests {
     use super::*;
     #[test]
+    fn canvas_and_instance_transforms_roundtrip_without_rewriting_source_regions_or_ai() {
+        let (_dir, store, project, _, b) = crate::video_content::tests::fixture();
+        let before = EditLayout::from_document(project.timeline.as_ref().unwrap());
+        let mut next = before.clone();
+        next.settings.width = 1080;
+        next.settings.height = 1920;
+        next.clips[0].transform.x = 0.8;
+        next.clips[0].transform.scale_x = 0.25;
+        next.clips[0].transform.scale_y = 0.25;
+        next.clips[0].transform.crop = timeline::Crop {
+            x: 0.2,
+            y: 0.1,
+            width: 0.6,
+            height: 0.8,
+        };
+        let saved = apply_layout(&store, &project.id, before.clone(), next.clone()).unwrap();
+        assert_eq!(
+            store.get(&project.id).unwrap().timeline.unwrap().settings,
+            next.settings
+        );
+        let original_content = project.timeline.as_ref().unwrap().video_contents.clone();
+        assert_eq!(
+            saved.timeline.as_ref().unwrap().video_contents,
+            original_content
+        );
+        assert_eq!(saved.source, project.source);
+        assert_eq!(next.clips[0].source_in_us, before.clips[0].source_in_us);
+        let scoped = store.for_video(&project.id, Some(&b)).unwrap();
+        let mut view = scoped.get(&project.id).unwrap();
+        view.translation.target_language = "ja".into();
+        scoped.update_project(&view).unwrap();
+        let restored = apply_layout(&store, &project.id, next.clone(), before.clone()).unwrap();
+        assert_eq!(
+            restored.timeline.as_ref().unwrap().settings,
+            before.settings
+        );
+        assert_eq!(
+            restored.timeline.as_ref().unwrap().video_contents[1]
+                .settings
+                .translation
+                .target_language,
+            "ja"
+        );
+        assert_eq!(
+            apply_layout(&store, &project.id, before, next.clone())
+                .unwrap()
+                .timeline
+                .unwrap()
+                .clips,
+            next.clips
+        );
+    }
+    #[test]
+    fn typography_is_optional_for_old_clips_and_invalid_visual_edits_are_atomic() {
+        let (_dir, store, project, _, _) = crate::video_content::tests::fixture();
+        let before = EditLayout::from_document(project.timeline.as_ref().unwrap());
+        let old = serde_json::to_value(&before.clips[0]).unwrap();
+        assert!(old.get("style").is_none());
+        assert!(serde_json::from_value::<Clip>(old).unwrap().style.is_none());
+        let mut text = before.clips[0].clone();
+        text.id = uuid::Uuid::new_v4().to_string();
+        text.start_us = 20_000_000;
+        text.content = timeline::ClipContent::Text {
+            text: "Tiêu đề".into(),
+        };
+        text.style = Some(timeline::ClipStyle {
+            font_family: "Arial".into(),
+            font_size: 48.0,
+            font_weight: 700,
+            color: "#FFFFFF".into(),
+            background_color: "#000000".into(),
+            background_opacity: 0.5,
+            alignment: "center".into(),
+        });
+        let mut next = before.clone();
+        next.clips.push(text);
+        let saved = apply_layout(&store, &project.id, before, next.clone()).unwrap();
+        assert_eq!(
+            store
+                .get(&project.id)
+                .unwrap()
+                .timeline
+                .unwrap()
+                .clips
+                .last()
+                .unwrap()
+                .style,
+            next.clips.last().unwrap().style
+        );
+        let mut invalid = next.clone();
+        invalid
+            .clips
+            .last_mut()
+            .unwrap()
+            .style
+            .as_mut()
+            .unwrap()
+            .font_size = 0.0;
+        assert!(apply_layout(&store, &project.id, next.clone(), invalid).is_err());
+        let mut invalid = next.clone();
+        invalid.settings.width = 20000;
+        assert!(apply_layout(&store, &project.id, next.clone(), invalid).is_err());
+        let mut invalid = next.clone();
+        invalid.clips[0].transform.crop.width = 1.1;
+        assert!(apply_layout(&store, &project.id, next, invalid).is_err());
+        assert_eq!(store.get(&project.id).unwrap().updated_at, saved.updated_at);
+    }
+    #[test]
     fn first_insertion_undo_redo_keeps_inventory_and_independent_source_content() {
         let (_dir, store, mut project, _, _) = crate::video_content::tests::fixture();
-        let inserted = EditLayout::from_document(project.timeline.as_ref().unwrap());
+        let mut inserted = EditLayout::from_document(project.timeline.as_ref().unwrap());
         project.timeline.as_mut().unwrap().clips.clear();
         project.timeline.as_mut().unwrap().legacy_binding = None;
         project.source = Default::default();
+        project.timeline.as_mut().unwrap().settings.width = 1080;
+        project.timeline.as_mut().unwrap().settings.height = 1920;
+        inserted.settings = project.timeline.as_ref().unwrap().settings.clone();
         let empty_project = store.update_project(&project).unwrap();
         let empty = EditLayout::from_document(empty_project.timeline.as_ref().unwrap());
         let added = apply_layout(&store, &project.id, empty.clone(), inserted.clone()).unwrap();
         assert!(added.source.video_path.is_some());
+        assert_eq!(added.timeline.as_ref().unwrap().settings.width, 1080);
+        assert_eq!(added.timeline.as_ref().unwrap().settings.height, 1920);
         let content = added.timeline.as_ref().unwrap().video_contents.clone();
         let undone = apply_layout(&store, &project.id, inserted.clone(), empty.clone()).unwrap();
         assert!(undone.source.video_path.is_none());

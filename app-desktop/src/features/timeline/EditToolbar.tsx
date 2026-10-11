@@ -1,9 +1,9 @@
 import { createSignal, For, Show } from 'solid-js';
 import { Undo2, Redo2, Scissors, Copy, ClipboardPaste, CopyPlus, Trash2, ListMinus, Group, Ungroup, Link, Unlink, Magnet, Settings2, ChevronLeft, ChevronRight } from 'lucide-solid';
 import Modal from '../../shared/components/Modal';
-import { currentProject } from '../../app/project-state';
+import { currentProject, setActiveWorkspacePanelTab } from '../../app/project-state';
 import { clipEndUs, secondsToTimeUs, timelineDurationUs } from './time';
-import { selectedTimelineIds } from './timeline-state';
+import { seekTimeline, selectedTimelineIds, setTimelinePlaying } from './timeline-state';
 import { canPaste, canRedo, canUndo, commitEdit, copyTimelineClips, editBusy, editNotice, pasteTimelineClips, redoLabel, redoTimeline, setSnapEnabled, snapEnabled, undoLabel, undoTimeline } from './edit-state';
 import { clipTrackKind } from './edit-commands';
 
@@ -48,6 +48,9 @@ export default function EditToolbar(props: { cursorUs: number }) {
       <button type="button" disabled={disabled()} aria-label="Trim cuối bằng thời gian" onClick={() => open('end')}>Trim cuối</button>
       <label class="timeline-add-track"><span>Track</span><select aria-label="Thêm track" value="" disabled={editBusy()} onChange={event => { const kind = event.currentTarget.value as 'visual' | 'audio' | 'subtitle'; if (kind) void commitEdit({ kind: 'track', action: 'add', trackKind: kind }, 'Thêm track'); event.currentTarget.value = ''; }}><option value="">+ Thêm</option><option value="visual">Hình ảnh</option><option value="audio">Âm thanh</option><option value="subtitle">Phụ đề</option></select></label>
       <span class="timeline-selection-count">{selectedTimelineIds().length} chọn{editBusy() ? ' · Đang lưu…' : ''}</span>
+      <button type="button" disabled={editBusy()} onClick={() => { setTimelinePlaying(false); seekTimeline(props.cursorUs); setActiveWorkspacePanelTab('properties'); }}>Hình ảnh / khung hình</button>
+      <button type="button" disabled={editBusy()} onClick={() => void commitEdit({ kind: 'text', text: 'Nội dung chữ', atUs: props.cursorUs }, 'Thêm lớp chữ')}>+ Chữ</button>
+      <button type="button" disabled={disabled() || clip()?.content.kind !== 'video'} onClick={() => void commitEdit({ kind: 'caption', videoClipId: clip()!.id }, 'Thêm phụ đề liên kết')}>+ Phụ đề</button>
     </div>
     <Show when={editing()}><Modal title={editing() === 'move' ? 'Di chuyển clip' : editing() === 'start' ? 'Trim đầu clip' : 'Trim cuối clip'} onClose={() => { if (!editBusy()) setEditing(undefined); }}>
       <form class="timeline-edit-form" onSubmit={event => { event.preventDefault(); void submit(); }}>

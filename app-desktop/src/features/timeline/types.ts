@@ -45,6 +45,13 @@ export interface TimelineClip {
   sourceInUs: TimeUs; sourceOutUs: TimeUs; rate: Rational;
   content: ClipContent; transform: ClipTransform;
   linkedClipId: string | null; groupId: string | null;
+  /** Per-instance typography, independent of translated source content. */
+  style?: ClipStyle;
+}
+export interface ClipStyle {
+  fontFamily: string; fontSize: number; fontWeight: number;
+  color: string; backgroundColor: string; backgroundOpacity: number;
+  alignment: 'left' | 'center' | 'right';
 }
 export interface TimelineSettings {
   width: number; height: number; frameRate: Rational; backgroundColor: string;

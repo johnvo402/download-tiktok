@@ -17,6 +17,7 @@ import type { AppSettings } from '../../../app/services/translation-service';
 import { compareSegmentTime, formatTimestamp, ttsWindowEnd, validateTranscript } from '../../transcript/transcript-utils';
 import Modal from '../../../shared/components/Modal';
 import MediaLibrary from '../../media/MediaLibrary';
+import VisualProperties from '../../timeline/VisualProperties';
 import { open } from '@tauri-apps/plugin-dialog';
 import { flushVisualSettings, mergeVisualProject as mergeRawVisualProject, updateVisualSettings as updateRawVisualSettings } from '../../overlays/overlay-state';
 import type { WorkspacePanelTab } from '../../../app/project-state';
@@ -1299,6 +1300,7 @@ function TranslationPanelEditor(props: { contentId?: string }) {
       <Show when={activeWorkspacePanelTab() === 'properties'}>
         <div class="properties-panel-content" role="tabpanel">
           <div class="properties-header"><span class="properties-icon"><Settings2 size={16} /></span><div><span>PROJECT SETTINGS</span><h3>Thuộc tính</h3></div></div>
+          <VisualProperties />
           <Show when={selectedBlur()}>{(region) => <div class="property-group overlay-property-group"><div class="property-group-title"><span>{isAiRemovalEffect(region().effect) ? 'AI REMOVE · STTN' : 'VÙNG BLUR'}</span><span class="property-status" classList={{ 'status-off': !region().enabled }}>{region().enabled ? 'BẬT' : 'TẮT'}</span></div>
             <label class="property-control-row"><span>Loại vùng</span><select class="settings-select" value={region().role ?? 'generic'} onChange={(event) => updateBlurSettings(region().id, { role: event.currentTarget.value as 'generic' | 'subtitle' })}><option value="generic">{isAiRemovalEffect(region().effect) ? 'Vùng xóa chữ' : 'Generic Blur'}</option><option value="subtitle">{isAiRemovalEffect(region().effect) ? 'Subtitle Region' : 'Subtitle Blur'}</option></select></label>
             <Show when={region().role !== 'subtitle' && currentProject()?.subtitle.enabled}><p class="overlay-selection-hint">Có thể đổi loại vùng này thành Subtitle Region để đặt bản dịch bên trong nó, hoặc chọn một vùng subtitle riêng trong Properties.</p></Show>

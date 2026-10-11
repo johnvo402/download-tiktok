@@ -244,6 +244,19 @@ pub struct Clip {
     pub transform: ClipTransform,
     pub linked_clip_id: Option<String>,
     pub group_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<ClipStyle>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClipStyle {
+    pub font_family: String,
+    pub font_size: f64,
+    pub font_weight: u32,
+    pub color: String,
+    pub background_color: String,
+    pub background_opacity: f64,
+    pub alignment: String,
 }
 impl Clip {
     pub fn duration_us(&self) -> Result<u64, String> {
@@ -433,6 +446,7 @@ impl TimelineDocument {
                 transform: ClipTransform::default(),
                 linked_clip_id: None,
                 group_id: None,
+                style: None,
             });
             Some(clip_id)
         } else {
@@ -497,8 +511,8 @@ pub fn validate(document: &TimelineDocument) -> Result<(), String> {
         return Err("Phiên bản timeline chưa được hỗ trợ.".into());
     }
     document.settings.frame_rate.validate()?;
-    if document.settings.width == 0
-        || document.settings.height == 0
+    if !(1..=16384).contains(&document.settings.width)
+        || !(1..=16384).contains(&document.settings.height)
         || document.settings.background_color.len() != 7
         || !document.settings.background_color.starts_with('#')
         || !document.settings.background_color[1..]
@@ -636,6 +650,23 @@ pub fn validate(document: &TimelineDocument) -> Result<(), String> {
             }
         }
         let t = &clip.transform;
+        if let ClipContent::Text { text } = &clip.content {
+            if text.trim().is_empty() || text.chars().count() > 10000 {
+                return Err("Nội dung chữ phải từ 1 đến 10.000 ký tự.".into());
+            }
+        }
+        if let Some(style) = &clip.style {
+            let color = |s: &str| s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit());
+            if !matches!(clip.content, ClipContent::Text { .. } | ClipContent::Subtitles { .. })
+                || style.font_family.trim().is_empty() || style.font_family.len() > 96
+                || !style.font_size.is_finite() || !(8.0..=240.0).contains(&style.font_size)
+                || !(100..=900).contains(&style.font_weight)
+                || !color(&style.color) || !color(&style.background_color)
+                || !style.background_opacity.is_finite() || !(0.0..=1.0).contains(&style.background_opacity)
+                || !["left", "center", "right"].contains(&style.alignment.as_str()) {
+                return Err("Kiểu chữ clip không hợp lệ.".into());
+            }
+        }
         let crop = &t.crop;
         if ![
             t.x,
@@ -653,6 +684,8 @@ pub fn validate(document: &TimelineDocument) -> Result<(), String> {
         .all(|v| v.is_finite())
             || t.scale_x <= 0.0
             || t.scale_y <= 0.0
+            || t.scale_x > 100.0
+            || t.scale_y > 100.0
             || !(0.0..=1.0).contains(&t.opacity)
             || crop.x < 0.0
             || crop.y < 0.0
@@ -894,6 +927,7 @@ pub fn reconcile_legacy(project: &mut Project, previous: &Project) -> Result<(),
                         transform: ClipTransform::default(),
                         linked_clip_id: None,
                         group_id: None,
+                        style: None,
                     });
                     document.legacy_binding.as_mut().unwrap().clip_id = Some(id);
                 }
@@ -968,6 +1002,7 @@ mod tests {
                 transform: ClipTransform::default(),
                 linked_clip_id: None,
                 group_id: None,
+                style: None,
             };
             assert_eq!(
                 clip.duration_us().unwrap(),

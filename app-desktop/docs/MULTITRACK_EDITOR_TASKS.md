@@ -1,6 +1,6 @@
 # Kế hoạch timeline nhiều lớp trong phần Dịch
 
-Trạng thái: T01–T05 hoàn tất; T06–T11 chưa triển khai. Cập nhật: 2026-10-11.
+Trạng thái: T01–T06 hoàn tất; T07–T11 chưa triển khai. Cập nhật: 2026-10-11.
 
 ## Mục tiêu và bố cục
 
@@ -95,6 +95,10 @@ Track video, ảnh, chữ/logo và phụ đề; video có thể nằm trên vide
 Khung hình dự án hỗ trợ 16:9, 9:16, 1:1 và kích thước tùy chỉnh. Vùng OCR/xóa chữ vẫn gắn với tọa độ nguồn, được biến đổi đúng khi clip bị crop/scale. Caption liên kết video có vị trí/style có thể chỉnh.
 
 Hoàn tất khi: ảnh xuất hiện đúng khoảng thời gian trên video; thay đổi thứ tự lớp và tỷ lệ cho kết quả đúng trong preview. Phụ thuộc T04–T05 và preview T08 được phát triển cùng.
+
+Đã triển khai: bảng Properties cho transform/crop từng clip và khung hình 16:9, 9:16, 1:1/tùy chỉnh; nhập giá trị để xem thử, Áp dụng lưu một bước undo và Hủy xem thử. Preview trình duyệt ghép video/ảnh/chữ/phụ đề theo order track, hỗ trợ picture-in-picture, vị trí tâm, kích thước, xoay, lật, opacity và fit/fill/stretch. Thêm chữ và phụ đề liên kết bằng toolbar; ảnh/logo dùng kho nguồn. Typography là thuộc tính riêng của clip, không sửa transcript/bản dịch dùng chung. Vùng OCR/blur/AI Remove hiển thị hướng dẫn trong tọa độ nguồn, cùng đi qua crop/transform của video; chức năng xử lý vùng vẫn ở editor nguồn.
+
+Đã kiểm tra: build frontend, 67 test frontend, 217 test Rust qua và 23 test tùy chọn bỏ qua. UI với video/ảnh thật kiểm tra PiP, thứ tự track, ảnh/chữ theo khoảng thời gian, caption theo nguồn A, crop/fill/lật/OCR, draft không ghi dữ liệu, khung hình/transform undo/redo, giữ cập nhật AI, khóa và inspector 360px. Hồi quy UI T05 qua. Đồng bộ audio/native preview, hiệu ứng xử lý vùng trên compositor và export toàn timeline tiếp tục ở T07–T09. Chi tiết: [TIMELINE_VISUALS.md](TIMELINE_VISUALS.md).
 
 ## T07 — Phụ đề và audio đi theo clip
 

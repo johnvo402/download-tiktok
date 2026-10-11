@@ -6,7 +6,7 @@ const transform: TimelineClip['transform'] = { x:.5,y:.5,scaleX:1,scaleY:1,rotat
 function fixture(): TimelineDocument {
   const track = (id: string, kind: TimelineTrack['kind'], order: number): TimelineTrack => ({ id:`track-${id}`, kind, order, name:id,locked:false,enabled:true,muted:false,solo:false });
   const clip = (id: string, trackId: string, startUs: number, sourceInUs: number, sourceOutUs: number, content: TimelineClip['content'], linkedClipId: string|null = null): TimelineClip => ({ id,trackId:`track-${trackId}`,startUs,sourceInUs,sourceOutUs,content:'assetId' in content ? {...content,assetId:`asset-${content.assetId}`} : content,linkedClipId,groupId:null,transform,rate:{numerator:1,denominator:1} });
-  return { schemaVersion:1,settings:{width:640,height:360,backgroundColor:'#000',frameRate:{numerator:25,denominator:1}},
+  return { schemaVersion:1,settings:{width:640,height:360,backgroundColor:'#000000',frameRate:{numerator:25,denominator:1}},
     assets:['a','b','music','image'].map(id=>({id:`asset-${id}`,kind:id==='image'?'image':id==='music'?'audio':'video',durationUs:id==='image'?null:30e6,relativePath:`media/${id}`,frameRate:null,variableFrameRate:null,metadata:{originalName:id,videoPath:`media/${id}`}})),
     videoContents:['a','b'].map(id=>({id:`content-${id}`,assetId:`asset-${id}`,revision:7,settings:{translation:{targetLanguage:id},dubbing:{voice:id}} as unknown as TimelineDocument['videoContents'][number]['settings']})),
     tracks:[track('video','visual',0),track('image','visual',1),track('music','audio',2),track('voice','audio',3),track('subtitles','subtitle',4)],
@@ -20,6 +20,22 @@ const apply = (doc: TimelineDocument, command: Parameters<typeof applyEdit>[1]) 
 const find = (layout: ReturnType<typeof applyEdit>, id: string) => layout.clips.find(c => c.id === id)!;
 const updated = (doc: TimelineDocument, layout: ReturnType<typeof applyEdit>): TimelineDocument => ({ ...doc, ...layout, tracks:layout.tracks.map(t=>({...doc.tracks.find(old=>old.id===t.id),locked:false,enabled:true,muted:false,solo:false,...t})) });
 describe('transactional timeline editing', () => {
+  it('edits one visual instance and the canvas without changing source coordinates, shared content or timing', () => {
+    const doc = fixture(), before = JSON.stringify(doc);
+    const visual = apply(doc, { kind: 'visual', id: 'a', transform: { ...transform, x: .75, scaleX: .25, scaleY: .25, rotation: 30, crop: { x: .2, y: .1, width: .6, height: .8 } } });
+    expect(find(visual, 'a').sourceInUs).toBe(2e6); expect(find(visual, 'voice').transform).toEqual(transform);
+    expect(doc.videoContents[0].revision).toBe(7); expect(JSON.stringify(doc)).toBe(before);
+    const canvas = apply(doc, { kind: 'canvas', settings: { ...doc.settings, width: 1080, height: 1920 } });
+    expect(canvas.clips).toEqual(doc.clips); expect(canvas.settings.width).toBe(1080);
+    doc.tracks[0].locked = true; expect(() => apply(doc, { kind: 'visual', id: 'a', transform: { ...transform, opacity: .5 } })).toThrow(/khóa/);
+  });
+  it('adds editable text and a linked caption with the trimmed source window/rate', () => {
+    const doc = fixture(); const text = apply(doc, { kind: 'text', text: 'Logo chữ', atUs: 4e6 });
+    expect(text.clips.at(-1)?.content).toEqual({ kind: 'text', text: 'Logo chữ' }); expect(text.clips.at(-1)?.startUs).toBe(4e6);
+    const caption = apply(doc, { kind: 'caption', videoClipId: 'a' }); const c = caption.clips.at(-1)!;
+    expect(c.content).toEqual({ kind: 'subtitles', videoContentId: 'content-a' }); expect(c.linkedClipId).toBe('a'); expect(c.sourceInUs).toBe(2e6);
+    expect(timelineToSourceUs(c, 3e6)).toBe(5e6); expect(doc.videoContents.length).toBe(2);
+  });
   it('moves linked clips and groups without rewriting source windows or content/revisions', () => {
     const doc=fixture(), bytes=JSON.stringify(doc);
     const grouped=updated(doc,apply(doc,{kind:'group',ids:['a','b']}));

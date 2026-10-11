@@ -1,12 +1,18 @@
-import type { TimelineClip, TimelineDocument, TimelineTrack } from './types';
+import type { ClipStyle, ClipTransform, TimelineClip, TimelineDocument, TimelineSettings, TimelineTrack } from './types';
+import { validateCanvas, validateStyle, validateTransform } from './visual-layout';
 import { clipDurationUs, clipEndUs, MAX_TIME_US, rescaleTime, timelineToSourceUs } from './time';
 
 export interface EditLayout {
+  settings: TimelineSettings;
   clips: TimelineClip[];
   tracks: Array<Pick<TimelineTrack, 'id' | 'kind' | 'name' | 'order'>>;
   legacyBinding: TimelineDocument['legacyBinding'];
 }
 export type EditCommand =
+  | { kind: 'visual'; id: string; transform: ClipTransform; style?: ClipStyle; text?: string }
+  | { kind: 'canvas'; settings: TimelineSettings }
+  | { kind: 'text'; text: string; atUs: number }
+  | { kind: 'caption'; videoClipId: string }
   | { kind: 'move'; ids: string[]; deltaUs: number; anchorId?: string; trackId?: string }
   | { kind: 'trim'; id: string; edge: 'start' | 'end'; atUs: number }
   | { kind: 'split'; ids: string[]; atUs: number }
@@ -18,7 +24,7 @@ export type EditCommand =
   | { kind: 'add'; assetId: string; atUs: number | null }
   | { kind: 'track'; action: 'add'; trackKind: TimelineTrack['kind'] }
   | { kind: 'track'; action: 'reorder'; id: string; direction: -1 | 1 };
-export const editLayout = (doc: TimelineDocument): EditLayout => structuredClone({ clips: doc.clips, tracks: doc.tracks.map(({ id, kind, name, order }) => ({ id, kind, name, order })), legacyBinding: doc.legacyBinding });
+export const editLayout = (doc: TimelineDocument): EditLayout => structuredClone({ settings: doc.settings, clips: doc.clips, tracks: doc.tracks.map(({ id, kind, name, order }) => ({ id, kind, name, order })), legacyBinding: doc.legacyBinding });
 export const sameLayout = (a: EditLayout, b: EditLayout) => JSON.stringify(a) === JSON.stringify(b);
 function fail(message: string): never { throw new Error(message); }
 const time = (value: number) => { if (!Number.isSafeInteger(value) || value < 0 || value > MAX_TIME_US) fail('Thời gian dựng không hợp lệ.'); return value; };
@@ -40,6 +46,7 @@ export function editClosure(doc: Pick<TimelineDocument, 'clips'>, ids: string[])
   return result;
 }
 export function validateEdit(doc: TimelineDocument, next: EditLayout) {
+  validateCanvas(next.settings);
   const ids = new Set<string>([...doc.assets, ...doc.videoContents].map(value => value.id)); const tracks = new Map(next.tracks.map(t => [t.id, t]));
   const orders = new Set<number>();
   for (const t of next.tracks) {
@@ -47,6 +54,8 @@ export function validateEdit(doc: TimelineDocument, next: EditLayout) {
     ids.add(t.id); orders.add(t.order);
   }
   for (const c of next.clips) {
+    validateTransform(c.transform); if (c.style) { if (!['text', 'subtitles'].includes(c.content.kind)) fail('Kiểu chữ chỉ thuộc lớp chữ/phụ đề.'); validateStyle(c.style); }
+    if (c.content.kind === 'text' && (!c.content.text.trim() || c.content.text.length > 10000)) fail('Nội dung chữ phải từ 1 đến 10.000 ký tự.');
     if (ids.has(c.id)) fail('ID clip bị trùng.'); ids.add(c.id);
     time(c.startUs); time(c.sourceInUs); time(c.sourceOutUs); time(clipEndUs(c));
     const track = tracks.get(c.trackId); if (!track || track.kind !== clipTrackKind(c)) fail('Loại clip không phù hợp track đích.');
@@ -124,7 +133,21 @@ function insertCopies(doc: TimelineDocument, next: EditLayout, originals: Timeli
 }
 export function applyEdit(doc: TimelineDocument, command: EditCommand, uuid: () => string = () => crypto.randomUUID()): EditLayout {
   const next = editLayout(doc);
-  if (command.kind === 'track') {
+  if (command.kind === 'canvas') next.settings = structuredClone(command.settings);
+  else if (command.kind === 'visual') {
+    const c = next.clips.find(c => c.id === command.id) ?? fail('Clip không tồn tại.');
+    if (c.content.kind === 'audio' || c.content.kind === 'voice') fail('Clip âm thanh không có thuộc tính hình ảnh.');
+    c.transform = structuredClone(command.transform);
+    if (command.style) c.style = structuredClone(command.style);
+    if (command.text !== undefined) { if (c.content.kind !== 'text') fail('Chỉ sửa chữ trên lớp chữ.'); c.content.text = command.text; }
+  } else if (command.kind === 'text' || command.kind === 'caption') {
+    const parent = command.kind === 'caption' ? doc.clips.find(c => c.id === command.videoClipId && c.content.kind === 'video') ?? fail('Chọn video để thêm lớp phụ đề.') : undefined;
+    const start = parent?.startUs ?? (command.kind === 'text' ? time(command.atUs) : 0);
+    const duration = parent ? clipDurationUs(parent) : 5e6;
+    const content: TimelineClip['content'] = parent && parent.content.kind === 'video' ? { kind: 'subtitles', videoContentId: parent.content.videoContentId } : { kind: 'text', text: command.kind === 'text' ? command.text : '' };
+    next.clips.push({ id: uuid(), trackId: freeTrack(doc, next, parent ? 'subtitle' : 'visual', start, duration, uuid), startUs: start, sourceInUs: parent?.sourceInUs ?? 0, sourceOutUs: parent?.sourceOutUs ?? duration, rate: parent?.rate ?? { numerator: 1, denominator: 1 }, content, linkedClipId: parent?.id ?? null, groupId: null,
+      transform: { x: .5, y: parent ? .88 : .5, scaleX: 1, scaleY: 1, rotation: 0, opacity: 1, flipX: false, flipY: false, fit: 'contain', crop: { x: 0, y: 0, width: 1, height: 1 } } });
+  } else if (command.kind === 'track') {
     if (command.action === 'add') next.tracks.push({ id: uuid(), kind: command.trackKind, name: command.trackKind === 'visual' ? 'Lớp hình ảnh' : command.trackKind === 'audio' ? 'Âm thanh' : 'Phụ đề', order: Math.max(-1, ...next.tracks.map(t => t.order)) + 1 });
     else {
       const ordered = [...next.tracks].sort((a, b) => a.order - b.order);
