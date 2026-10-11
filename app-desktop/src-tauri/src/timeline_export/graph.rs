@@ -156,15 +156,54 @@ pub fn build(
                 ph.min(h)
             ));
         }
-        let tw = size(w as f64 * t.scale_x);
-        let th = size(h as f64 * t.scale_y);
+        let local = format!("t+{}", num(seconds(from - c.start_us)));
+        let geq_local = format!("T+{}", num(seconds(from - c.start_us)));
+        let animated = c.effects.as_ref().is_some_and(|e| !e.keyframes.is_empty());
+        let alpha = crate::timeline_effects::alpha_expression(c, &plan.document, &geq_local)?;
+        let has_alpha = c
+            .effects
+            .as_ref()
+            .is_some_and(|e| !e.keyframes.is_empty() || e.fade_in_us > 0 || e.fade_out_us > 0)
+            || c.transition_in.is_some()
+            || c.linked_clip_id.is_some()
+                && crate::timeline_effects::audio_ramps(c, &plan.document)? != (None, None);
+        if has_alpha {
+            chain.push_str(&format!(
+                ",geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({alpha})',format=rgba"
+            ));
+        } else {
+            chain.push_str(&format!(",colorchannelmixer=aa={}", num(t.opacity)));
+        }
+        let keys = c
+            .effects
+            .as_ref()
+            .map(|e| e.keyframes.as_slice())
+            .unwrap_or(&[]);
+        let max_x = if animated {
+            keys.iter().map(|k| k.scale_x).fold(0f64, f64::max)
+        } else {
+            t.scale_x
+        };
+        let max_y = if animated {
+            keys.iter().map(|k| k.scale_y).fold(0f64, f64::max)
+        } else {
+            t.scale_y
+        };
+        let tw = size(w as f64 * max_x);
+        let th = size(h as f64 * max_y);
         let angle = t.rotation.to_radians();
         let rw = size((tw as f64 * angle.cos().abs() + th as f64 * angle.sin().abs()).ceil());
         let rh = size((tw as f64 * angle.sin().abs() + th as f64 * angle.cos().abs()).ceil());
         if rw as u64 * rh as u64 > 32_000_000 {
             return Err(format!("Lớp {} quá lớn để export. Hãy giảm scale.", c.id));
         }
-        chain.push_str(&format!(",scale={tw}:{th}:flags=bicubic"));
+        if animated {
+            let sx = crate::timeline_effects::motion_expression(c, 2, &local);
+            let sy = crate::timeline_effects::motion_expression(c, 3, &local);
+            chain.push_str(&format!(",scale=w='max(1,floor({w}*({sx})+0.5))':h='max(1,floor({h}*({sy})+0.5))':eval=frame:flags=bicubic,pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2:color=black@0:eval=frame"));
+        } else {
+            chain.push_str(&format!(",scale={tw}:{th}:flags=bicubic"));
+        }
         if t.flip_x {
             chain.push_str(",hflip");
         }
@@ -175,14 +214,20 @@ pub fn build(
             chain.push_str(&format!(",rotate={}:ow={rw}:oh={rh}:c=black@0", num(angle)));
         }
         chain.push_str(&format!(
-            ",colorchannelmixer=aa={},trim=duration={},setpts=PTS-STARTPTS+{}/TB[layer{layer}];\n",
-            num(t.opacity),
+            ",trim=duration={},setpts=PTS-STARTPTS+{}/TB[layer{layer}];\n",
             num(duration),
             num(offset)
         ));
         graph.filters.push_str(&chain);
-        graph.filters.push_str(&format!("[base{layer}][layer{layer}]overlay=x={}-overlay_w/2:y={}-overlay_h/2:eof_action=pass:repeatlast=0:format=auto:enable='gte(t,{})*lt(t,{})'[base{}];\n",
-            num(t.x*w as f64),num(t.y*h as f64),num(offset),num(seconds(to-plan.start)),layer+1));
+        let clock = format!(
+            "t+{}-{}",
+            num(seconds(plan.start)),
+            num(seconds(c.start_us))
+        );
+        let x = crate::timeline_effects::motion_expression(c, 0, &clock);
+        let y = crate::timeline_effects::motion_expression(c, 1, &clock);
+        graph.filters.push_str(&format!("[base{layer}][layer{layer}]overlay=x='({x})*{w}-overlay_w/2':y='({y})*{h}-overlay_h/2':eof_action=pass:repeatlast=0:format=auto:enable='gte(t,{})*lt(t,{})'[base{}];\n",
+            num(offset),num(seconds(to-plan.start)),layer+1));
     }
     graph.filters.push_str(&format!(
         "[base{}]scale={}:{},setsar=1,format=yuv420p[vout];\n",

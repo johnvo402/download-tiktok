@@ -40,5 +40,5 @@ export function trackAudible(track: TimelineTrack, tracks: TimelineTrack[]): boo
 export function activeClips(doc: TimelineDocument, timeUs: number): TimelineClip[] {
   const tracks = new Map(doc.tracks.map(t => [t.id, t]));
   return doc.clips.filter(c => tracks.get(c.trackId)?.enabled && timelineToSourceUs(c, timeUs) !== null)
-    .sort((a, b) => (tracks.get(a.trackId)?.order ?? 0) - (tracks.get(b.trackId)?.order ?? 0));
+    .sort((a, b) => (tracks.get(a.trackId)?.order ?? 0) - (tracks.get(b.trackId)?.order ?? 0) || a.startUs - b.startUs);
 }

@@ -24,6 +24,7 @@ mod timeline_service;
 mod timeline_edit;
 mod timeline_audio;
 mod timeline_export;
+mod timeline_effects;
 pub mod video_content;
 mod render_service;
 pub mod render;

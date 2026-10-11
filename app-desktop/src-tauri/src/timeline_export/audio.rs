@@ -169,6 +169,10 @@ pub fn render(
         .iter()
         .map(|r| Ok((r.clip.duration_us()?, r.clip.end_us()?)))
         .collect::<Result<Vec<_>, String>>()?;
+    let ramps: Vec<_> = regions
+        .iter()
+        .map(|r| crate::timeline_effects::audio_ramps(&r.clip, &plan.document))
+        .collect::<Result<Vec<_>, String>>()?;
     let mut at = 0u64;
     while at < frames as u64 {
         if cancel() {
@@ -229,6 +233,7 @@ pub fn render(
                 };
                 let gain = r.audio.volume
                     * fade_in.min(fade_out).clamp(0.0, 1.0)
+                    * crate::timeline_effects::audio_gain(&ramps[i], time)
                     * (1.0 - r.audio.ducking_amount * curves[i].at(time));
                 for ch in 0..2 {
                     block[(frame - at) as usize][ch] += sample[ch] as f64 * gain;

@@ -15,6 +15,7 @@ import { nativeSceneClip, residentClips, timelineScene } from './scene-plan';
 import { PreviewClock, PreviewPlayers } from './preview-clock';
 import { mediaPlayer } from './media-player';
 import { createTimelineNativePreview } from './native-preview';
+import { visualAt } from './effects';
 
 function SourceLayer(props: { clip: TimelineClip; width: number; height: number; guides: boolean; active: boolean; native: boolean; text: string; players: PreviewPlayers; fail(id: string, error: string): void }) {
   const [url, setUrl] = createSignal('');
@@ -54,7 +55,7 @@ function SourceLayer(props: { clip: TimelineClip; width: number; height: number;
   });
   const geometry = () => sourceGeometry(props.width, props.height, asset()?.metadata.width || props.width, asset()?.metadata.height || props.height, clip().transform);
   const planeStyle = () => { const g = geometry(), crop = clip().transform.crop; return { width: `${g.width}px`, height: `${g.height}px`, left: `${g.left}px`, top: `${g.top}px`, 'clip-path': `inset(${crop.y * 100}% ${(1 - crop.x - crop.width) * 100}% ${(1 - crop.y - crop.height) * 100}% ${crop.x * 100}%)` }; };
-  const layerStyle = () => { const t = clip().transform; return { left: `${t.x * 100}%`, top: `${t.y * 100}%`, opacity: t.opacity, transform: layerTransform(t), 'z-index': currentProject()?.timeline.tracks.find(track => track.id === props.clip.trackId)?.order ?? 0 }; };
+  const layerStyle = () => { const value = visualAt(clip(), currentProject()!.timeline, timelineTimeUs()), t = value.transform; return { left: `${t.x * 100}%`, top: `${t.y * 100}%`, opacity: t.opacity, transform: layerTransform(t), 'clip-path': value.reveal < 1 ? `inset(0 ${(1 - value.reveal) * 100}% 0 0)` : undefined, 'z-index': currentProject()?.timeline.tracks.find(track => track.id === props.clip.trackId)?.order ?? 0 }; };
   const typography = () => clipTypography(clip(), currentProject()?.timeline);
   const textStyle = () => { const s = typography(); return { 'font-family': s.fontFamily, 'font-size': `${s.fontSize * props.width / (previewSettings()?.width ?? props.width)}px`, 'font-weight': s.fontWeight, color: s.color, 'text-align': s.alignment, 'background-color': `${s.backgroundColor}${Math.round(s.backgroundOpacity * 255).toString(16).padStart(2, '0')}` }; };
   async function select() { setTimelinePlaying(false); await selectTimelineClip(props.clip.id); setActiveWorkspacePanelTab('properties'); }

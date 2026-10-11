@@ -91,12 +91,15 @@ impl Plan {
             })
             .collect();
         clips.sort_by_key(|c| {
-            self.document
-                .tracks
-                .iter()
-                .find(|t| t.id == c.track_id)
-                .unwrap()
-                .order
+            (
+                self.document
+                    .tracks
+                    .iter()
+                    .find(|t| t.id == c.track_id)
+                    .unwrap()
+                    .order,
+                c.start_us,
+            )
         });
         clips
     }

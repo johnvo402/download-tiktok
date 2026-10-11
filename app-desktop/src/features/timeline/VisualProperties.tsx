@@ -5,6 +5,7 @@ import { seekTimeline, selectedTimelineIds, setTimelinePlaying, timelineCursorUs
 import { clipTypography, defaultStyle, validateCanvas, validateStyle, validateTransform } from './visual-layout';
 import { setCanvasDraft, setVisualDraft } from './visual-state';
 import type { ClipStyle, ClipTransform, TimelineSettings } from './types';
+import EffectsProperties from './EffectsProperties';
 
 export default function VisualProperties() {
   const clip = () => currentProject()?.timeline.clips.find(c => c.id === selectedTimelineIds()[0]);
@@ -66,6 +67,7 @@ export default function VisualProperties() {
     <Show when={visual() && transform()} fallback={<p class="overlay-selection-hint">Chọn clip video, ảnh/logo, chữ hoặc phụ đề trên timeline để chỉnh hình ảnh.</p>}>
       <form class="property-group" onSubmit={e => { e.preventDefault(); void applyClip(); }}>
         <h4>Hình ảnh clip {locked() ? '· Đang khóa' : ''}</h4><p class="overlay-selection-hint">Chỉnh clip đầu tiên trong lựa chọn. Logo dùng ảnh PNG trong kho nguồn; dữ liệu OCR và xóa chữ vẫn theo nguồn.</p>
+        <Show when={clip()?.effects?.keyframes.length}><p class="overlay-selection-hint">Vị trí, scale và độ mờ đang do keyframe điều khiển. Chỉnh các điểm trong Hiệu ứng; xóa toàn bộ keyframe để dùng giá trị hình ảnh cơ bản.</p></Show>
         <fieldset disabled={editBusy() || locked()}>
           <div class="timeline-property-grid"><For each={[['x', 'Tâm X (%)'], ['y', 'Tâm Y (%)'], ['scaleX', 'Kích thước X (%)'], ['scaleY', 'Kích thước Y (%)'], ['rotation', 'Xoay (độ)'], ['opacity', 'Độ mờ (%)']] as const}>{([key, name]) => <label>{name}<input aria-label={name} type="number" required step="0.1" min={key.startsWith('scale') ? .1 : key === 'opacity' ? 0 : undefined} max={key === 'opacity' ? 100 : key.startsWith('scale') ? 10000 : undefined} value={transform()![key] * (key === 'rotation' ? 1 : 100)} onInput={e => update({ [key]: e.currentTarget.valueAsNumber / (key === 'rotation' ? 1 : 100) })} /></label>}</For></div>
           <label>Cách lấp khung<select aria-label="Cách lấp khung clip" value={transform()!.fit} onChange={e => update({ fit: e.currentTarget.value as ClipTransform['fit'] })}><option value="contain">Fit · giữ toàn bộ</option><option value="cover">Fill · lấp đầy</option><option value="stretch">Kéo giãn</option></select></label>
@@ -78,5 +80,6 @@ export default function VisualProperties() {
         </fieldset>
       </form>
     </Show>
+    <EffectsProperties />
   </div>;
 }

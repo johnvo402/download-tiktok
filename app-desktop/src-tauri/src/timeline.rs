@@ -252,6 +252,10 @@ pub struct Clip {
     pub style: Option<ClipStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<ClipAudio>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<crate::timeline_effects::VisualEffects>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition_in: Option<crate::timeline_effects::Transition>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -468,6 +472,8 @@ impl TimelineDocument {
                 group_id: None,
                 style: None,
                 audio: None,
+                effects: None,
+                transition_in: None,
             });
             Some(clip_id)
         } else {
@@ -601,14 +607,15 @@ pub fn validate(document: &TimelineDocument) -> Result<(), String> {
         }
         tracks.insert(track.id.as_str(), track);
     }
-    let mut intervals: HashMap<&str, Vec<(u64, u64)>> = HashMap::new();
+    let mut intervals: HashMap<&str, Vec<&Clip>> = HashMap::new();
     let mut clips = HashMap::new();
     for clip in &document.clips {
         validate_id(&clip.id, &mut ids)?;
+        crate::timeline_effects::validate_effects(clip)?;
         let track = tracks
             .get(clip.track_id.as_str())
             .ok_or("Clip không có track hợp lệ.")?;
-        let end = clip.end_us()?;
+        clip.end_us()?;
         let (expected, asset, content) = match &clip.content {
             ClipContent::Video {
                 asset_id,
@@ -762,16 +769,23 @@ pub fn validate(document: &TimelineDocument) -> Result<(), String> {
         {
             return Err("ID nhóm clip không hợp lệ.".into());
         }
-        intervals
-            .entry(&clip.track_id)
-            .or_default()
-            .push((clip.start_us, end));
+        intervals.entry(&clip.track_id).or_default().push(clip);
         clips.insert(clip.id.as_str(), clip);
     }
+    crate::timeline_effects::validate_transitions(document)?;
     for list in intervals.values_mut() {
-        list.sort_unstable();
-        if list.windows(2).any(|pair| pair[0].1 > pair[1].0) {
-            return Err("Clip chồng lấn trên cùng một track.".into());
+        list.sort_by_key(|c| c.start_us);
+        let mut active: Vec<&Clip> = Vec::new();
+        for c in list.iter() {
+            active.retain(|a| a.end_us().is_ok_and(|end| end > c.start_us));
+            for a in &active {
+                if !crate::timeline_effects::transition_overlap(a, c, document)? {
+                    return Err(
+                        "Clip chồng lấn trên cùng một track ngoài chuyển cảnh hợp lệ.".into(),
+                    );
+                }
+            }
+            active.push(c);
         }
     }
     for clip in &document.clips {
@@ -993,6 +1007,8 @@ pub fn reconcile_legacy(project: &mut Project, previous: &Project) -> Result<(),
                         group_id: None,
                         style: None,
                         audio: None,
+                        effects: None,
+                        transition_in: None,
                     });
                     document.legacy_binding.as_mut().unwrap().clip_id = Some(id);
                 }
@@ -1069,6 +1085,8 @@ mod tests {
                 group_id: None,
                 style: None,
                 audio: None,
+                effects: None,
+                transition_in: None,
             };
             assert_eq!(
                 clip.duration_us().unwrap(),

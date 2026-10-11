@@ -6,6 +6,7 @@ import { clipEndUs, secondsToTimeUs, timelineDurationUs } from './time';
 import { seekTimeline, selectedTimelineIds, setTimelinePlaying } from './timeline-state';
 import { canPaste, canRedo, canUndo, commitEdit, copyTimelineClips, editBusy, editNotice, pasteTimelineClips, redoLabel, redoTimeline, setSnapEnabled, snapEnabled, undoLabel, undoTimeline } from './edit-state';
 import { clipTrackKind } from './edit-commands';
+import { openEffectsProperties } from './ClipContextMenu';
 
 export default function EditToolbar(props: { cursorUs: number }) {
   const [editing, setEditing] = createSignal<'move' | 'start' | 'end'>();
@@ -49,6 +50,7 @@ export default function EditToolbar(props: { cursorUs: number }) {
       <label class="timeline-add-track"><span>Track</span><select aria-label="Thêm track" value="" disabled={editBusy()} onChange={event => { const kind = event.currentTarget.value as 'visual' | 'audio' | 'subtitle'; if (kind) void commitEdit({ kind: 'track', action: 'add', trackKind: kind }, 'Thêm track'); event.currentTarget.value = ''; }}><option value="">+ Thêm</option><option value="visual">Hình ảnh</option><option value="audio">Âm thanh</option><option value="subtitle">Phụ đề</option></select></label>
       <span class="timeline-selection-count">{selectedTimelineIds().length} chọn{editBusy() ? ' · Đang lưu…' : ''}</span>
       <button type="button" disabled={editBusy()} onClick={() => { setTimelinePlaying(false); seekTimeline(props.cursorUs); setActiveWorkspacePanelTab('properties'); }}>Hình ảnh / khung hình</button>
+      <button type="button" disabled={disabled()} title="Fade hình, chuyển cảnh và keyframe (K)" onClick={openEffectsProperties}>Hiệu ứng / keyframe</button>
       <button type="button" disabled={editBusy()} onClick={() => void commitEdit({ kind: 'text', text: 'Nội dung chữ', atUs: props.cursorUs }, 'Thêm lớp chữ')}>+ Chữ</button>
       <button type="button" disabled={disabled() || clip()?.content.kind !== 'video'} onClick={() => void commitEdit({ kind: 'caption', videoClipId: clip()!.id }, 'Thêm phụ đề liên kết')}>+ Phụ đề</button>
       <button type="button" disabled={disabled() || clip()?.content.kind !== 'video'} onClick={() => void commitEdit({ kind: 'voice', videoClipId: clip()!.id }, 'Thêm lớp giọng liên kết')}>+ Giọng</button>

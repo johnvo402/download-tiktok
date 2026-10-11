@@ -1,4 +1,5 @@
-import type { ClipAudio, ClipStyle, ClipTransform, TimelineClip, TimelineDocument, TimelineSettings, TimelineTrack } from './types';
+import type { ClipAudio, ClipStyle, ClipTransform, TimelineClip, TimelineDocument, TimelineSettings, TimelineTrack, VisualEffects, ClipTransition } from './types';
+import { validateEffects, validateTransitions, transitionOverlap } from './effects';
 import { clipAudio, validateAudio } from './audio-layout';
 import { validateCanvas, validateStyle, validateTransform } from './visual-layout';
 import { clipDurationUs, clipEndUs, MAX_TIME_US, rescaleTime, timelineToSourceUs } from './time';
@@ -10,6 +11,8 @@ export interface EditLayout {
   legacyBinding: TimelineDocument['legacyBinding'];
 }
 export type EditCommand =
+  | { kind: 'effects'; id: string; effects: VisualEffects }
+  | { kind: 'transition'; id: string; transition: Pick<ClipTransition, 'kind' | 'durationUs'> | null }
   | { kind: 'audio'; id: string; audio: ClipAudio }
   | { kind: 'voice'; videoClipId: string }
   | { kind: 'extractAudio'; videoClipId: string }
@@ -60,6 +63,7 @@ export function validateEdit(doc: TimelineDocument, next: EditLayout) {
     ids.add(t.id); orders.add(t.order);
   }
   for (const c of next.clips) {
+    validateEffects(c);
     if (c.audio) { if (!['video', 'audio', 'voice', 'sourceAudio'].includes(c.content.kind)) fail('Clip không có âm thanh.'); validateAudio(c.audio); }
     validateTransform(c.transform); if (c.style) { if (!['text', 'subtitles'].includes(c.content.kind)) fail('Kiểu chữ chỉ thuộc lớp chữ/phụ đề.'); validateStyle(c.style); }
     if (c.content.kind === 'text' && (!c.content.text.trim() || c.content.text.length > 10000)) fail('Nội dung chữ phải từ 1 đến 10.000 ký tự.');
@@ -84,9 +88,15 @@ export function validateEdit(doc: TimelineDocument, next: EditLayout) {
     if (track.locked && (JSON.stringify(incoming) !== JSON.stringify({ id: track.id, kind: track.kind, name: track.name, order: track.order })
       || JSON.stringify(doc.clips.filter(c => c.trackId === track.id)) !== JSON.stringify(next.clips.filter(c => c.trackId === track.id)))) fail(`Track “${track.name}” đang khóa.`);
   }
+  validateTransitions(next);
   for (const t of next.tracks) {
     const clips = next.clips.filter(c => c.trackId === t.id).sort((a, b) => a.startUs - b.startUs);
-    if (clips.some((c, i) => i > 0 && clipEndUs(clips[i - 1]) > c.startUs)) fail('Clip chồng lấn trên cùng track. Chọn vị trí trống hoặc track khác.');
+    let active: TimelineClip[] = [];
+    for (const c of clips) {
+      active = active.filter(a => clipEndUs(a) > c.startUs);
+      if (active.some(a => !transitionOverlap(a, c, next))) fail('Clip chồng lấn trên cùng track. Chọn vị trí trống hoặc chuyển cảnh hợp lệ.');
+      active.push(c);
+    }
   }
 }
 function sourceAtBoundary(c: TimelineClip, at: number): number {
@@ -128,6 +138,10 @@ function insertCopies(doc: TimelineDocument, next: EditLayout, originals: Timeli
     const copy = structuredClone(c); copy.id = idMap.get(c.id)!; copy.startUs = time(atUs + c.startUs - origin);
     if (copy.groupId) { if (!groups.has(copy.groupId)) groups.set(copy.groupId, uuid()); copy.groupId = groups.get(copy.groupId)!; }
     copy.linkedClipId = copy.linkedClipId ? idMap.get(copy.linkedClipId) ?? null : null;
+    if (copy.transitionIn) {
+      const from = idMap.get(copy.transitionIn.fromClipId);
+      if (from) copy.transitionIn.fromClipId = from; else delete copy.transitionIn;
+    }
     // Keep all clips from a copied track together, including its gaps.
     if (!destinations.has(c.trackId)) {
       const sameTrack = originals.filter(other => other.trackId === c.trackId);
@@ -140,7 +154,20 @@ function insertCopies(doc: TimelineDocument, next: EditLayout, originals: Timeli
 }
 export function applyEdit(doc: TimelineDocument, command: EditCommand, uuid: () => string = () => crypto.randomUUID()): EditLayout {
   const next = editLayout(doc);
-  if (command.kind === 'canvas') next.settings = structuredClone(command.settings);
+  if (command.kind === 'effects') {
+    const c = next.clips.find(c => c.id === command.id) ?? fail('Clip không tồn tại.'); c.effects = structuredClone(command.effects);
+  } else if (command.kind === 'transition') {
+    const b = next.clips.find(c => c.id === command.id) ?? fail('Clip không tồn tại.');
+    const previous = next.clips.filter(c => c.trackId === b.trackId && c.startUs < b.startUs).sort((a, c) => c.startUs - a.startUs)[0];
+    if (!previous || !['video', 'image'].includes(b.content.kind) || !['video', 'image'].includes(previous.content.kind)) fail('Chọn video/ảnh có một video/ảnh liền trước trên cùng track.');
+    const old = b.transitionIn?.durationUs ?? 0, desired = command.transition?.durationUs ?? 0;
+    if (clipEndUs(previous) !== b.startUs + old) fail('Hai clip cần liền nhau, không có khoảng trống.');
+    if (command.transition && (!Number.isSafeInteger(desired) || desired <= 0 || desired >= Math.min(clipDurationUs(previous), clipDurationUs(b)))) fail('Chuyển cảnh phải ngắn hơn cả hai clip; không kéo dài hoặc lặp nguồn.');
+    const ids = editClosure(doc, next.clips.filter(c => c.trackId === b.trackId && c.startUs >= b.startUs).map(c => c.id));
+    if (ids.has(previous.id)) fail('Tách nhóm hai phía chuyển cảnh trước khi áp dụng.');
+    for (const c of next.clips.filter(c => ids.has(c.id))) c.startUs = time(c.startUs + old - desired);
+    if (command.transition) b.transitionIn = { ...command.transition, fromClipId: previous.id }; else delete b.transitionIn;
+  } else if (command.kind === 'canvas') next.settings = structuredClone(command.settings);
   else if (command.kind === 'audio') {
     const c = next.clips.find(c => c.id === command.id) ?? fail('Clip không tồn tại.'); c.audio = structuredClone(command.audio);
   } else if (command.kind === 'detach') {
@@ -168,6 +195,7 @@ export function applyEdit(doc: TimelineDocument, command: EditCommand, uuid: () 
     if (!voice && !doc.assets.find(a => a.id === video.assetId)?.metadata.audioStreams?.length) fail('Video này không có audio gốc.');
     parent.audio = { ...audio, ...(voice ? { voiceEnabled: false } : { muted: true }) };
     next.clips.push({ ...structuredClone(parent), id: uuid(), trackId: freeTrack(doc, next, 'audio', parent.startUs, clipDurationUs(parent), uuid),
+      effects: undefined, transitionIn: undefined,
       content: voice ? { kind: 'voice', videoContentId: video.videoContentId } : { kind: 'sourceAudio', assetId: video.assetId, videoContentId: video.videoContentId },
       linkedClipId: parent.id, groupId: null, audio: { ...audio, muted: false, volume: voice ? doc.videoContents.find(v => v.id === video.videoContentId)?.settings.dubbing.dubbedVolume ?? 1 : audio.volume } });
   }
@@ -301,6 +329,7 @@ export function applyEdit(doc: TimelineDocument, command: EditCommand, uuid: () 
       }
     }
   }
+  for (const c of next.clips) if (c.transitionIn && !next.clips.some(a => a.id === c.transitionIn!.fromClipId)) delete c.transitionIn;
   repairBinding(next); validateEdit(doc, next); return next;
 }
 /** Snap any moving edge to non-moving edges, zero or playhead within a pixel tolerance. */

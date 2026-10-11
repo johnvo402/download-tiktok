@@ -49,7 +49,14 @@ export interface TimelineClip {
   /** Per-instance typography, independent of translated source content. */
   style?: ClipStyle;
   audio?: ClipAudio;
+  effects?: VisualEffects;
+  transitionIn?: ClipTransition;
 }
+export interface MotionValues { x: number; y: number; scaleX: number; scaleY: number; opacity: number }
+/** Absolute source timestamps keep animation stable through trim, split and fixed retime. */
+export interface VisualKeyframe extends MotionValues { sourceUs: TimeUs }
+export interface VisualEffects { fadeInUs: TimeUs; fadeOutUs: TimeUs; keyframes: VisualKeyframe[] }
+export interface ClipTransition { kind: 'dissolve' | 'wipeLeft'; fromClipId: string; durationUs: TimeUs }
 export interface ClipAudio {
   volume: number; muted: boolean; fadeInUs: number; fadeOutUs: number;
   voiceEnabled: boolean; voiceSpeed: number;

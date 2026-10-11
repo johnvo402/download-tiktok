@@ -2,6 +2,7 @@ import { audioRegions, captionAt, contentId, regionAudible, type AudioRegion, ty
 import { activeClips } from './navigation';
 import { clipEndUs, timelineDurationUs, timelineToSourceUs } from './time';
 import type { TimelineClip, TimelineDocument } from './types';
+import { visualAt } from './effects';
 
 /** A scene is evaluated from the document snapshot, never from the editor selection.
  * Keep this contract for export: half-open intervals, ascending layer order,
@@ -12,6 +13,7 @@ export function timelineScene(doc: TimelineDocument, sources: ReadonlyMap<string
     const assetId = 'assetId' in clip.content ? clip.content.assetId : undefined;
     return {
       clip, sourceUs: timelineToSourceUs(clip, timeUs)!,
+      ...visualAt(clip, doc, timeUs),
       asset: doc.assets.find(a => a.id === assetId),
       text: clip.content.kind === 'text' ? clip.content.text : clip.content.kind === 'subtitles' ? captionAt(clip, sources.get(contentId(clip) ?? '')?.transcript, timeUs) : '',
     };
@@ -40,6 +42,7 @@ export function residentClips(doc: TimelineDocument, timeUs: number): TimelineCl
 export function nativeSceneClip(doc: TimelineDocument, layers: ReturnType<typeof timelineScene>['layers'], guides: boolean) {
   if (guides || layers.length !== 1) return;
   const { clip, asset } = layers[0]!, t = clip.transform, crop = t.crop;
+  if (clip.transitionIn || clip.effects?.keyframes.length || clip.effects?.fadeInUs || clip.effects?.fadeOutUs) return;
   if (clip.content.kind !== 'video' || !asset || t.x !== .5 || t.y !== .5 || t.scaleX !== 1 || t.scaleY !== 1 || t.rotation !== 0
     || t.opacity !== 1 || t.flipX || t.flipY || t.fit !== 'contain' || crop.x || crop.y || crop.width !== 1 || crop.height !== 1
     || doc.settings.backgroundColor.toLowerCase() !== '#000000'

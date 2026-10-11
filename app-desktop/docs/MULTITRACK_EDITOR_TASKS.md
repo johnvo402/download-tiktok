@@ -1,6 +1,6 @@
 # Kế hoạch timeline nhiều lớp trong phần Dịch
 
-Trạng thái: T01–T09 hoàn tất; T10–T11 chưa triển khai. Cập nhật: 2026-10-12.
+Trạng thái: T01–T10 hoàn tất; T11 chưa triển khai. Cập nhật: 2026-10-12.
 
 ## Mục tiêu và bố cục
 
@@ -136,9 +136,13 @@ Hoàn tất khi: file xuất khớp các mốc hình/tiếng/phụ đề trong p
 
 ## T10 — Công cụ dựng bổ sung
 
+**Hoàn tất ngày 2026-10-12.** Chuyển cảnh hòa tan/quét ngang có overlap chủ đích và crossfade tiếng, fade hình, keyframe vị trí/scale/opacity theo clock nguồn; UI bản nháp/Áp dụng, dấu trên clip và menu chuột phải/Shift+F10/K. Tốc độ cố định/fade tiếng từ T07 tiếp tục hoạt động. TS/Rust validation chặn nguồn vượt giới hạn, tham chiếu sai/chồng ba clip/track khóa; preview và export áp dụng cùng clock, kể cả xuất vùng. Hiệu ứng lưu theo clip trong transaction có undo/redo, không sửa transcript/TTS nguồn. Chi tiết quy tắc chỉnh sửa tại [TIMELINE_EFFECTS.md](TIMELINE_EFFECTS.md).
+
 Chuyển cảnh cơ bản, fade hình/tiếng, tốc độ phát cố định, keyframe vị trí/scale/opacity và thao tác bằng phím tắt/context menu. Quy định rõ thời lượng chuyển cảnh và phần nguồn có sẵn; kiểm thử retime với phụ đề/TTS. Kiến trúc dành chỗ cho speed ramp nhưng cần task riêng nếu đưa vào phạm vi, do ánh xạ thời gian phi tuyến.
 
 Hoàn tất khi: mỗi hiệu ứng triển khai có cùng kết quả preview/export, có undo/redo và được lưu trong project. Phụ thuộc T05–T09.
+
+Đã kiểm tra: build frontend; 93 test frontend; 230 test Rust qua, 27 test tùy chọn bỏ qua. Shared fixture kiểm tra motion/fade; test lưu/mở/undo/redo và validation nguyên tử; ba test media export chạy riêng qua, gồm dissolve/wipe/audio crossfade/motion/fade/xuất vùng cùng hồi quy T09. UI kiểm tra bản nháp, hai keyframe, fade/motion trong preview, lưu/undo/redo, chuyển cảnh cùng phụ đề liên kết, gỡ phục hồi vị trí, menu/bàn phím/focus, khóa và panel hẹp. Speed ramp nằm ngoài phạm vi T10.
 
 ## T11 — Kiểm thử tích hợp và ổn định
 

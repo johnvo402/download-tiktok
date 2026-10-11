@@ -2,6 +2,7 @@ import type { Transcript } from '../transcript/types';
 import type { ClipAudio, TimelineClip, TimelineDocument } from './types';
 import { clipDurationUs, clipEndUs, mapSourceInterval, MAX_TIME_US, timelineToSourceUs } from './time';
 import { trackAudible } from './navigation';
+import { transitionAudioGain } from './effects';
 
 export interface VoiceMedia { segmentId: string; path: string; startUs: number; endUs: number; speechStartUs: number; speechEndUs: number }
 export interface SourceMedia { videoContentId: string; contentRevision: number; transcript: Transcript | null; voices: VoiceMedia[]; warnings: Array<{ segmentId: string; message: string }> }
@@ -91,7 +92,7 @@ export function regionGain(r: AudioRegion, timeUs: number, regions: AudioRegion[
     const amount = timeUs < from ? (r.audio.duckAttackUs ? 1 - (from - timeUs) / r.audio.duckAttackUs : 0) : timeUs < to ? 1 : r.audio.duckReleaseUs ? 1 - (timeUs - to) / r.audio.duckReleaseUs : 0;
     duck = Math.max(duck, Math.min(1, Math.max(0, amount)));
   }
-  return r.audio.volume * Math.max(0, fade) * (1 - duck * r.audio.duckingAmount);
+  return r.audio.volume * Math.max(0, fade) * transitionAudioGain(r.clip, doc, timeUs) * (1 - duck * r.audio.duckingAmount);
 }
 export interface ClipWarning { segmentId: string; message: string; startUs: number; endUs: number; requiredSpeed?: number }
 export function clipWarnings(c: TimelineClip, source?: SourceMedia, includeVoice = true): ClipWarning[] {

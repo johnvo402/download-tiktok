@@ -33,6 +33,8 @@ pub(super) fn plan() -> Plan {
         group_id: None,
         style: None,
         audio: None,
+        effects: None,
+        transition_in: None,
     };
     doc.clips.push(clip);
     Plan {
@@ -266,6 +268,121 @@ fn options() -> ExportOptions {
         }),
         ..Default::default()
     }
+}
+
+#[test]
+#[ignore = "Requires FFmpeg/FFprobe; T10 motion/fade/dissolve/wipe, audio crossfade and range parity."]
+fn media_keyframes_fades_transitions_and_ranges() {
+    use crate::timeline_effects::{Keyframe, Transition, TransitionKind, VisualEffects};
+    let (_dir, store, mut p, _, _) = fixture();
+    let doc = p.timeline.as_mut().unwrap();
+    doc.clips[0].source_in_us = 0;
+    doc.clips[0].source_out_us = 2_000_000;
+    doc.clips[0].rate = Rational::default();
+    let a_id = doc.clips[0].id.clone();
+    doc.clips[1].track_id = doc.clips[0].track_id.clone();
+    doc.clips[1].start_us = 1_000_000;
+    doc.clips[1].source_out_us = 2_000_000;
+    doc.clips[1].transform.fit = crate::timeline::Fit::Stretch;
+    doc.clips[1].transition_in = Some(Transition {
+        kind: TransitionKind::Dissolve,
+        from_clip_id: a_id,
+        duration_us: 1_000_000,
+    });
+    p = store.update_project(&p).unwrap();
+    let opts = options();
+    let snap = capture(&store, &p.id, &opts).unwrap();
+    let (output, _) = render(&snap, &opts, &AtomicU8::new(0), |_, _, _| {}).unwrap();
+    let mid = frame(Path::new(&output), 1.48);
+    let color = pixel(&mid, 320, 160, 90);
+    assert!(
+        color[0] > 95 && color[2] > 95 && color[1] < 30,
+        "dissolve: {color:?}"
+    );
+    let samples = pcm(Path::new(&output));
+    let (a, b) = (
+        tone(&samples, 1.45, 1.5, 440.0),
+        tone(&samples, 1.45, 1.5, 880.0),
+    );
+    assert!(
+        a > 0.03 && b > 0.03 && (a - b).abs() < 0.015,
+        "crossfade tones {a} {b}"
+    );
+
+    p.timeline.as_mut().unwrap().clips[1]
+        .transition_in
+        .as_mut()
+        .unwrap()
+        .kind = TransitionKind::WipeLeft;
+    p = store.update_project(&p).unwrap();
+    let snap = capture(&store, &p.id, &opts).unwrap();
+    let (output, _) = render(&snap, &opts, &AtomicU8::new(0), |_, _, _| {}).unwrap();
+    let mid = frame(Path::new(&output), 1.48);
+    assert!(pixel(&mid, 320, 40, 90)[2] > 200, "wipe left blue");
+    assert!(pixel(&mid, 320, 280, 90)[0] > 200, "wipe right red");
+    let mut range = opts.clone();
+    range.timeline.as_mut().unwrap().start_us = Some(1_250_000);
+    range.timeline.as_mut().unwrap().end_us = Some(1_750_000);
+    let snap = capture(&store, &p.id, &range).unwrap();
+    let (ranged, _) = render(&snap, &range, &AtomicU8::new(0), |_, _, _| {}).unwrap();
+    let mid = frame(Path::new(&ranged), 0.24);
+    assert!(
+        pixel(&mid, 320, 40, 90)[2] > 200 && pixel(&mid, 320, 280, 90)[0] > 200,
+        "rebased wipe"
+    );
+
+    let doc = p.timeline.as_mut().unwrap();
+    doc.clips.remove(1);
+    let c = &mut doc.clips[0];
+    c.source_in_us = 1_000_000;
+    c.source_out_us = 3_000_000;
+    c.effects = Some(VisualEffects {
+        fade_in_us: 500_000,
+        fade_out_us: 500_000,
+        keyframes: vec![
+            Keyframe {
+                source_us: 1_000_000,
+                x: 0.25,
+                y: 0.5,
+                scale_x: 0.25,
+                scale_y: 0.25,
+                opacity: 0.5,
+            },
+            Keyframe {
+                source_us: 3_000_000,
+                x: 0.75,
+                y: 0.5,
+                scale_x: 0.5,
+                scale_y: 0.5,
+                opacity: 1.0,
+            },
+        ],
+    });
+    p = store.update_project(&p).unwrap();
+    let snap = capture(&store, &p.id, &opts).unwrap();
+    let (output, _) = render(&snap, &opts, &AtomicU8::new(0), |_, _, _| {}).unwrap();
+    let early = frame(Path::new(&output), 0.04);
+    let mid = frame(Path::new(&output), 1.0);
+    let late = frame(Path::new(&output), 1.96);
+    assert!(pixel(&early, 320, 80, 90)[0] < 40, "fade in");
+    let color = pixel(&mid, 320, 160, 90);
+    assert!(
+        color[0] > 160 && color[0] < 215,
+        "opacity interpolates: {color:?}"
+    );
+    assert!(pixel(&mid, 320, 70, 90)[0] < 20, "animated scale boundary");
+    assert!(pixel(&late, 320, 235, 90)[0] < 45, "fade out");
+    let later = frame(Path::new(&output), 1.4);
+    assert!(pixel(&later, 320, 210, 90)[0] > 160, "position advances");
+    let mut range = opts.clone();
+    range.timeline.as_mut().unwrap().start_us = Some(800_000);
+    range.timeline.as_mut().unwrap().end_us = Some(1_600_000);
+    let snap = capture(&store, &p.id, &range).unwrap();
+    let (output, _) = render(&snap, &range, &AtomicU8::new(0), |_, _, _| {}).unwrap();
+    assert!(
+        pixel(&frame(Path::new(&output), 0.2), 320, 160, 90)[0] > 160,
+        "range preserves motion source clock"
+    );
 }
 
 #[test]

@@ -10,9 +10,10 @@ import type { TimelineClip, TimelineDocument } from './types';
 import { applyEdit, editClosure, editLayout, snapMove, snapTime, type EditCommand, type EditLayout } from './edit-commands';
 import { canPaste, commitEdit, copyTimelineClips, editBusy, editNotice, pasteTimelineClips, redoTimeline, setSnapEnabled, snapEnabled, undoTimeline } from './edit-state';
 import EditToolbar from './EditToolbar';
+import ClipContextMenu, { openEffectsProperties } from './ClipContextMenu';
 import './timeline.css';
 
-function ClipVisual(props: { clip: TimelineClip; scale: number; fromUs: number; toUs: number; playing: boolean; startDrag: (event: PointerEvent, clip: TimelineClip, edge?: 'start' | 'end') => void; suppressClick: () => boolean }) {
+function ClipVisual(props: { clip: TimelineClip; scale: number; fromUs: number; toUs: number; playing: boolean; startDrag: (event: PointerEvent, clip: TimelineClip, edge?: 'start' | 'end') => void; suppressClick: () => boolean; context: (clip: TimelineClip, x: number, y: number, restore: HTMLElement) => void }) {
   const [thumbnail, setThumbnail] = createSignal('');
   const [peaks, setPeaks] = createSignal<number[]>([]);
   const [error, setError] = createSignal('');
@@ -49,12 +50,14 @@ function ClipVisual(props: { clip: TimelineClip; scale: number; fromUs: number; 
   return <div class="timeline-clip" classList={{ selected: selected(), 'at-playhead': playing(), 'is-audio': ['audio', 'voice', 'sourceAudio'].includes(props.clip.content.kind) }}
     style={{ left: `${left() / 1e6 * props.scale}px`, width: `${width()}px` }} aria-label={`Chọn ${name()}, bắt đầu ${formatTimelineTime(props.clip.startUs)}, dài ${formatTimelineTime(clipDurationUs(props.clip))}`}
     title={`${name()} · ${formatTimelineTime(clipDurationUs(props.clip))}${error() ? ` · ${error()}` : ''}`}
-    >
+    onContextMenu={e => { e.preventDefault(); e.stopPropagation(); props.context(props.clip, e.clientX, e.clientY, e.currentTarget.querySelector('button')!); }}
+    onKeyDown={e => { if (e.key === 'ContextMenu' || e.shiftKey && e.key === 'F10') { e.preventDefault(); e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); props.context(props.clip, r.left, r.bottom, e.currentTarget.querySelector('button')!); } }}>
     <button type="button" class="timeline-clip-body" disabled={editBusy()} aria-label={`Chọn ${name()}, bắt đầu ${formatTimelineTime(props.clip.startUs)}, dài ${formatTimelineTime(clipDurationUs(props.clip))}`} aria-pressed={selected()}
       onPointerDown={event => props.startDrag(event, props.clip)} onClick={event => { if (!props.suppressClick()) void selectTimelineClip(props.clip.id, event.ctrlKey || event.metaKey || event.shiftKey); }} onDblClick={() => seekTimeline(props.clip.startUs)}>
     <Show when={thumbnail()}><div class="timeline-thumbnails" style={{ 'background-image': `url("${thumbnail()}")` }} /></Show>
     <Show when={peaks().length}><svg class="timeline-waveform" viewBox={`0 0 ${Math.max(1, bars().length * 4)} 32`} preserveAspectRatio="none" aria-hidden="true"><For each={bars()}>{(peak, i) => <rect x={i() * 4} y={16 - Math.max(1, peak * 15)} width="2" height={Math.max(2, peak * 30)} />}</For></svg></Show>
-    <span class="timeline-clip-name">{playing() ? '▶ ' : ''}{name()}</span><small>{formatTimelineTime(clipDurationUs(props.clip))}</small>
+    <span class="timeline-clip-name">{playing() ? '▶ ' : ''}{name()}</span><small>{formatTimelineTime(clipDurationUs(props.clip))}{props.clip.effects?.keyframes.length ? ' · ◆' : ''}{props.clip.transitionIn ? ' · ⇄' : ''}</small>
+    <Show when={props.clip.transitionIn}><span class="timeline-transition-band" aria-hidden="true" style={{ width: `${Math.min(width(), props.clip.transitionIn!.durationUs / 1e6 * props.scale)}px` }} /></Show>
     </button>
     <Show when={selected() && props.clip.startUs >= props.fromUs}><span class="timeline-trim-handle start" title="Kéo trim đầu; dùng nút Trim đầu để nhập thời gian" aria-hidden="true" onPointerDown={event => props.startDrag(event, props.clip, 'start')} onClick={event => event.stopPropagation()} /></Show>
     <Show when={selected() && clipEndUs(props.clip) <= props.toUs}><span class="timeline-trim-handle end" title="Kéo trim cuối; dùng nút Trim cuối để nhập thời gian" aria-hidden="true" onPointerDown={event => props.startDrag(event, props.clip, 'end')} onClick={event => event.stopPropagation()} /></Show>
@@ -71,6 +74,13 @@ export default function TimelineEditor() {
   const [height, setHeight] = createSignal(260);
   const [maxHeight, setMaxHeight] = createSignal(600);
   const [draft, setDraft] = createSignal<{ next?: EditLayout; ids: Set<string>; error?: string }>();
+  const [context, setContext] = createSignal<{ x: number; y: number; restore: HTMLElement }>();
+  async function openContext(c: TimelineClip, x: number, y: number, restore: HTMLElement) {
+    if (editBusy()) return;
+    setTimelinePlaying(false);
+    if (!selectedTimelineIds().includes(c.id)) await selectTimelineClip(c.id);
+    if (selectedTimelineIds().includes(c.id)) setContext({ x, y, restore });
+  }
   let gesture: { doc: TimelineDocument; expected: EditLayout; clip: TimelineClip; ids: string[]; x: number; y: number; scrollX: number; pointerId: number; target: HTMLElement; edge?: 'start' | 'end'; command?: EditCommand; moved: boolean; projectId: string } | undefined;
   let ignoreClick = false;
   const gutter = () => size().width < 540 ? 128 : 172;
@@ -113,7 +123,7 @@ export default function TimelineEditor() {
   }
   function pointerTime(event: PointerEvent) { return timeAtPixel(event.clientX - viewport.getBoundingClientRect().left - gutter() + viewport.scrollLeft, scale(), duration()); }
   function keys(event: KeyboardEvent) {
-    if (event.target instanceof HTMLElement && event.target.closest('[role="dialog"]')) return;
+    if (event.target instanceof HTMLElement && event.target.closest('[role="dialog"],[role="menu"]')) return;
     if (event.key === ' ' && event.target instanceof HTMLElement && event.target.closest('button')) return;
     if (event.target instanceof HTMLElement && (event.target.matches('input,textarea,select') || event.target.isContentEditable)) return;
     if (event.ctrlKey || event.metaKey) {
@@ -130,6 +140,7 @@ export default function TimelineEditor() {
       return;
     }
     if (event.altKey) return;
+    if (event.key.toLowerCase() === 'k') { event.preventDefault(); openEffectsProperties(); return; }
     if (['Delete', 'Backspace', 's', 'S', 'n', 'N', 'Escape'].includes(event.key)) event.preventDefault();
     if (event.key === 'Escape') { if (gesture) cancelDrag(); else setTimelineSelection([]); return; }
     if (event.key.toLowerCase() === 'n') setSnapEnabled(value => !value);
@@ -214,6 +225,7 @@ export default function TimelineEditor() {
   onCleanup(() => setTimelineScrubbing(false));
   let resizing: { y: number; height: number } | undefined;
   return <section class="timeline-editor" aria-label="Timeline dự án" onKeyDown={keys} style={{ height: `${height()}px` }}>
+    <Show when={context()}>{value => <ClipContextMenu {...value()} close={() => setContext(undefined)} />}</Show>
     <div class="timeline-height-handle" role="separator" aria-label="Đổi chiều cao timeline" aria-orientation="horizontal" aria-valuemin={160} aria-valuemax={Math.round(maxHeight())} aria-valuenow={Math.round(Math.min(height(), maxHeight()))} tabindex="0"
       onKeyDown={event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); event.stopPropagation(); setHeight(h => Math.min(maxHeight(), Math.max(160, h + (event.key === 'ArrowUp' ? 24 : -24)))); } }}
       onPointerDown={event => { event.preventDefault(); resizing = { y: event.clientY, height: Math.min(height(), maxHeight()) }; event.currentTarget.setPointerCapture(event.pointerId); }}
@@ -245,7 +257,7 @@ export default function TimelineEditor() {
             <button type="button" disabled={trackSaving()} aria-label={`${row.track.enabled ? 'Tắt' : 'Bật'} ${row.track.name}`} aria-pressed={row.track.enabled} onClick={() => void toggleTrack(row.track.id, 'enabled')}>{row.track.enabled ? <Eye size={13} /> : <EyeOff size={13} />}</button>
             <Show when={row.track.kind !== 'subtitle'}><button type="button" disabled={trackSaving()} aria-label={`${row.track.muted ? 'Bật tiếng' : 'Tắt tiếng'} ${row.track.name}`} aria-pressed={row.track.muted} onClick={() => void toggleTrack(row.track.id, 'muted')}>{row.track.muted ? <VolumeX size={13} /> : <Volume2 size={13} />}</button><button type="button" disabled={trackSaving()} aria-label={`Solo ${row.track.name}`} aria-pressed={row.track.solo} onClick={() => void toggleTrack(row.track.id, 'solo')}>S</button></Show>
           </div></div>
-          <div class="timeline-track-clips" style={{ left: `${gutter()}px` }}><For each={visibleClips(currentProject()?.timeline.clips ?? [], row.track.id, fromUs(), toUs())}>{clip => <ClipVisual clip={clip} scale={scale()} fromUs={fromUs()} toUs={toUs()} playing={playingIds().has(clip.id)} startDrag={startDrag} suppressClick={() => ignoreClick} />}</For></div>
+          <div class="timeline-track-clips" style={{ left: `${gutter()}px` }}><For each={visibleClips(currentProject()?.timeline.clips ?? [], row.track.id, fromUs(), toUs())}>{clip => <ClipVisual clip={clip} scale={scale()} fromUs={fromUs()} toUs={toUs()} playing={playingIds().has(clip.id)} startDrag={startDrag} suppressClick={() => ignoreClick} context={(c, x, y, restore) => void openContext(c, x, y, restore)} />}</For></div>
         </div>}</For>
         <For each={draft()?.next?.clips.filter(c => draft()?.ids.has(c.id)) ?? []}>{clip => <div class="timeline-drag-ghost" style={{ left: `${gutter() + clip.startUs / 1e6 * scale()}px`, top: `${RULER_HEIGHT + tracks().findIndex(t => t.id === clip.trackId) * TRACK_HEIGHT + 8}px`, width: `${clipDurationUs(clip) / 1e6 * scale()}px` }} />}</For>
         <div class="timeline-playhead" style={{ left: `${gutter() + displayTime() / 1e6 * scale()}px` }} aria-hidden="true"><span /></div>
