@@ -46,4 +46,6 @@ Existing source overlay settings remain within the video's settings and source e
 
 ## Validation
 
+T07 adds optional `Clip.audio` for per-instance gain, mute, fades, voice speed and ducking; old clips inherit source dubbing defaults. `sourceAudio` references the original video asset/content on an audio track, optionally linked to its video instance. It does not copy or extract the source file. Audio properties and fixed clip rate participate in layout history without reverting source AI results. See [TIMELINE_AUDIO.md](TIMELINE_AUDIO.md).
+
 Reject duplicate/invalid IDs, unresolved references, cross-video content binding, unsafe paths, unsupported versions, invalid rates/canvas/transforms, empty or overflowing intervals, trims exceeding known sources, track type mismatches and overlapping clips on the same track. Layering uses separate tracks. Missing assets remain visible and recoverable. Validation runs before persistence; malformed documents cannot overwrite a valid project.

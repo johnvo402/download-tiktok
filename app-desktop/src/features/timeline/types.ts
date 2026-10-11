@@ -37,6 +37,7 @@ export interface ClipTransform {
 export type ClipContent =
   | { kind: 'video'; assetId: string; videoContentId: string }
   | { kind: 'image' | 'audio'; assetId: string }
+  | { kind: 'sourceAudio'; assetId: string; videoContentId: string }
   | { kind: 'text'; text: string }
   | { kind: 'subtitles' | 'voice'; videoContentId: string };
 export interface TimelineClip {
@@ -47,6 +48,12 @@ export interface TimelineClip {
   linkedClipId: string | null; groupId: string | null;
   /** Per-instance typography, independent of translated source content. */
   style?: ClipStyle;
+  audio?: ClipAudio;
+}
+export interface ClipAudio {
+  volume: number; muted: boolean; fadeInUs: number; fadeOutUs: number;
+  voiceEnabled: boolean; voiceSpeed: number;
+  duckingEnabled: boolean; duckingAmount: number; duckAttackUs: number; duckReleaseUs: number;
 }
 export interface ClipStyle {
   fontFamily: string; fontSize: number; fontWeight: number;

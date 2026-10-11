@@ -22,6 +22,7 @@ mod project_service;
 pub mod timeline;
 mod timeline_service;
 mod timeline_edit;
+mod timeline_audio;
 pub mod video_content;
 mod render_service;
 pub mod render;
@@ -134,6 +135,7 @@ pub fn run() {
             media_library::get_media_asset_path,
             timeline_service::set_timeline_track_control,
             timeline_edit::apply_timeline_edit,
+            timeline_audio::get_timeline_source_media,
             studio_service::load_studio_draft,
             studio_service::has_studio_draft,
             studio_service::save_studio_draft,

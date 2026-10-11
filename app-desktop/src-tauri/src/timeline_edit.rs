@@ -356,4 +356,59 @@ mod tests {
                 .muted
         );
     }
+    #[test]
+    fn audio_defaults_roundtrip_detached_source_and_invalid_mix_edits_are_atomic() {
+        let (_dir, store, project, a, b) = crate::video_content::tests::fixture();
+        let before = EditLayout::from_document(project.timeline.as_ref().unwrap());
+        let old = serde_json::to_value(&before.clips[0]).unwrap();
+        assert!(old.get("audio").is_none());
+        assert!(serde_json::from_value::<Clip>(old).unwrap().audio.is_none());
+        let mut next = before.clone();
+        let audio = timeline::ClipAudio {
+            volume: 1.5,
+            muted: false,
+            fade_in_us: 1_000_000,
+            fade_out_us: 2_000_000,
+            voice_enabled: false,
+            voice_speed: 1.25,
+            ducking_enabled: true,
+            ducking_amount: 0.75,
+            duck_attack_us: 60_000,
+            duck_release_us: 180_000,
+        };
+        next.clips[0].audio = Some(audio.clone());
+        let mut extracted = next.clips[0].clone();
+        extracted.id = uuid::Uuid::new_v4().to_string();
+        let asset_id = project.timeline.as_ref().unwrap().video_contents[0]
+            .asset_id
+            .clone();
+        extracted.content = timeline::ClipContent::SourceAudio {
+            asset_id,
+            video_content_id: a,
+        };
+        extracted.linked_clip_id = Some(next.clips[0].id.clone());
+        let mut track = next.tracks[0].clone();
+        track.id = uuid::Uuid::new_v4().to_string();
+        track.kind = TrackKind::Audio;
+        track.order = 1;
+        extracted.track_id = track.id.clone();
+        next.tracks.push(track);
+        next.clips.push(extracted);
+        let saved = apply_layout(&store, &project.id, before.clone(), next.clone()).unwrap();
+        assert_eq!(saved.timeline.as_ref().unwrap().clips[0].audio, Some(audio));
+        let mut invalid = next.clone();
+        invalid.clips[0].audio.as_mut().unwrap().volume = 2.01;
+        assert!(apply_layout(&store, &project.id, next.clone(), invalid).is_err());
+        let mut invalid = next.clone();
+        invalid.clips.last_mut().unwrap().content = timeline::ClipContent::SourceAudio {
+            asset_id: project.timeline.as_ref().unwrap().video_contents[0]
+                .asset_id
+                .clone(),
+            video_content_id: b,
+        };
+        assert!(apply_layout(&store, &project.id, next.clone(), invalid).is_err());
+        assert_eq!(store.get(&project.id).unwrap().updated_at, saved.updated_at);
+        let undone = apply_layout(&store, &project.id, next, before).unwrap();
+        assert!(undone.timeline.unwrap().clips[0].audio.is_none());
+    }
 }

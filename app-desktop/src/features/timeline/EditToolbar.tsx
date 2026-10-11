@@ -51,6 +51,8 @@ export default function EditToolbar(props: { cursorUs: number }) {
       <button type="button" disabled={editBusy()} onClick={() => { setTimelinePlaying(false); seekTimeline(props.cursorUs); setActiveWorkspacePanelTab('properties'); }}>Hình ảnh / khung hình</button>
       <button type="button" disabled={editBusy()} onClick={() => void commitEdit({ kind: 'text', text: 'Nội dung chữ', atUs: props.cursorUs }, 'Thêm lớp chữ')}>+ Chữ</button>
       <button type="button" disabled={disabled() || clip()?.content.kind !== 'video'} onClick={() => void commitEdit({ kind: 'caption', videoClipId: clip()!.id }, 'Thêm phụ đề liên kết')}>+ Phụ đề</button>
+      <button type="button" disabled={disabled() || clip()?.content.kind !== 'video'} onClick={() => void commitEdit({ kind: 'voice', videoClipId: clip()!.id }, 'Thêm lớp giọng liên kết')}>+ Giọng</button>
+      <button type="button" disabled={disabled()} onClick={() => { setTimelinePlaying(false); setActiveWorkspacePanelTab('properties'); }}>Âm thanh</button>
     </div>
     <Show when={editing()}><Modal title={editing() === 'move' ? 'Di chuyển clip' : editing() === 'start' ? 'Trim đầu clip' : 'Trim cuối clip'} onClose={() => { if (!editBusy()) setEditing(undefined); }}>
       <form class="timeline-edit-form" onSubmit={event => { event.preventDefault(); void submit(); }}>

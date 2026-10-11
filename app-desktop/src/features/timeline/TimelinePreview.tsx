@@ -2,30 +2,23 @@ import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Sh
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { currentProject, currentTranscript, segmentVoicePreviewActive, setActiveWorkspacePanelTab } from '../../app/project-state';
 import { mediaService } from '../../app/services/media-service';
-import { projectService } from '../../app/services/project-service';
-import { activeClips, formatTimelineTime, trackAudible } from './navigation';
+import { activeClips, formatTimelineTime } from './navigation';
 import { timelineDurationUs, timelineToSourceUs } from './time';
 import { reviewSelectedSource, seekTimeline, selectTimelineClip, selectedTimelineIds, setTimelinePlaying, timelinePlaying, timelineTimeUs } from './timeline-state';
 import type { TimelineClip } from './types';
-import type { Transcript } from '../transcript/types';
+import { captionAt, clipWarnings, contentId, usesSourceVoice } from './audio-layout';
+import { sourceMedia, watchSourceMedia } from './source-media';
+import TimelineAudio from './TimelineAudio';
 import { clipTypography, layerTransform, sourceGeometry } from './visual-layout';
 import { previewClip, previewSettings } from './visual-state';
 
-/** Browser compositor for T06; decoder/audio synchronization and native rendering follow in T07–T08. */
+/** Browser compositor; native rendering and prefetch/clock refinements follow in T08. */
 function SourceLayer(props: { clip: TimelineClip; width: number; height: number; guides: boolean }) {
   const [url, setUrl] = createSignal('');
   const [error, setError] = createSignal('');
   let media: HTMLMediaElement | undefined;
   const clip = () => previewClip(props.clip);
   const content = () => { const c = clip().content; return 'videoContentId' in c ? currentProject()?.timeline.videoContents.find(v => v.id === c.videoContentId) : undefined; };
-  const [transcript, setTranscript] = createSignal<Transcript | null>();
-  const transcriptKey = createMemo(() => clip().content.kind === 'subtitles' ? `${currentProject()?.id}:${content()?.id}:${content()?.revision}:${content()?.settings.transcript?.path}` : '');
-  createEffect(on(transcriptKey, key => {
-    if (!key || !content()?.id || !currentProject()) return;
-    let alive = true; setTranscript(undefined);
-    void projectService.getTranscript(currentProject()!.id, content()!.id).then(value => { if (alive) setTranscript(value); }).catch(e => { if (alive) setError(e instanceof Error ? e.message : 'Không đọc được phụ đề.'); });
-    onCleanup(() => { alive = false; });
-  }));
   const asset = () => { const content = props.clip.content; return 'assetId' in content ? currentProject()?.timeline.assets.find(a => a.id === content.assetId) : undefined; };
   const identity = createMemo(() => `${currentProject()?.id}:${asset()?.id}:${asset()?.relativePath}`);
   createEffect(on(identity, () => {
@@ -41,8 +34,7 @@ function SourceLayer(props: { clip: TimelineClip; width: number; height: number;
     const project = currentProject();
     const time = timelineToSourceUs(props.clip, timelineTimeUs());
     if (!media || !project || media.readyState < 1 || time === null) return;
-    const track = project.timeline.tracks.find(t => t.id === props.clip.trackId);
-    media.muted = !track || !trackAudible(track, project.timeline.tracks);
+    media.muted = true; // The dedicated timeline mixer owns all audio, including the video's original track.
     media.playbackRate = Math.max(.0625, Math.min(16, props.clip.rate.numerator / props.clip.rate.denominator));
     if (!timelinePlaying() || Math.abs(media.currentTime - time / 1e6) > .15) media.currentTime = time / 1e6;
     if (timelinePlaying() && media.paused) void media.play().catch(() => { setError('Nguồn chưa phát được. Có thể kéo playhead để xem từng thời điểm.'); setTimelinePlaying(false); });
@@ -56,10 +48,9 @@ function SourceLayer(props: { clip: TimelineClip; width: number; height: number;
   const typography = () => clipTypography(clip(), currentProject()?.timeline);
   const textStyle = () => { const s = typography(); return { 'font-family': s.fontFamily, 'font-size': `${s.fontSize * props.width / (previewSettings()?.width ?? props.width)}px`, 'font-weight': s.fontWeight, color: s.color, 'text-align': s.alignment, 'background-color': `${s.backgroundColor}${Math.round(s.backgroundOpacity * 255).toString(16).padStart(2, '0')}` }; };
   const caption = () => {
-    const id = content()?.id, local = timelineToSourceUs(clip(), timelineTimeUs());
-    const data = currentTranscript()?.videoContentId === id ? currentTranscript() : transcript();
-    if (local === null) return '';
-    return data?.segments.filter(s => s.start * 1e6 <= local && s.end * 1e6 > local).map(s => s.translated || s.source).join('\n') ?? '';
+    const id = content()?.id;
+    const data = currentTranscript()?.videoContentId === id ? currentTranscript() : sourceMedia(id)?.data?.transcript;
+    return captionAt(clip(), data, timelineTimeUs());
   };
   async function select() { setTimelinePlaying(false); await selectTimelineClip(props.clip.id); setActiveWorkspacePanelTab('properties'); }
   const regionStyle = (r: { x: number; y: number; width: number; height: number }) => ({ left: `${r.x * 100}%`, top: `${r.y * 100}%`, width: `${r.width * 100}%`, height: `${r.height * 100}%` });
@@ -67,9 +58,8 @@ function SourceLayer(props: { clip: TimelineClip; width: number; height: number;
     <Show when={error()}><p class="timeline-source-error" role="alert">{asset()?.metadata.originalName}: {error()}</p></Show>
     <Show when={asset()}><div class="timeline-source-plane" style={planeStyle()} onClick={() => void select()}>
     <Show when={url()}>
-      <Show when={asset()?.kind === 'video'}><video ref={element => { media = element; }} src={url()} preload="auto" onLoadedMetadata={sync} onError={() => { setError('Không giải mã được video nguồn.'); setTimelinePlaying(false); }} /></Show>
+      <Show when={asset()?.kind === 'video'}><video ref={element => { media = element; }} src={url()} muted preload="auto" onLoadedMetadata={sync} onError={() => { setError('Không giải mã được video nguồn.'); setTimelinePlaying(false); }} /></Show>
       <Show when={asset()?.kind === 'image'}><img src={url()} alt={asset()?.metadata.originalName ?? 'Ảnh trên timeline'} onError={() => setError('Không mở được ảnh nguồn.')} /></Show>
-      <Show when={asset()?.kind === 'audio'}><audio ref={element => { media = element; }} src={url()} preload="auto" onLoadedMetadata={sync} onError={() => { setError('Không giải mã được audio nguồn.'); setTimelinePlaying(false); }} /></Show>
     </Show>
     <Show when={props.guides && clip().content.kind === 'video'}>
       <Show when={content()?.settings.transcriptSettings.ocrRegion}>{r => <div class="timeline-source-region ocr" style={regionStyle(r())}><span>OCR · nguồn</span></div>}</Show>
@@ -86,7 +76,13 @@ export default function TimelinePreview() {
   const aspect = () => (previewSettings()?.width ?? 16) / (previewSettings()?.height ?? 9);
   const width = () => Math.min(bounds().width, bounds().height * aspect());
   const height = () => Math.min(bounds().height, bounds().width / aspect());
-  const clips = createMemo(() => currentProject() ? activeClips(currentProject()!.timeline, timelineTimeUs()).filter(c => c.content.kind !== 'voice') : []);
+  watchSourceMedia(() => (currentProject()?.timeline.clips ?? []).flatMap(c => contentId(c) ? [contentId(c)!] : []));
+  const active = createMemo(() => currentProject() ? activeClips(currentProject()!.timeline, timelineTimeUs()) : []);
+  const clips = createMemo(() => active().filter(c => !['voice', 'audio', 'sourceAudio'].includes(c.content.kind)));
+  const warningCount = () => {
+    const c = currentProject()?.timeline.clips.find(c => c.id === selectedTimelineIds()[0]);
+    return c ? clipWarnings(c, sourceMedia(contentId(c))?.data, usesSourceVoice(c, currentProject()?.timeline)).length : 0;
+  };
   // Keep layer instances stable across project saves and transport ticks.
   const ids = createMemo(() => clips().map(c => c.id));
   let frame = 0;
@@ -111,9 +107,11 @@ export default function TimelinePreview() {
   onCleanup(() => { cancelAnimationFrame(frame); setTimelinePlaying(false); });
   return <section class="timeline-preview" aria-label="Xem trước theo thời gian dự án">
     <div class="timeline-preview-heading"><span>Timeline · {formatTimelineTime(timelineTimeUs(), true)}</span><label><input type="checkbox" checked={guides()} onChange={e => setGuides(e.currentTarget.checked)} /> Vùng OCR/xóa chữ</label><button type="button" class="button button-quiet" onClick={reviewSelectedSource}>Xem video đang chọn</button></div>
+    <Show when={warningCount()}><button class="timeline-audio-warning-link" type="button" onClick={() => setActiveWorkspacePanelTab('properties')}>{warningCount()} cảnh báo lời/giọng · Chỉnh trong Âm thanh</button></Show>
+    <TimelineAudio />
     <div class="timeline-preview-body" ref={body}><div class="timeline-preview-stage" style={{ 'background-color': previewSettings()?.backgroundColor ?? '#000', width: `${width()}px`, height: `${height()}px` }}>
       <For each={ids()}>{id => <SourceLayer clip={clips().find(c => c.id === id)!} width={width()} height={height()} guides={guides()} />}</For>
-      <Show when={!clips().some(c => ['video', 'image', 'text'].includes(c.content.kind))}><span class="timeline-preview-gap">{clips().length ? 'Audio' : 'Khoảng trống'}</span></Show>
+      <Show when={!clips().some(c => ['video', 'image', 'text'].includes(c.content.kind))}><span class="timeline-preview-gap">{active().length ? 'Audio / phụ đề' : 'Khoảng trống'}</span></Show>
     </div></div>
   </section>;
 }

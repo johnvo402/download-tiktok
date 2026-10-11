@@ -102,11 +102,15 @@ Hoàn tất khi: ảnh xuất hiện đúng khoảng thời gian trên video; th
 
 ## T07 — Phụ đề và audio đi theo clip
 
+**Hoàn tất ngày 2026-10-11.** Preview ánh xạ phụ đề/tiếng gốc/TTS theo khoảng nguồn và tốc độ của từng clip; trộn nhạc qua Web Audio với âm lượng, mute/solo, fade và ducking. Có lớp Giọng, tách audio gốc và tách liên kết tường minh; thuộc tính và tốc độ cố định có autosave/undo. Cảnh báo trim giữa lời/giọng vượt mép kèm chỉnh điểm cắt, tốc độ giọng hoặc tạo lại chỉ các segment chọn; giữ nguyên file nguồn và timestamp transcript.
+
 Ánh xạ subtitle, tiếng gốc và TTS từ nguồn vào từng clip, bao gồm cắt đầu/cuối, split, nhân bản, đổi tốc độ cố định và khoảng trống. Trộn thêm nhạc/audio riêng; volume, mute/solo, fade và ducking. Có thể tách liên kết audio một cách tường minh.
 
 Mặc định giữ nguyên audio nguồn/TTS đã tạo và giới hạn phần phát theo clip. Nếu trim cắt giữa lời hoặc TTS vượt khoảng cho phép, hiển thị cảnh báo cùng lựa chọn điều chỉnh điểm cắt, tốc độ hoặc tạo lại giọng cho phần được chọn; không âm thầm xóa lời hay tạo lại toàn bộ. Caption giao mép clip được giới hạn khoảng hiển thị, không sửa timestamp gốc.
 
 Hoàn tất khi: A/B đổi vị trí, trim hoặc split thì tiếng và chữ vẫn đúng; một nguồn xuất hiện hai lần phát đúng ở cả hai vị trí. Phụ thuộc T03, T05.
+
+Đã kiểm tra: build frontend, 75 test frontend và 221 test Rust qua, 23 test tùy chọn bỏ qua. Test Rust với WAV thật kiểm tra ánh xạ độc lập A/B, reorder/trim/split/lưu–mở giữ nguyên byte WAV và thời gian nguồn, file hỏng/mất/outdated, chặn audio từ video khác, audio optional/CAS/undo/validation. UI với video có tiếng/WAV thật qua B/A/repeated A, offset trim/split, retime liên kết, PCM Web Audio, mute/solo/fade/ducking, cảnh báo/TTS đúng phạm vi, extraction/detach/undo và inspector 360px; hồi quy UI T05/T06 qua. Clock/prefetch/native preview và export toàn timeline tiếp tục T08–T09. Chi tiết: [TIMELINE_AUDIO.md](TIMELINE_AUDIO.md).
 
 ## T08 — Preview nhiều nguồn và đồng bộ phát
 

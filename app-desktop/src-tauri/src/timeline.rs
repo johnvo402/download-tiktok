@@ -221,6 +221,10 @@ pub enum ClipContent {
     Audio {
         asset_id: String,
     },
+    SourceAudio {
+        asset_id: String,
+        video_content_id: String,
+    },
     Text {
         text: String,
     },
@@ -246,6 +250,22 @@ pub struct Clip {
     pub group_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<ClipStyle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<ClipAudio>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClipAudio {
+    pub volume: f64,
+    pub muted: bool,
+    pub fade_in_us: u64,
+    pub fade_out_us: u64,
+    pub voice_enabled: bool,
+    pub voice_speed: f64,
+    pub ducking_enabled: bool,
+    pub ducking_amount: f64,
+    pub duck_attack_us: u64,
+    pub duck_release_us: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -447,6 +467,7 @@ impl TimelineDocument {
                 linked_clip_id: None,
                 group_id: None,
                 style: None,
+                audio: None,
             });
             Some(clip_id)
         } else {
@@ -603,6 +624,14 @@ pub fn validate(document: &TimelineDocument) -> Result<(), String> {
             ClipContent::Audio { asset_id } => {
                 (TrackKind::Audio, Some((asset_id, MediaKind::Audio)), None)
             }
+            ClipContent::SourceAudio {
+                asset_id,
+                video_content_id,
+            } => (
+                TrackKind::Audio,
+                Some((asset_id, MediaKind::Video)),
+                Some(video_content_id),
+            ),
             ClipContent::Text { .. } => (TrackKind::Visual, None, None),
             ClipContent::Subtitles { video_content_id } => {
                 (TrackKind::Subtitle, None, Some(video_content_id))
@@ -650,20 +679,50 @@ pub fn validate(document: &TimelineDocument) -> Result<(), String> {
             }
         }
         let t = &clip.transform;
+        if let Some(audio) = &clip.audio {
+            if !matches!(
+                clip.content,
+                ClipContent::Video { .. }
+                    | ClipContent::Audio { .. }
+                    | ClipContent::SourceAudio { .. }
+                    | ClipContent::Voice { .. }
+            ) || !audio.volume.is_finite()
+                || !(0.0..=2.0).contains(&audio.volume)
+                || !audio.voice_speed.is_finite()
+                || !(0.5..=2.0).contains(&audio.voice_speed)
+                || !audio.ducking_amount.is_finite()
+                || !(0.0..=1.0).contains(&audio.ducking_amount)
+                || audio.fade_in_us > MAX_TIME_US
+                || audio.fade_out_us > MAX_TIME_US
+                || audio.duck_attack_us > 500_000
+                || audio.duck_release_us > 2_000_000
+            {
+                return Err("Thuộc tính âm thanh clip không hợp lệ.".into());
+            }
+        }
         if let ClipContent::Text { text } = &clip.content {
             if text.trim().is_empty() || text.chars().count() > 10000 {
                 return Err("Nội dung chữ phải từ 1 đến 10.000 ký tự.".into());
             }
         }
         if let Some(style) = &clip.style {
-            let color = |s: &str| s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit());
-            if !matches!(clip.content, ClipContent::Text { .. } | ClipContent::Subtitles { .. })
-                || style.font_family.trim().is_empty() || style.font_family.len() > 96
-                || !style.font_size.is_finite() || !(8.0..=240.0).contains(&style.font_size)
+            let color = |s: &str| {
+                s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit())
+            };
+            if !matches!(
+                clip.content,
+                ClipContent::Text { .. } | ClipContent::Subtitles { .. }
+            ) || style.font_family.trim().is_empty()
+                || style.font_family.len() > 96
+                || !style.font_size.is_finite()
+                || !(8.0..=240.0).contains(&style.font_size)
                 || !(100..=900).contains(&style.font_weight)
-                || !color(&style.color) || !color(&style.background_color)
-                || !style.background_opacity.is_finite() || !(0.0..=1.0).contains(&style.background_opacity)
-                || !["left", "center", "right"].contains(&style.alignment.as_str()) {
+                || !color(&style.color)
+                || !color(&style.background_color)
+                || !style.background_opacity.is_finite()
+                || !(0.0..=1.0).contains(&style.background_opacity)
+                || !["left", "center", "right"].contains(&style.alignment.as_str())
+            {
                 return Err("Kiểu chữ clip không hợp lệ.".into());
             }
         }
@@ -736,6 +795,10 @@ pub fn validate(document: &TimelineDocument) -> Result<(), String> {
             }
             | ClipContent::Voice {
                 video_content_id: child,
+            }
+            | ClipContent::SourceAudio {
+                video_content_id: child,
+                ..
             } = &clip.content
             {
                 if child != video_content_id {
@@ -818,9 +881,10 @@ pub fn reconcile_legacy(project: &mut Project, previous: &Project) -> Result<(),
                     asset_id == &binding.asset_id && Some(&clip.id) != binding.clip_id.as_ref()
                 }
                 ClipContent::Subtitles { video_content_id }
-                | ClipContent::Voice { video_content_id } => {
-                    video_content_id == &binding.video_content_id
-                }
+                | ClipContent::Voice { video_content_id }
+                | ClipContent::SourceAudio {
+                    video_content_id, ..
+                } => video_content_id == &binding.video_content_id,
                 _ => {
                     clip.linked_clip_id.as_ref() == binding.clip_id.as_ref()
                         && clip.linked_clip_id.is_some()
@@ -928,6 +992,7 @@ pub fn reconcile_legacy(project: &mut Project, previous: &Project) -> Result<(),
                         linked_clip_id: None,
                         group_id: None,
                         style: None,
+                        audio: None,
                     });
                     document.legacy_binding.as_mut().unwrap().clip_id = Some(id);
                 }
@@ -1003,6 +1068,7 @@ mod tests {
                 linked_clip_id: None,
                 group_id: None,
                 style: None,
+                audio: None,
             };
             assert_eq!(
                 clip.duration_us().unwrap(),

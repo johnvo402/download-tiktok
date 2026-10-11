@@ -22,7 +22,7 @@ function ClipVisual(props: { clip: TimelineClip; scale: number; fromUs: number; 
   createEffect(on(identity, () => {
     const source = asset(), id = currentProject()?.id; if (!source || !id) return;
     let alive = true; setError(''); setThumbnail(''); setPeaks([]);
-    const kind = source.kind === 'audio' ? 'waveform' : 'thumbnail';
+    const kind = source.kind === 'audio' || props.clip.content.kind === 'sourceAudio' ? 'waveform' : 'thumbnail';
     const request = timelineCache(id, source.id, source.metadata.checksumSha256, kind);
     void request.promise.then(cache => {
       if (!alive) return;
@@ -46,7 +46,7 @@ function ClipVisual(props: { clip: TimelineClip; scale: number; fromUs: number; 
       return values[Math.min(values.length - 1, Math.max(0, Math.floor(sourceTime / duration * values.length)))]!;
     });
   };
-  return <div class="timeline-clip" classList={{ selected: selected(), 'at-playhead': playing(), 'is-audio': props.clip.content.kind === 'audio' || props.clip.content.kind === 'voice' }}
+  return <div class="timeline-clip" classList={{ selected: selected(), 'at-playhead': playing(), 'is-audio': ['audio', 'voice', 'sourceAudio'].includes(props.clip.content.kind) }}
     style={{ left: `${left() / 1e6 * props.scale}px`, width: `${width()}px` }} aria-label={`Chọn ${name()}, bắt đầu ${formatTimelineTime(props.clip.startUs)}, dài ${formatTimelineTime(clipDurationUs(props.clip))}`}
     title={`${name()} · ${formatTimelineTime(clipDurationUs(props.clip))}${error() ? ` · ${error()}` : ''}`}
     >

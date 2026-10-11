@@ -8,7 +8,7 @@ import type { ClipStyle, ClipTransform, TimelineSettings } from './types';
 
 export default function VisualProperties() {
   const clip = () => currentProject()?.timeline.clips.find(c => c.id === selectedTimelineIds()[0]);
-  const visual = () => clip() && !['audio', 'voice'].includes(clip()!.content.kind);
+  const visual = () => clip() && !['audio', 'voice', 'sourceAudio'].includes(clip()!.content.kind);
   const typography = () => clip()?.content.kind === 'text' || clip()?.content.kind === 'subtitles';
   const locked = () => currentProject()?.timeline.tracks.find(t => t.id === clip()?.trackId)?.locked;
   const [transform, setTransform] = createSignal<ClipTransform>();

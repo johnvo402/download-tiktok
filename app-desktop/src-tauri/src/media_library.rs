@@ -511,6 +511,7 @@ pub fn append_clip(
             linked_clip_id: None,
             group_id: None,
             style: None,
+            audio: None,
         });
         // Keep the existing one-video player usable until T03/T08 introduce selection/playback.
         if project.source.video_path.is_none() {

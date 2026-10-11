@@ -1,4 +1,5 @@
-import type { ClipStyle, ClipTransform, TimelineClip, TimelineDocument, TimelineSettings, TimelineTrack } from './types';
+import type { ClipAudio, ClipStyle, ClipTransform, TimelineClip, TimelineDocument, TimelineSettings, TimelineTrack } from './types';
+import { clipAudio, validateAudio } from './audio-layout';
 import { validateCanvas, validateStyle, validateTransform } from './visual-layout';
 import { clipDurationUs, clipEndUs, MAX_TIME_US, rescaleTime, timelineToSourceUs } from './time';
 
@@ -9,6 +10,11 @@ export interface EditLayout {
   legacyBinding: TimelineDocument['legacyBinding'];
 }
 export type EditCommand =
+  | { kind: 'audio'; id: string; audio: ClipAudio }
+  | { kind: 'voice'; videoClipId: string }
+  | { kind: 'extractAudio'; videoClipId: string }
+  | { kind: 'detach'; id: string }
+  | { kind: 'rate'; id: string; rate: TimelineClip['rate'] }
   | { kind: 'visual'; id: string; transform: ClipTransform; style?: ClipStyle; text?: string }
   | { kind: 'canvas'; settings: TimelineSettings }
   | { kind: 'text'; text: string; atUs: number }
@@ -29,7 +35,7 @@ export const sameLayout = (a: EditLayout, b: EditLayout) => JSON.stringify(a) ==
 function fail(message: string): never { throw new Error(message); }
 const time = (value: number) => { if (!Number.isSafeInteger(value) || value < 0 || value > MAX_TIME_US) fail('Thời gian dựng không hợp lệ.'); return value; };
 export function clipTrackKind(clip: TimelineClip): TimelineTrack['kind'] {
-  return clip.content.kind === 'subtitles' ? 'subtitle' : ['audio', 'voice'].includes(clip.content.kind) ? 'audio' : 'visual';
+  return clip.content.kind === 'subtitles' ? 'subtitle' : ['audio', 'voice', 'sourceAudio'].includes(clip.content.kind) ? 'audio' : 'visual';
 }
 /** Groups and parent/dependent links form one move/delete/copy unit. */
 export function editClosure(doc: Pick<TimelineDocument, 'clips'>, ids: string[]): Set<string> {
@@ -54,6 +60,7 @@ export function validateEdit(doc: TimelineDocument, next: EditLayout) {
     ids.add(t.id); orders.add(t.order);
   }
   for (const c of next.clips) {
+    if (c.audio) { if (!['video', 'audio', 'voice', 'sourceAudio'].includes(c.content.kind)) fail('Clip không có âm thanh.'); validateAudio(c.audio); }
     validateTransform(c.transform); if (c.style) { if (!['text', 'subtitles'].includes(c.content.kind)) fail('Kiểu chữ chỉ thuộc lớp chữ/phụ đề.'); validateStyle(c.style); }
     if (c.content.kind === 'text' && (!c.content.text.trim() || c.content.text.length > 10000)) fail('Nội dung chữ phải từ 1 đến 10.000 ký tự.');
     if (ids.has(c.id)) fail('ID clip bị trùng.'); ids.add(c.id);
@@ -134,9 +141,39 @@ function insertCopies(doc: TimelineDocument, next: EditLayout, originals: Timeli
 export function applyEdit(doc: TimelineDocument, command: EditCommand, uuid: () => string = () => crypto.randomUUID()): EditLayout {
   const next = editLayout(doc);
   if (command.kind === 'canvas') next.settings = structuredClone(command.settings);
+  else if (command.kind === 'audio') {
+    const c = next.clips.find(c => c.id === command.id) ?? fail('Clip không tồn tại.'); c.audio = structuredClone(command.audio);
+  } else if (command.kind === 'detach') {
+    const c = next.clips.find(c => c.id === command.id) ?? fail('Clip không tồn tại.');
+    if (!['voice', 'sourceAudio', 'audio'].includes(c.content.kind)) fail('Chọn lớp âm thanh để tách liên kết.');
+    c.linkedClipId = null; c.groupId = null;
+  } else if (command.kind === 'rate') {
+    const anchor = next.clips.find(c => c.id === command.id) ?? fail('Clip không tồn tại.');
+    const ids = editClosure(doc, [anchor.id]);
+    const origin = Math.min(...next.clips.filter(c => ids.has(c.id)).map(c => c.startUs));
+    const old = anchor.rate, ratio = { numerator: old.numerator * command.rate.denominator, denominator: old.denominator * command.rate.numerator };
+    for (const c of next.clips.filter(c => ids.has(c.id))) {
+      c.startUs = origin + rescaleTime(c.startUs - origin, ratio);
+      const n = c.rate.numerator * command.rate.numerator * old.denominator, d = c.rate.denominator * command.rate.denominator * old.numerator;
+      if (!Number.isSafeInteger(n) || !Number.isSafeInteger(d)) fail('Tốc độ không hợp lệ.');
+      let a = n, b = d; while (b) [a, b] = [b, a % b]; c.rate = { numerator: n / a, denominator: d / a };
+    }
+  } else if (command.kind === 'voice' || command.kind === 'extractAudio') {
+    const parent = next.clips.find(c => c.id === command.videoClipId && c.content.kind === 'video') ?? fail('Chọn video trước.');
+    if (parent.content.kind !== 'video') fail('Clip không phải video.');
+    const video = parent.content;
+    const audio = clipAudio(parent, doc), voice = command.kind === 'voice';
+    if (voice && next.clips.some(c => c.content.kind === 'voice' && c.linkedClipId === parent.id)) fail('Video đã có lớp giọng liên kết.');
+    if (!voice && next.clips.some(c => c.content.kind === 'sourceAudio' && c.linkedClipId === parent.id)) fail('Video đã có lớp audio gốc liên kết.');
+    if (!voice && !doc.assets.find(a => a.id === video.assetId)?.metadata.audioStreams?.length) fail('Video này không có audio gốc.');
+    parent.audio = { ...audio, ...(voice ? { voiceEnabled: false } : { muted: true }) };
+    next.clips.push({ ...structuredClone(parent), id: uuid(), trackId: freeTrack(doc, next, 'audio', parent.startUs, clipDurationUs(parent), uuid),
+      content: voice ? { kind: 'voice', videoContentId: video.videoContentId } : { kind: 'sourceAudio', assetId: video.assetId, videoContentId: video.videoContentId },
+      linkedClipId: parent.id, groupId: null, audio: { ...audio, muted: false, volume: voice ? doc.videoContents.find(v => v.id === video.videoContentId)?.settings.dubbing.dubbedVolume ?? 1 : audio.volume } });
+  }
   else if (command.kind === 'visual') {
     const c = next.clips.find(c => c.id === command.id) ?? fail('Clip không tồn tại.');
-    if (c.content.kind === 'audio' || c.content.kind === 'voice') fail('Clip âm thanh không có thuộc tính hình ảnh.');
+    if (['audio', 'voice', 'sourceAudio'].includes(c.content.kind)) fail('Clip âm thanh không có thuộc tính hình ảnh.');
     c.transform = structuredClone(command.transform);
     if (command.style) c.style = structuredClone(command.style);
     if (command.text !== undefined) { if (c.content.kind !== 'text') fail('Chỉ sửa chữ trên lớp chữ.'); c.content.text = command.text; }
