@@ -865,7 +865,14 @@ pub fn reconcile_legacy(project: &mut Project, previous: &Project) -> Result<(),
                 project.logos = content.settings.logos.clone();
                 project.text_overlays = content.settings.text_overlays.clone();
             }
-            if binding.clip_id.is_none() {
+            // A null clip binding after an editor delete is intentional, not a missing migration.
+            if binding.clip_id.is_none()
+                && previous
+                    .timeline
+                    .as_ref()
+                    .and_then(|d| d.assets.iter().find(|a| a.id == binding.asset_id))
+                    .is_some_and(|a| a.duration_us.is_none())
+            {
                 if let Some(duration) = document.assets[asset_index].duration_us {
                     let id = Uuid::new_v4().to_string();
                     let track = document

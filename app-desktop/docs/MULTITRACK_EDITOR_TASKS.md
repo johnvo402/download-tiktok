@@ -1,6 +1,6 @@
 # Kế hoạch timeline nhiều lớp trong phần Dịch
 
-Trạng thái: T01–T04 hoàn tất; T05–T11 chưa triển khai. Cập nhật: 2026-10-11.
+Trạng thái: T01–T05 hoàn tất; T06–T11 chưa triển khai. Cập nhật: 2026-10-11.
 
 ## Mục tiêu và bố cục
 
@@ -83,6 +83,10 @@ Thêm, di chuyển, đổi track/thứ tự, kéo hai mép trim, split tại pla
 Triển khai theo command/transaction để kéo một lần là một bước undo. Undo/redo bao gồm thay đổi của các clip liên kết. Autosave sau thao tác hợp lệ; chặn trim vượt nguồn, thời lượng âm và thao tác trên track khóa.
 
 Hoàn tất khi: cut/reorder/ripple/undo/redo cho nhiều clip giữ nguyên ánh xạ thời gian và các nội dung liên kết. Phụ thuộc T01, T04.
+
+Đã triển khai: kéo clip giữa track và kéo hai mép trim với ghost, hít mép/playhead có bật/tắt và Alt bỏ hít, chọn nhiều, cut tại playhead, đổi thứ tự clip/track, nhân bản, copy/paste, nhóm/liên kết, thêm track/clip, xóa thường và ripple toàn bộ track. Có hộp nhập thời gian/track đích cho thao tác không dùng kéo. Mỗi gesture hợp lệ là một transaction autosave và một bước undo; lịch sử giữ 50 bước theo dự án, không hoàn tác dữ liệu transcript/dịch/TTS mới. Backend so sánh bố cục, kiểm tra khóa, nguồn, tham chiếu và chồng lấn trên document mới nhất. Xóa clip vẫn giữ nguồn/content trong kho; binding clip null không tái tạo clip đã xóa.
+
+Đã kiểm tra: build frontend, 62 test frontend, 215 test Rust qua và 23 test tùy chọn bỏ qua; test Rust bao gồm CAS, overlap/bounds/locks, xóa binding, thêm đầu tiên rồi undo/redo và giữ cập nhật nội dung độc lập. UI kiểm tra gesture là một bước undo, trim/cut lớp phụ thuộc, reorder, paste lên track trống, nhóm/link, xóa/ripple, undo giữ kết quả AI, khóa, hàng rào lưu, AI cập nhật giữa lúc kéo và thêm media đúng giờ dự án khi xem nguồn B. Kiểm tra hồi quy T04 qua cả điều hướng, track controls, resize và virtualization. Chi tiết: `TIMELINE_EDITING.md`.
 
 ## T06 — Nhiều lớp và thuộc tính hình ảnh
 

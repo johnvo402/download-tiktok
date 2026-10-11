@@ -1,5 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { Project } from '../../features/projects/types';
+import type { EditLayout } from '../../features/timeline/edit-commands';
 
 export interface MediaImportItem {
   sourcePath: string; assetId: string | null;
@@ -23,4 +24,5 @@ export const mediaService = {
   cache: (projectId: string, assetId: string, kind: 'thumbnail' | 'waveform') => call<MediaCache>('get_media_cache', { projectId, assetId, kind }),
   path: (projectId: string, assetId: string) => call<string>('get_media_asset_path', { projectId, assetId }),
   trackControl: (projectId: string, trackId: string, control: 'locked' | 'enabled' | 'muted' | 'solo', value: boolean) => call<Project>('set_timeline_track_control', { projectId, trackId, control, value }),
+  edit: (projectId: string, expected: EditLayout, next: EditLayout) => call<Project>('apply_timeline_edit', { projectId, expected, next }),
 };

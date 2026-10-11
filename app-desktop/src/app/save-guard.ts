@@ -15,3 +15,8 @@ export function flushPendingSaves(): Promise<void> {
   flushing = work.finally(() => { flushing = undefined; });
   return flushing;
 }
+
+/** A transaction may wait for other drafts while its own save participates in navigation. */
+export async function flushOtherSaves(excludedId: string): Promise<void> {
+  for (const [id, flush] of [...tasks]) if (id !== excludedId) await flush();
+}

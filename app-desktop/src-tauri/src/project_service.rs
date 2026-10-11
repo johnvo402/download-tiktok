@@ -85,7 +85,7 @@ pub struct OcrRegion {
     pub height: f64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSource {
     pub video_path: Option<String>,

@@ -2,13 +2,14 @@ import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Sh
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { AudioLines, Film, Image, Link, Plus, RefreshCw, Search } from 'lucide-solid';
-import { currentProject, playbackTime, setNotice } from '../../app/project-state';
+import { currentProject, setNotice } from '../../app/project-state';
 import { flushPendingSaves } from '../../app/save-guard';
 import { mediaService, type MediaAssetStatus } from '../../app/services/media-service';
 import { mergeVisualProject } from '../overlays/overlay-state';
 import type { MediaAsset } from '../timeline/types';
-import { secondsToTimeUs, timelineDurationUs } from '../timeline/time';
-import { timelinePreviewActive, timelineTimeUs } from '../timeline/timeline-state';
+import { timelineDurationUs } from '../timeline/time';
+import { timelineCursorUs } from '../timeline/timeline-state';
+import { commitEdit, editBusy } from '../timeline/edit-state';
 import { browseMedia, importMediaPaths, mediaBusy, mediaProgress, mediaResults, setMediaBusy } from './media-state';
 import { filterMedia, mediaDuration, mediaName, mediaUsage, MEDIA_EXTENSIONS } from './media-utils';
 import './media-library.css';
@@ -52,14 +53,13 @@ function AssetCard(props: { asset: MediaAsset; projectId: string; status?: Media
     finally { if (alive) setWaveLoading(false); }
   }
   async function add() {
-    if (mediaBusy() || !available()) return;
+    if (mediaBusy() || editBusy() || !available()) return;
     const projectId = props.projectId, assetId = props.asset.id, sourceName = name(), sourceKind = props.asset.kind;
     setMediaBusy(true);
     try {
-      const atUs = sourceKind === 'video' ? null : timelinePreviewActive() ? timelineTimeUs() : secondsToTimeUs(Math.max(0, playbackTime()));
-      await flushPendingSaves();
-      const updated = await mediaService.append(projectId, assetId, atUs);
-      if (currentProject()?.id === projectId) { mergeVisualProject(updated); setNotice({ kind: 'success', message: `Đã thêm ${sourceName} vào timeline.` }); }
+      const atUs = sourceKind === 'video' ? null : timelineCursorUs();
+      const done = await commitEdit({ kind: 'add', assetId, atUs }, 'Thêm clip');
+      if (done && currentProject()?.id === projectId) setNotice({ kind: 'success', message: `Đã thêm ${sourceName} vào timeline.` });
     } catch (error) { if (currentProject()?.id === projectId) setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thêm được clip.' }); }
     finally { setMediaBusy(false); }
   }

@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { flushPendingSaves, registerSaveTask } from './save-guard';
+import { flushOtherSaves, flushPendingSaves, registerSaveTask } from './save-guard';
 
 test('close waits for all saves and keeps rejected tasks for retry', async () => {
   let attempts = 0;
@@ -22,4 +22,20 @@ test('concurrent close requests share one flush', async () => {
   complete!();
   await Promise.all([first, second]);
   unregister();
+});
+
+test('a navigation save barrier waits for a transaction which first flushes other drafts without waiting on itself', async () => {
+  let resolveDraft!: () => void, resolveWrite!: () => void;
+  const draft = new Promise<void>(resolve => { resolveDraft = resolve; });
+  const write = new Promise<void>(resolve => { resolveWrite = resolve; });
+  const removeDraft = registerSaveTask('source-test', () => draft);
+  let writing = false, closed = false;
+  const transaction = Promise.resolve().then(async () => { await flushOtherSaves('timeline-test'); writing = true; await write; });
+  const removeTransaction = registerSaveTask('timeline-test', () => transaction);
+  const closing = flushPendingSaves().then(() => { closed = true; });
+  await Promise.resolve(); expect(writing).toBe(false); expect(closed).toBe(false);
+  resolveDraft(); await draft; await Promise.resolve(); await Promise.resolve();
+  expect(writing).toBe(true); expect(closed).toBe(false);
+  resolveWrite(); await closing; expect(closed).toBe(true);
+  removeTransaction(); removeDraft();
 });
