@@ -10,6 +10,7 @@ import { currentProject, projectSaveState, setAppStartupReady, setCurrentProject
 import { projectService } from '../../app/services/project-service';
 import TranslationView from './translation/TranslationView';
 import TranslationPanel from './translation/TranslationPanel';
+import TimelineEditor from '../timeline/TimelineEditor';
 import VideoToolsView from './VideoToolsView';
 import ExportDialog from './ExportDialog';
 import ProjectSettingsDialog from './ProjectSettingsDialog';
@@ -161,6 +162,7 @@ export default function WorkspaceLayout() {
 
         <Show when={section() === 'studio'}><VideoStudioView /></Show>
         <Show when={section() === 'translate'}>
+          <div class="translation-workspace">
           <main class="workspace-content translation-layout" style={{ '--preview-ratio': `${previewRatio()}fr`, '--panel-ratio': `${100 - previewRatio()}fr` }}>
             <TranslationView />
             <div
@@ -177,6 +179,8 @@ export default function WorkspaceLayout() {
             ><span /></div>
             <div class="workspace-right-panel"><TranslationPanel /></div>
           </main>
+          <TimelineEditor />
+          </div>
         </Show>
         <Show when={section() === 'download' || section() === 'merge'}>
           <VideoToolsView workflow={section() === 'merge' ? 'merge' : 'tiktok'} />

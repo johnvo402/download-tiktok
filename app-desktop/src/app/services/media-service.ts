@@ -21,4 +21,6 @@ export const mediaService = {
   relink: (projectId: string, assetId: string, sourcePath: string) => call<Project>('relink_media_asset', { projectId, assetId, sourcePath }),
   append: (projectId: string, assetId: string, atUs: number | null = null) => call<Project>('append_media_clip', { projectId, assetId, atUs }),
   cache: (projectId: string, assetId: string, kind: 'thumbnail' | 'waveform') => call<MediaCache>('get_media_cache', { projectId, assetId, kind }),
+  path: (projectId: string, assetId: string) => call<string>('get_media_asset_path', { projectId, assetId }),
+  trackControl: (projectId: string, trackId: string, control: 'locked' | 'enabled' | 'muted' | 'solo', value: boolean) => call<Project>('set_timeline_track_control', { projectId, trackId, control, value }),
 };

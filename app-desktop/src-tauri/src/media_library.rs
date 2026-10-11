@@ -839,6 +839,17 @@ pub async fn get_media_cache(
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+pub async fn get_media_asset_path(app: tauri::AppHandle, project_id: String, asset_id: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = crate::commands::store(&app)?;
+        let project = store.get(&project_id)?;
+        let path = owned_file(&store, &project, asset(&project, &asset_id)?, true)?;
+        app.asset_protocol_scope().allow_file(&path).map_err(|e| e.to_string())?;
+        Ok(path.to_string_lossy().into_owned())
+    }).await.map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

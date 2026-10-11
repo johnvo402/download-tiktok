@@ -8,6 +8,7 @@ import { mediaService, type MediaAssetStatus } from '../../app/services/media-se
 import { mergeVisualProject } from '../overlays/overlay-state';
 import type { MediaAsset } from '../timeline/types';
 import { secondsToTimeUs, timelineDurationUs } from '../timeline/time';
+import { timelinePreviewActive, timelineTimeUs } from '../timeline/timeline-state';
 import { browseMedia, importMediaPaths, mediaBusy, mediaProgress, mediaResults, setMediaBusy } from './media-state';
 import { filterMedia, mediaDuration, mediaName, mediaUsage, MEDIA_EXTENSIONS } from './media-utils';
 import './media-library.css';
@@ -55,7 +56,7 @@ function AssetCard(props: { asset: MediaAsset; projectId: string; status?: Media
     const projectId = props.projectId, assetId = props.asset.id, sourceName = name(), sourceKind = props.asset.kind;
     setMediaBusy(true);
     try {
-      const atUs = sourceKind === 'video' ? null : secondsToTimeUs(Math.max(0, playbackTime()));
+      const atUs = sourceKind === 'video' ? null : timelinePreviewActive() ? timelineTimeUs() : secondsToTimeUs(Math.max(0, playbackTime()));
       await flushPendingSaves();
       const updated = await mediaService.append(projectId, assetId, atUs);
       if (currentProject()?.id === projectId) { mergeVisualProject(updated); setNotice({ kind: 'success', message: `Đã thêm ${sourceName} vào timeline.` }); }

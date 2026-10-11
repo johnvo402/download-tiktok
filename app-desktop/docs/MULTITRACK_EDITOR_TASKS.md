@@ -1,6 +1,6 @@
 # Kế hoạch timeline nhiều lớp trong phần Dịch
 
-Trạng thái: T01–T03 hoàn tất; T04–T11 chưa triển khai. Cập nhật: 2026-10-11.
+Trạng thái: T01–T04 hoàn tất; T05–T11 chưa triển khai. Cập nhật: 2026-10-11.
 
 ## Mục tiêu và bố cục
 
@@ -71,6 +71,10 @@ Timeline ở dưới preview/bảng chỉnh sửa, có kéo đổi chiều cao, 
 Phân biệt clip được chọn với clip đang phát. Track có khóa, bật/tắt hiển thị, mute/solo phù hợp loại track. Khu vực cuộn chỉ dựng các clip/thumbnail đang nhìn thấy để giữ hiệu năng.
 
 Hoàn tất khi: hiển thị và seek được timeline hai video, một ảnh và một audio; thao tác tốt ở các mức zoom và chiều rộng cửa sổ. Phụ thuộc T01–T02.
+
+Đã triển khai: timeline dưới preview/panel, resize chiều cao, ruler/playhead, thumbnail/waveform theo phần nguồn, chọn clip độc lập với thời gian đang xem, zoom quanh con trỏ/playhead, fit và cuộn ngang/dọc. Track có khóa, bật/tắt và mute/solo cho visual/audio; các thay đổi được lưu bằng transaction trên project mới nhất. Clip/track ngoài viewport không dựng DOM; cache dùng chung theo nguồn, tối đa hai decoder, hủy yêu cầu còn chờ khi ra ngoài viewport.
+
+Đã kiểm tra: build frontend, 50 test frontend, 212 test Rust qua và 23 test tùy chọn bỏ qua. UI kiểm tra A/B + ảnh + audio, ánh xạ seek sang B khi editor vẫn là A, lựa chọn ảnh giữ nguyên editor video, trạng thái track, keyboard/zoom/resize, dự án 500 clip và timeline hẹp. Preview điều hướng dùng nguồn trực tiếp và tiếng gốc/audio riêng, không tạo video tạm. Transforms, subtitle/TTS trên timeline, đồng bộ/native preview hoàn chỉnh và export timeline tiếp tục ở T06–T09; preview nguồn cũ vẫn truy cập qua “Xem video đang chọn”. Chi tiết: `TIMELINE_NAVIGATION.md`.
 
 ## T05 — Bộ thao tác dựng và lịch sử chỉnh sửa
 

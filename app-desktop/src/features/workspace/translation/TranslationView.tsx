@@ -32,10 +32,13 @@ function formatTime(seconds: number) {
 
 import SourceVideoPreview from '../../timeline/SourceVideoPreview';
 import { selectedVideoId } from '../../timeline/video-context-state';
+import TimelinePreview from '../../timeline/TimelinePreview';
+import { reviewSelectedSource, timelinePreviewActive } from '../../timeline/timeline-state';
 
 export default function TranslationView() {
+  createEffect(() => { if (seekRequest() !== null || ocrRegionPicking() || ocrRegionEditing() || blurRegionPicking() || subtitleRegionPicking()) reviewSelectedSource(); });
   const secondary = () => !!selectedVideoId() && selectedVideoId() !== currentProject()?.timeline.legacyBinding?.videoContentId;
-  return <Show when={!secondary()} fallback={<SourceVideoPreview />}><LegacyTranslationView /></Show>;
+  return <Show when={!timelinePreviewActive()} fallback={<TimelinePreview />}><Show when={!secondary()} fallback={<SourceVideoPreview />}><LegacyTranslationView /></Show></Show>;
 }
 
 function LegacyTranslationView() {
