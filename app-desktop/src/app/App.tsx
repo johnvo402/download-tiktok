@@ -2,6 +2,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { registerSaveTask, flushPendingSaves } from './save-guard';
 import { flushAllVisualSettings } from '../features/overlays/overlay-state';
+import { rememberVideoJob } from '../features/timeline/video-context-state';
 import { setNotice } from './project-state';
 import { Route, Router } from '@solidjs/router';
 import { createEffect, createSignal, lazy, onCleanup, onMount } from 'solid-js';
@@ -65,19 +66,19 @@ export default function App() {
     }
     void listen<string>('job-history-warning',event => setNotice({kind:'error',message:event.payload})).then(unlisten => {if(alive) unlistenJobWarning=unlisten; else unlisten();}).catch(() => undefined);
     minimumSplashTimer = window.setTimeout(() => setMinimumSplashElapsed(true), 520);
-    void listen<TranscriptionEvent>('transcription-progress', (event) => setTranscriptionEvent(event.payload))
+    void listen<TranscriptionEvent>('transcription-progress', (event) => { rememberVideoJob('asr', event.payload); setTranscriptionEvent(event.payload); })
       .then((unlisten) => {
         if (alive) unlistenTranscription = unlisten;
         else unlisten();
       })
       .catch(() => undefined);
-    void listen<TranslationJobEvent>('translation-progress', (event) => setTranslationEvent(event.payload))
+    void listen<TranslationJobEvent>('translation-progress', (event) => { rememberVideoJob('translation', event.payload); setTranslationEvent(event.payload); })
       .then((unlisten) => {
         if (alive) unlistenTranslation = unlisten;
         else unlisten();
       })
       .catch(() => undefined);
-    void listen<TtsJobEvent>('tts-progress', (event) => setTtsEvent(event.payload))
+    void listen<TtsJobEvent>('tts-progress', (event) => { rememberVideoJob('tts', event.payload); setTtsEvent(event.payload); })
       .then((unlisten) => {
         if (alive) unlistenTts = unlisten;
         else unlisten();

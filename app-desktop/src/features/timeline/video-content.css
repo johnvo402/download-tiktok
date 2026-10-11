@@ -1,0 +1,23 @@
+.video-content-panel { display:flex; flex-direction:column; height:100%; min-height:0; min-width:0; background:#151618; }
+.video-content-panel > .translation-panel { flex:1; height:auto; }
+.video-content-controls { padding:10px 12px; border-bottom:1px solid #303236; font-size:12px; flex:none; max-height:40%; overflow:auto; }
+.video-content-controls > label { display:grid; gap:5px; color:#c7c9cd; }
+.video-content-controls select, .video-content-controls button { min-height:32px; border:1px solid #3b3e44; border-radius:5px; color:#e4e6eb; background:#23252a; font:inherit; padding:5px 8px; min-width:0; }
+.video-content-controls button:disabled { opacity:.5; cursor:default; }
+.video-content-controls :is(button,select,input):focus-visible { outline:2px solid #60d6e8; outline-offset:2px; }
+.video-scope-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.video-scope-selection { display:grid; gap:6px; margin-top:8px; }
+.video-scope-selection label { display:flex; gap:6px; align-items:center; overflow-wrap:anywhere; }
+.video-jobs { margin-top:8px; color:#bfc3cc; }
+.video-jobs summary { cursor:pointer; }
+.video-job { display:flex; gap:8px; justify-content:space-between; padding:7px 0; border-bottom:1px solid #303236; }
+.video-job span { min-width:0; overflow-wrap:anywhere; }
+.video-job small { display:block; margin-top:3px; }
+.video-job-error { color:#ffadad; overflow-wrap:anywhere; }
+.source-video-preview { display:flex; flex-direction:column; min-width:0; min-height:0; height:100%; padding:16px; gap:10px; color:#c7c9cd; }
+.source-video-preview > p { margin:0; font-size:12px; }
+.source-video-stage { position:relative; flex:1; min-height:0; background:#090a0c; display:flex; align-items:center; justify-content:center; }
+.source-video-stage video { max-width:100%; max-height:100%; }
+.source-video-caption { position:absolute; bottom:60px; left:10%; right:10%; text-align:center; color:white; background:#000a; padding:5px; pointer-events:none; }
+.source-video-ocr { position:absolute; inset:0; touch-action:none; cursor:crosshair; }
+.source-video-ocr rect { fill:#59d2e833; stroke:#59d2e8; stroke-width:2; }

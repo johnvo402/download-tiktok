@@ -45,7 +45,7 @@ pub fn apply_translations(
 pub fn empty_transcript(project: &Project) -> Transcript {
     Transcript {
         schema_version: 1,
-        project_id: project.id.clone(),
+        project_id: project.id.clone(), video_content_id: None,
         source_type: TranscriptSourceType::Asr,
         source_track: None,
         language: None,

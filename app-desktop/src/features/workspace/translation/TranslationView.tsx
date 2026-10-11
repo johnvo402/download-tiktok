@@ -30,7 +30,15 @@ function formatTime(seconds: number) {
     : `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
 }
 
+import SourceVideoPreview from '../../timeline/SourceVideoPreview';
+import { selectedVideoId } from '../../timeline/video-context-state';
+
 export default function TranslationView() {
+  const secondary = () => !!selectedVideoId() && selectedVideoId() !== currentProject()?.timeline.legacyBinding?.videoContentId;
+  return <Show when={!secondary()} fallback={<SourceVideoPreview />}><LegacyTranslationView /></Show>;
+}
+
+function LegacyTranslationView() {
   let videoElement!: HTMLVideoElement;
   let previewFrame!: HTMLDivElement;
   let audioVisualSeek = false;

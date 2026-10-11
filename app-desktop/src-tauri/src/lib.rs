@@ -20,6 +20,7 @@ mod overlays_service;
 mod optional_runtime;
 mod project_service;
 pub mod timeline;
+pub mod video_content;
 mod render_service;
 pub mod render;
 pub mod media_gpu;

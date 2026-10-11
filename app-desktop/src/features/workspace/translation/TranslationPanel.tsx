@@ -4,10 +4,10 @@ import {
   AlertTriangle, AudioLines, Check, FileImage, FileText, Languages, LoaderCircle,
   Plus, RefreshCw, Search, Settings2, Sparkles, Trash2, Volume2, X, ImagePlus,
 } from 'lucide-solid';
-import { activeWorkspacePanelTab, batchProcessingActive, blurRegionPicking, currentProject, currentTranscript, ocrRegionEditing, ocrRegionPicking, playbackTime, projectSaveState, selectedOverlay, segmentVoicePreviewActive, setActiveWorkspacePanelTab, setAiRemovalPreview, setBlurRegionPicking, setCurrentProject, setCurrentTranscript, setNotice, setOcrRegionEditing, setOcrRegionPicking, setProjectSaveState, setSeekRequest, setSegmentVoicePreviewActive, setSelectedOverlay, setSubtitleRegionPicking, subtitleRegionPicking, setTtsEvent, transcriptionEvent, translationEvent, ttsEvent, videoPlaying } from '../../../app/project-state';
-import { projectService } from '../../../app/services/project-service';
-import { translationService } from '../../../app/services/translation-service';
-import { ttsService } from '../../../app/services/tts-service';
+import { activeWorkspacePanelTab, batchProcessingActive, blurRegionPicking, currentProject as rawCurrentProject, currentTranscript, ocrRegionEditing, ocrRegionPicking, playbackTime, projectSaveState, selectedOverlay, segmentVoicePreviewActive, setActiveWorkspacePanelTab, setAiRemovalPreview, setBlurRegionPicking, setCurrentTranscript as setRawCurrentTranscript, setNotice, setOcrRegionEditing, setOcrRegionPicking, setProjectSaveState, setSeekRequest, setSegmentVoicePreviewActive, setSelectedOverlay, setSubtitleRegionPicking, subtitleRegionPicking, videoPlaying } from '../../../app/project-state';
+
+
+
 import { dialogueService, type DialogueEnvironment } from '../../../app/services/dialogue-service';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -18,8 +18,13 @@ import { compareSegmentTime, formatTimestamp, ttsWindowEnd, validateTranscript }
 import Modal from '../../../shared/components/Modal';
 import MediaLibrary from '../../media/MediaLibrary';
 import { open } from '@tauri-apps/plugin-dialog';
-import { flushVisualSettings, mergeVisualProject, updateVisualSettings } from '../../overlays/overlay-state';
+import { flushVisualSettings, mergeVisualProject as mergeRawVisualProject, updateVisualSettings as updateRawVisualSettings } from '../../overlays/overlay-state';
 import type { WorkspacePanelTab } from '../../../app/project-state';
+
+import VideoContentControls from '../../timeline/VideoContentControls';
+import { projectForVideo, mergeVideoView } from '../../timeline/video-context';
+import { videoServices } from '../../timeline/video-services';
+import { selectedVideoId, selectedAsrEvent as transcriptionEvent, selectedTranslationEvent as translationEvent, selectedTtsEvent as ttsEvent } from '../../timeline/video-context-state';
 
 type PanelTab = WorkspacePanelTab;
 type SaveState = 'saved' | 'saving' | 'error';
@@ -81,7 +86,39 @@ function emptyTranscript(projectId: string, checksum: string | null): Transcript
   return { schemaVersion: 1, projectId, sourceType: 'asr', sourceTrack: null, language: null, videoChecksum: checksum, segments: [] };
 }
 
-export default function TranslationPanel() {
+function TranslationPanelEditor(props: { contentId?: string }) {
+  const contentId = props.contentId;
+  const contextProjectId = rawCurrentProject()?.id;
+  const services = videoServices(contentId);
+  const projectService = services.project;
+  const translationService = services.translation;
+  const ttsService = services.tts;
+  let alive = true;
+  onCleanup(() => { alive = false; });
+  const currentProject = () => {
+    const project = rawCurrentProject();
+    return project && project.id === contextProjectId ? projectForVideo(project, contentId) : undefined;
+  };
+  const setCurrentTranscript = (value: Transcript | undefined | ((previous: Transcript | undefined) => Transcript | undefined)) => {
+    if (alive && rawCurrentProject()?.id === contextProjectId && selectedVideoId() === contentId) {
+      return setRawCurrentTranscript(typeof value === 'function' ? value(currentTranscript()) : value);
+    }
+  };
+  const setCurrentProject = (value: Project | undefined | ((project: Project | undefined) => Project | undefined)) => {
+    const base = rawCurrentProject();
+    const next = typeof value === 'function' ? value(currentProject()) : value;
+    if (base && next && base.id === contextProjectId && next.updatedAt >= base.updatedAt) mergeRawVisualProject(mergeVideoView(base, next, contentId));
+  };
+  const mergeVisualProject = (view: Project) => {
+    const base = rawCurrentProject();
+    if (base && base.id === contextProjectId && view.updatedAt >= base.updatedAt) mergeRawVisualProject(mergeVideoView(base, view, contentId));
+  };
+  const updateVisualSettings: typeof updateRawVisualSettings = (changes, flush) => {
+    if (contentId !== rawCurrentProject()?.timeline.legacyBinding?.videoContentId) {
+      setNotice({ kind: 'info', message: 'Dựng lớp hình ảnh cho nhiều video sẽ được bổ sung ở T06.' }); return;
+    }
+    updateRawVisualSettings(changes, flush);
+  };
   const [selectedTrack, setSelectedTrack] = createSignal('');
   const [transcriptLoading, setTranscriptLoading] = createSignal(false);
   const [extracting, setExtracting] = createSignal(false);
@@ -157,7 +194,7 @@ export default function TranslationPanel() {
         setTextRemovalPreviewJobId(undefined);
         setNotice({ kind: 'info', message: 'Đã hủy xử lý preview xóa chữ.' });
       }
-    }).then((unlisten) => { stopTextRemovalPreviewProgress = unlisten; });
+    }).then((unlisten) => { if (alive) stopTextRemovalPreviewProgress = unlisten; else unlisten(); });
   });
 
   const dialogueReductionReady = () => !!dialogueEnvironment()?.runtimeInstalled && !!dialogueEnvironment()?.modelCached;
@@ -196,6 +233,7 @@ export default function TranslationPanel() {
     const retainedSaveState = untrack(projectSaveState);
     setTranscriptLoading(false);
     if (project?.id && retained?.projectId === project.id
+      && (retained.videoContentId === contentId || (!retained.videoContentId && contentId === project.timeline.legacyBinding?.videoContentId))
       && retained.videoChecksum === (project.source.checksumSha256 ?? null)
       && retainedSaveState !== 'saved') {
       setDirty(true);
@@ -233,7 +271,7 @@ export default function TranslationPanel() {
     lastTtsTerminalEvent = eventKey;
     setTtsRunning(false);
     setTtsJobId(undefined);
-    setTtsEvent((current) => current?.jobId === payload.jobId && current.status === payload.status ? undefined : current);
+
     if (!batchProcessingActive()) {
       void reloadProjectTranscript(payload.projectId);
       setNotice({ kind: payload.status === 'completed' ? 'success' : payload.status === 'partial' || payload.status === 'cancelled' ? 'info' : 'error', message: payload.message });
@@ -321,14 +359,18 @@ export default function TranslationPanel() {
   onCleanup(() => {
     window.clearTimeout(saveTimer);
     window.clearTimeout(dubbingSaveTimer);
-    previewAudio?.pause();
+    if (previewAudio) { previewAudio.onended = null; previewAudio.onerror = null; previewAudio.pause(); }
     stopTextRemovalPreviewProgress?.();
     setSegmentVoicePreviewActive(false);
   });
 
   const reloadProjectTranscript = async (projectId: string) => {
     try {
+      if (dirty()) await persistTranscript();
+      if (dirty() || !alive) return;
+      const revision = saveRevision;
       const [project, value] = await Promise.all([projectService.get(projectId), projectService.getTranscript(projectId)]);
+      if (dirty() || revision !== saveRevision || !alive) return;
       if (currentProject()?.id === projectId) {
         setCurrentProject(project);
         setCurrentTranscript(value ?? undefined);
@@ -356,11 +398,7 @@ export default function TranslationPanel() {
     const eventKey = `${payload.jobId}:${payload.status}`;
     if (lastTranslationTerminalEvent === eventKey) return;
     lastTranslationTerminalEvent = eventKey;
-    void projectService.get(payload.projectId)
-      .then((latestProject) => {
-        if (currentProject()?.id === latestProject.id) setCurrentProject(latestProject);
-      })
-      .catch(() => undefined);
+
     if (!batchProcessingActive()) {
       void reloadProjectTranscript(payload.projectId);
       setNotice({
@@ -414,7 +452,7 @@ export default function TranslationPanel() {
     await persistTranscript();
     if (dirty()) throw new Error(saveError() || 'Bản chép lời chưa được lưu. Hãy thử lưu lại.');
   });
-  onCleanup(() => unregisterSave());
+  onCleanup(() => { unregisterSave(); window.clearTimeout(saveTimer); });
 
   const updateSegment = (id: string, changes: Partial<TranscriptSegment>) => {
     saveRevision += 1;
@@ -443,7 +481,7 @@ export default function TranslationPanel() {
     if (!project?.source.videoPath) return;
     let value = currentTranscript();
     if (!value) {
-      value = emptyTranscript(project.id, project.source.checksumSha256 ?? null);
+      value = { ...emptyTranscript(project.id, project.source.checksumSha256 ?? null), videoContentId: contentId };
       setCurrentTranscript(value);
     }
     const duration = videoDuration();
@@ -611,13 +649,13 @@ export default function TranslationPanel() {
     setSegmentVoicePreviewActive(true);
     try {
       const path = await ttsService.getAudioPath(currentProject()!.id, segment.id);
-      if (previewingTtsSegment() !== segment.id) return;
+      if (!alive || previewingTtsSegment() !== segment.id) return;
       const audio = new Audio(convertFileSrc(path));
       previewAudio = audio;
       audio.onended = () => { setPreviewingTtsSegment(undefined); previewAudio = undefined; setSegmentVoicePreviewActive(false); };
       audio.onerror = () => { setPreviewingTtsSegment(undefined); previewAudio = undefined; setSegmentVoicePreviewActive(false); setNotice({ kind: 'error', message: 'Không thể phát audio TTS segment này.' }); };
       await audio.play();
-    } catch (error) { setPreviewingTtsSegment(undefined); previewAudio = undefined; setSegmentVoicePreviewActive(false); setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể mở audio TTS.' }); }
+    } catch (error) { if (!alive) return; setPreviewingTtsSegment(undefined); previewAudio = undefined; setSegmentVoicePreviewActive(false); setNotice({ kind: 'error', message: error instanceof Error ? error.message : 'Không thể mở audio TTS.' }); }
   };
 
   const updateSubtitleSettings = (changes: Partial<NonNullable<ReturnType<typeof currentProject>>['subtitle']>) => {
@@ -733,6 +771,9 @@ export default function TranslationPanel() {
   };
 
   const startTextRemovalPreview = async (regionId: string, detectOnly = false) => {
+    if (contentId !== rawCurrentProject()?.timeline.legacyBinding?.videoContentId) {
+      setNotice({ kind: 'info', message: 'Xóa chữ trên nhiều nguồn sẽ được tích hợp cùng preview T08.' }); return;
+    }
     const project = currentProject();
     if (!project || (detectOnly ? !textRemovalEnvironment()?.ocrReady : !textRemovalReady(selectedBlur()?.effect))) return;
     setTextRemovalPreviewProgress({ progress: 0, message: 'Đang đưa vào hàng đợi…' });
@@ -774,6 +815,7 @@ export default function TranslationPanel() {
   const removeSelectedLogo = async () => {
     const project = currentProject();
     const selected = selectedOverlay();
+    if (contentId !== rawCurrentProject()?.timeline.legacyBinding?.videoContentId) return;
     if (!project || selected?.type !== 'logo') return;
     try {
       const result = await projectService.removeLogo(project.id, selected.id);
@@ -788,6 +830,7 @@ export default function TranslationPanel() {
   const replaceSelectedLogo = async () => {
     const project = currentProject();
     const selected = selectedOverlay();
+    if (contentId !== rawCurrentProject()?.timeline.legacyBinding?.videoContentId) return;
     if (!project || selected?.type !== 'logo') return;
     const path = await open({ multiple: false, filters: [{ name: 'Image', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] });
     if (typeof path !== 'string') return;
@@ -808,14 +851,14 @@ export default function TranslationPanel() {
     dubbingInFlight=projectService.updateDubbingSettings(task.projectId,task.dubbing).then(updated => {
       if (pendingDubbing?.revision===task.revision) {
         pendingDubbing=undefined;
-        setCurrentProject(value => value?.id===task.projectId?{...value,dubbing:updated.dubbing,updatedAt:updated.updatedAt}:value);
+        setCurrentProject(updated);
       }
     });
     try { await dubbingInFlight; } finally { dubbingInFlight=undefined; }
     if (pendingDubbing) await persistDubbing();
   };
   const unregisterDubbingSave=registerSaveTask('dubbing-settings', async () => { window.clearTimeout(dubbingSaveTimer); await persistDubbing(); });
-  onCleanup(() => unregisterDubbingSave());
+  onCleanup(() => { unregisterDubbingSave(); window.clearTimeout(dubbingSaveTimer); });
   const updateDubbingSettings = (changes: Partial<Project['dubbing']>) => {
     const project=currentProject(); if (!project) return;
     const dubbing={...project.dubbing,...changes};
@@ -906,6 +949,7 @@ export default function TranslationPanel() {
     setCheckingAsr(true);
     try {
       const saved = await translationService.getSettings();
+      if (!alive || selectedVideoId() !== contentId) return;
       const options = saved.settings.asr;
       const project = currentProject();
       const mode = project?.transcriptSettings?.mode ?? 'speechRecognition';
@@ -1402,4 +1446,11 @@ export default function TranslationPanel() {
       </Show>
     </section>
   );
+}
+
+export default function TranslationPanel() {
+  const identity = () => `${rawCurrentProject()?.id ?? ''}:${selectedVideoId() ?? 'legacy'}`;
+  return <div class="video-content-panel"><VideoContentControls />
+    <Show when={identity()} keyed>{(_identity) => <TranslationPanelEditor contentId={selectedVideoId()} />}</Show>
+  </div>;
 }

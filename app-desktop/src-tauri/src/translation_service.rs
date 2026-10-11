@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tempfile::tempdir;
 use uuid::Uuid;
 
@@ -50,6 +50,8 @@ pub enum TranslationScope {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationJobRequest {
+    #[serde(default)]
+    pub video_content_id: Option<String>,
     pub scope: TranslationScope,
     #[serde(default)]
     pub segment_ids: Vec<String>,
@@ -60,6 +62,8 @@ pub struct TranslationJobRequest {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationJobEvent {
+    #[serde(flatten)]
+    target: crate::video_content::JobTarget,
     pub project_id: String,
     pub job_id: String,
     pub status: String,
@@ -186,6 +190,7 @@ pub fn has_active_project_job(jobs: &TranslationJobs, project_id: &str) -> bool 
 
 #[derive(Clone)]
 struct TranslationJobEntry {
+    target: crate::video_content::JobTarget,
     project_id: String,
     canceled: Arc<AtomicBool>,
 }
@@ -445,11 +450,12 @@ pub fn start_translation_job(
     app: AppHandle,
     jobs: &TranslationJobs,
     project_id: String,
-    request: TranslationJobRequest,
+    mut request: TranslationJobRequest,
 ) -> Result<String, String> {
     let root = projects_root(&app)?;
-    let store = ProjectStore::new(root.clone());
+    let store = ProjectStore::new(root.clone()).for_video(&project_id, request.video_content_id.as_deref())?;
     let project = store.get(&project_id)?;
+    request.video_content_id = store.content_id().map(str::to_owned);
     let transcript = get_transcript(&store, &project_id)?
         .ok_or_else(|| "Dự án chưa có transcript để dịch.".to_string())?;
     validate_language_code(&project.translation.source_language, true)?;
@@ -487,7 +493,7 @@ pub fn start_translation_job(
         .inner
         .lock()
         .map_err(|_| "Không thể truy cập trạng thái translation jobs.".to_string())?;
-    if entries.values().any(|entry| entry.project_id == project_id) {
+    if entries.values().any(|entry| entry.project_id == project_id && entry.target.video_content_id == request.video_content_id) {
         return Err(
             "Một tác vụ dịch của dự án này đang chạy. Hãy đợi tác vụ đó hoàn tất.".to_string(),
         );
@@ -495,6 +501,7 @@ pub fn start_translation_job(
     entries.insert(
         job_id.clone(),
         TranslationJobEntry {
+            target: store.job_target(&project),
             project_id: project_id.clone(),
             canceled: canceled.clone(),
         },
@@ -653,7 +660,7 @@ async fn run_translation_job(
     batches: Vec<Vec<TranscriptSegment>>,
     canceled: Arc<AtomicBool>,
 ) -> Result<(), TranslationError> {
-    let store = ProjectStore::new(projects_root);
+    let store = ProjectStore::new(projects_root).for_video(&project_id, operation.video_content_id.as_deref()).map_err(|message| TranslationError { code: "CONTENT_CHANGED".into(), message, retryable: false })?;
     let provider_id = provider.id();
     let model = provider.model();
     let total_batches = batches.len();
@@ -689,7 +696,9 @@ async fn run_translation_job(
         let current_project = store.get(&project_id).map_err(|message| {
             TranslationError::new("PROJECT_UNAVAILABLE", message, false)
         })?;
-        if current_project.translation.target_language
+        if current_project.source.checksum_sha256 != project_snapshot.source.checksum_sha256
+            || current_project.translation.custom_prompt != project_snapshot.translation.custom_prompt
+            || current_project.translation.target_language
             != project_snapshot.translation.target_language
             || current_project.translation.source_language
                 != project_snapshot.translation.source_language
@@ -739,9 +748,11 @@ async fn run_translation_job(
                         target_language: project_snapshot.translation.target_language.clone(),
                         translated_at: chrono::Utc::now().to_rfc3339(),
                     };
-                    let merge = with_transcript_lock(&project_id, || {
+                    let merge = with_transcript_lock(&store.transcript_lock_key(&project_id), || {
                         let latest_project = store.get(&project_id)?;
-                        if latest_project.translation.target_language
+                        if latest_project.source.checksum_sha256 != project_snapshot.source.checksum_sha256
+                            || latest_project.translation.custom_prompt != project_snapshot.translation.custom_prompt
+                            || latest_project.translation.target_language
                             != project_snapshot.translation.target_language
                             || latest_project.translation.source_language
                                 != project_snapshot.translation.source_language
@@ -2025,7 +2036,7 @@ fn mark_batch_failed(
     batch: &[TranscriptSegment],
     snapshot: &Transcript,
 ) {
-    let _ = with_transcript_lock(project_id, || {
+    let _ = with_transcript_lock(&store.transcript_lock_key(project_id), || {
         let Some(mut latest) = get_transcript(store, project_id)? else {
             return Ok(());
         };
@@ -2082,6 +2093,7 @@ fn emit_event(
     error_code: Option<String>,
 ) {
     let event = TranslationJobEvent {
+        target: job_target(app, job_id),
         project_id: project_id.to_string(),
         job_id: job_id.to_string(),
         status: status.to_string(),
@@ -2191,7 +2203,7 @@ mod tests {
             .collect();
         Transcript {
             schema_version: 1,
-            project_id: "project-test".to_string(),
+            project_id: "project-test".to_string(), video_content_id: None,
             source_type: TranscriptSourceType::Subtitle,
             source_track: None,
             language: Some("en".to_string()),
@@ -2352,6 +2364,7 @@ mod tests {
             choose_segments(
                 &transcript,
                 &TranslationJobRequest {
+                    video_content_id: None,
                     scope: TranslationScope::Missing,
                     segment_ids: vec![],
                     overwrite_edited: true
@@ -2365,6 +2378,7 @@ mod tests {
             choose_segments(
                 &transcript,
                 &TranslationJobRequest {
+                    video_content_id: None,
                     scope: TranslationScope::All,
                     segment_ids: vec![],
                     overwrite_edited: false
@@ -2378,6 +2392,7 @@ mod tests {
             choose_segments(
                 &transcript,
                 &TranslationJobRequest {
+                    video_content_id: None,
                     scope: TranslationScope::All,
                     segment_ids: vec![],
                     overwrite_edited: true
@@ -2470,4 +2485,15 @@ mod tests {
             Some(npm_script)
         );
     }
+}
+
+fn job_target(app: &AppHandle, job_id: &str) -> crate::video_content::JobTarget {
+    app.try_state::<TranslationJobs>()
+        .and_then(|jobs| jobs.inner.lock().ok().and_then(|entries| entries.get(job_id).map(|entry| entry.target.clone())))
+        .unwrap_or_default()
+}
+pub fn has_active_content_job(jobs: &TranslationJobs, project_id: &str, content_id: Option<&str>) -> bool {
+    jobs.inner.lock().map(|entries| entries.values().any(|entry| entry.project_id == project_id
+        && (entry.target.video_content_id.as_deref() == content_id || entry.target.video_content_id.is_none())))
+        .unwrap_or(true)
 }

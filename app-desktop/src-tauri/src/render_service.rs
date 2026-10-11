@@ -407,7 +407,7 @@ fn prepare(
         .ok_or("Không đọc được thời lượng video.")?;
     let transcript = transcript_service::get_transcript(store, project_id)?.unwrap_or(Transcript {
         schema_version: 1,
-        project_id: project_id.to_string(),
+        project_id: project_id.to_string(), video_content_id: None,
         source_type: crate::project_service::TranscriptSourceType::Asr,
         source_track: None,
         language: None,
@@ -1876,7 +1876,7 @@ mod tests {
         assert!(generated_dub.status.success(), "dub fixture failed");
         let transcript = Transcript {
             schema_version: 1,
-            project_id: project.id.clone(),
+            project_id: project.id.clone(), video_content_id: None,
             source_type: crate::project_service::TranscriptSourceType::Asr,
             source_track: None,
             language: Some("en".into()),

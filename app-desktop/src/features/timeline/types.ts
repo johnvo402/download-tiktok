@@ -53,6 +53,6 @@ export interface TimelineDocument {
   schemaVersion: 1;
   settings: TimelineSettings;
   assets: MediaAsset[]; videoContents: VideoContent[]; tracks: TimelineTrack[]; clips: TimelineClip[];
-  /** Transitional binding for single-video commands until T03. */
+  /** Default for commands without a content ID; legacy preview/export until T08–T09. */
   legacyBinding: { assetId: string; videoContentId: string; clipId: string | null } | null;
 }

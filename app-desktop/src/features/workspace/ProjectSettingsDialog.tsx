@@ -5,13 +5,17 @@ import { translationService } from '../../app/services/translation-service';
 import { ttsService } from '../../app/services/tts-service';
 import type { Project } from '../projects/types';
 import type { TtsEnvironment } from '../transcript/types';
+import { selectedVideoId } from '../timeline/video-context-state';
+import { projectForVideo } from '../timeline/video-context';
 import Modal from '../../shared/components/Modal';
 
 export default function ProjectSettingsDialog(props: { project: Project; onClose: () => void }) {
-  const [customPrompt, setCustomPrompt] = createSignal(props.project.translation.customPrompt ?? '');
-  const [translationContext, setTranslationContext] = createSignal(props.project.translation.context ?? '');
-  const [transcriptMode, setTranscriptMode] = createSignal<'speechRecognition' | 'ocr'>(props.project.transcriptSettings?.mode ?? 'speechRecognition');
-  const [ocrFps, setOcrFps] = createSignal<1 | 2 | 4>(props.project.transcriptSettings?.ocrFps ?? 2);
+  const contentId = selectedVideoId();
+  const project = projectForVideo(props.project, contentId);
+  const [customPrompt, setCustomPrompt] = createSignal(project.translation.customPrompt ?? '');
+  const [translationContext, setTranslationContext] = createSignal(project.translation.context ?? '');
+  const [transcriptMode, setTranscriptMode] = createSignal<'speechRecognition' | 'ocr'>(project.transcriptSettings?.mode ?? 'speechRecognition');
+  const [ocrFps, setOcrFps] = createSignal<1 | 2 | 4>(project.transcriptSettings?.ocrFps ?? 2);
   const [voiceValue, setVoiceValue] = createSignal('');
   const [voiceProfiles, setVoiceProfiles] = createSignal<Array<{ id: string; name: string; audioPath: string }>>([]);
   const [environment, setEnvironment] = createSignal<TtsEnvironment>();
@@ -20,8 +24,8 @@ export default function ProjectSettingsDialog(props: { project: Project; onClose
   const [saving, setSaving] = createSignal(false);
 
   const voiceName = () => {
-    const profile = voiceProfiles().find((item) => item.id === props.project.dubbing.voiceProfileId);
-    return profile?.name ?? props.project.dubbing.voice ?? '';
+    const profile = voiceProfiles().find((item) => item.id === project.dubbing.voiceProfileId);
+    return profile?.name ?? project.dubbing.voice ?? '';
   };
 
   onMount(() => {
@@ -31,14 +35,14 @@ export default function ProjectSettingsDialog(props: { project: Project; onClose
         if (settingsResult.status === 'fulfilled') {
           const appSettings = settingsResult.value.settings.tts;
           setVoiceProfiles(appSettings.voiceProfiles);
-          const selectedVoice = props.project.dubbing.voice?.trim() || appSettings.defaultVoice;
-          const profile = props.project.dubbing.voiceProfileId
-            ? appSettings.voiceProfiles.find((item) => item.id === props.project.dubbing.voiceProfileId)
+          const selectedVoice = project.dubbing.voice?.trim() || appSettings.defaultVoice;
+          const profile = project.dubbing.voiceProfileId
+            ? appSettings.voiceProfiles.find((item) => item.id === project.dubbing.voiceProfileId)
             : appSettings.voiceProfiles.find((item) => item.name === selectedVoice);
           setVoiceValue(profile ? `profile:${profile.id}` : `preset:${selectedVoice}`);
         } else {
-          const savedProfileId = props.project.dubbing.voiceProfileId;
-          const savedVoice = props.project.dubbing.voice?.trim();
+          const savedProfileId = project.dubbing.voiceProfileId;
+          const savedVoice = project.dubbing.voice?.trim();
           if (savedProfileId) setVoiceValue(`profile:${savedProfileId}`);
           else if (savedVoice) setVoiceValue(`preset:${savedVoice}`);
           setError(settingsResult.reason instanceof Error ? settingsResult.reason.message : 'Không thể đọc cài đặt TTS.');
@@ -70,7 +74,7 @@ export default function ProjectSettingsDialog(props: { project: Project; onClose
     setSaving(true);
     setError('');
     try {
-      const updated = await projectService.updateProjectPreferences(props.project.id, {
+      const updated = await projectService.updateProjectPreferences(project.id, {
         customPrompt: customPrompt(),
         translationContext: translationContext(),
         voice,
@@ -78,11 +82,11 @@ export default function ProjectSettingsDialog(props: { project: Project; onClose
         transcriptSettings: {
           mode: transcriptMode(),
           ocrFps: ocrFps(),
-          ocrRegion: props.project.transcriptSettings?.ocrRegion ?? null,
+          ocrRegion: project.transcriptSettings?.ocrRegion ?? null,
         },
-      });
-      if (currentProject()?.id === updated.id) setCurrentProject(updated);
-      setNotice({ kind: 'success', message: 'Đã lưu prompt, context dịch, giọng TTS và cách tạo transcript cho dự án này.' });
+      }, contentId);
+      if (currentProject()?.id === updated.id && updated.updatedAt >= currentProject()!.updatedAt) setCurrentProject(updated);
+      setNotice({ kind: 'success', message: 'Đã lưu prompt, context dịch, giọng TTS và cách tạo transcript cho video này.' });
       props.onClose();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Không thể lưu cài đặt dự án.');
@@ -99,8 +103,8 @@ export default function ProjectSettingsDialog(props: { project: Project; onClose
 
   return (
     <Modal
-      title={`Cài đặt dự án · ${props.project.name}`}
-      description="Các tùy chọn này chỉ áp dụng cho dự án hiện tại. Provider, model và credentials vẫn dùng chung toàn ứng dụng."
+      title={`Cài đặt video · ${project.source.originalName ?? project.name}`}
+      description="Các tùy chọn này chỉ áp dụng cho video đang chỉnh sửa. Provider, model và credentials vẫn dùng chung toàn ứng dụng."
       onClose={props.onClose}
     >
       <form class="project-settings-form" onSubmit={(event) => void save(event)}>

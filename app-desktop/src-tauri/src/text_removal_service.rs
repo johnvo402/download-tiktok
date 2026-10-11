@@ -1258,7 +1258,7 @@ where
     project.logos.clear();
     let transcript = crate::transcript_service::Transcript {
         schema_version: 1,
-        project_id: project.id.clone(),
+        project_id: project.id.clone(), video_content_id: None,
         source_type: crate::project_service::TranscriptSourceType::Asr,
         source_track: None,
         language: None,

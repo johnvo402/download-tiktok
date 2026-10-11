@@ -33,6 +33,7 @@ export type TranslationProviderId = 'gemini' | 'googleCloud' | 'codexCli';
 export type TranslationScope = 'all' | 'missing' | 'selected' | 'segment';
 
 export interface TranslationJobRequest {
+  videoContentId?: string;
   scope: TranslationScope;
   segmentIds: string[];
   overwriteEdited: boolean;
@@ -40,6 +41,8 @@ export interface TranslationJobRequest {
 
 export interface TranslationJobEvent {
   projectId: string;
+  videoContentId?: string | null;
+  contentRevision?: number | null;
   jobId: string;
   status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
   provider: TranslationProviderId;
@@ -62,6 +65,8 @@ export interface TranscriptTranslationMeta {
 export interface Transcript {
   schemaVersion: number;
   projectId: string;
+  videoContentId?: string | null;
+  contentRevision?: number | null;
   sourceType: TranscriptSourceType;
   sourceTrack: number | null;
   language: string | null;
@@ -71,6 +76,8 @@ export interface Transcript {
 
 export interface TranscriptionEvent {
   projectId: string;
+  videoContentId?: string | null;
+  contentRevision?: number | null;
   jobId: string;
   status: 'progress' | 'completed' | 'failed' | 'canceled';
   message: string;
@@ -92,6 +99,8 @@ export interface TtsEnvironment {
 
 export interface TtsJobEvent {
   projectId: string;
+  videoContentId?: string | null;
+  contentRevision?: number | null;
   jobId: string;
   status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
   message: string;

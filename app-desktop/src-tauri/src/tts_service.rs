@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
 const MODEL_ID: &str = "v3-turbo";
@@ -33,6 +33,7 @@ pub struct TtsJobs {
 
 #[derive(Clone)]
 struct TtsJobEntry {
+   target: crate::video_content::JobTarget,
     project_id: String,
     canceled: Arc<AtomicBool>,
 }
@@ -40,6 +41,8 @@ struct TtsJobEntry {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TtsJobEvent {
+    #[serde(flatten)]
+    target: crate::video_content::JobTarget,
     pub project_id: String,
     pub job_id: String,
     pub status: String,
@@ -67,6 +70,8 @@ pub struct TtsEnvironment {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TtsJobRequest {
+    #[serde(default)]
+    pub video_content_id: Option<String>,
     pub scope: String,
     #[serde(default)]
     pub segment_ids: Vec<String>,
@@ -88,6 +93,8 @@ struct WorkItem {
     model_revision: String,
     raw_path: PathBuf,
     processing: crate::audio::ProcessingSettings,
+    source_checksum: Option<String>,
+    dubbing_snapshot: crate::project_service::DubbingSettings,
 }
 
 #[derive(Default)]
@@ -260,6 +267,7 @@ pub fn preview_voice(app: AppHandle, jobs: &TtsJobs, voice: String) -> Result<St
         active.insert(
             job_id.clone(),
             TtsJobEntry {
+                target: Default::default(),
                 project_id: "__preview__".to_string(),
                 canceled: Arc::new(AtomicBool::new(false)),
             },
@@ -552,7 +560,7 @@ pub fn start_generation(
     app: AppHandle,
     jobs: &TtsJobs,
     project_id: String,
-    request: TtsJobRequest,
+    mut request: TtsJobRequest,
 ) -> Result<String, String> {
     let _start_guard = jobs
         .start_lock
@@ -566,8 +574,9 @@ pub fn start_generation(
         return Err("Dự án đang được xóa.".to_string());
     }
     drop(deleting);
-    let store = project_store(&app)?;
+    let store = project_store(&app)?.for_video(&project_id, request.video_content_id.as_deref())?;
     let project = store.get(&project_id)?;
+    request.video_content_id = store.content_id().map(str::to_owned);
     if project.dubbing.provider != "vieneu" || project.dubbing.model_id != MODEL_ID {
         return Err(
             "Cấu hình project đang chọn TTS provider hoặc model không được hỗ trợ.".to_string(),
@@ -645,6 +654,7 @@ pub fn start_generation(
     let job_id = Uuid::new_v4().to_string();
     let canceled = Arc::new(AtomicBool::new(false));
     let entry = TtsJobEntry {
+       target: store.job_target(&project),
         project_id: project_id.clone(),
         canceled: canceled.clone(),
     };
@@ -653,7 +663,7 @@ pub fn start_generation(
             .inner
             .lock()
             .map_err(|_| "Không thể truy cập trạng thái TTS jobs.".to_string())?;
-        if !all_jobs.is_empty() {
+        if all_jobs.values().any(|entry| entry.project_id == project_id && entry.target.video_content_id == request.video_content_id) {
             return Err(
                 "Một tác vụ TTS khác đang chạy. Chờ tác vụ đó hoàn tất rồi thử lại.".to_string(),
             );
@@ -767,7 +777,7 @@ pub fn audio_path(
         .audio_path
         .as_deref()
         .ok_or_else(|| "Không tìm thấy file audio lồng tiếng.".to_string())?;
-    resolve_project_file(store, project_id, relative, "audio/tts")
+    resolve_tts_file(store, project_id, relative)
         .map(|path| path.to_string_lossy().into_owned())
 }
 
@@ -775,7 +785,7 @@ pub fn get_transcript_with_audio_validation(
     store: &ProjectStore,
     project_id: &str,
 ) -> Result<Option<Transcript>, String> {
-    transcript_service::with_transcript_lock(project_id, || {
+    transcript_service::with_transcript_lock(&store.transcript_lock_key(project_id), || {
         let Some(mut transcript) = transcript_service::get_transcript(store, project_id)? else {
             return Ok(None);
         };
@@ -793,7 +803,7 @@ pub fn get_transcript_with_audio_validation(
             let valid = tts
                 .audio_path
                 .as_deref()
-                .and_then(|path| resolve_project_file(store, project_id, path, "audio/tts").ok())
+                .and_then(|path| resolve_tts_file(store, project_id, path).ok())
                 .is_some_and(|path| crate::audio::signal::inspect(&path).is_ok());
             if !valid {
                 tts.status = Some(TranscriptTtsStatus::Failed);
@@ -877,8 +887,9 @@ fn run_generation(
     model_revision: String,
     canceled: Arc<AtomicBool>,
 ) -> Result<(), String> {
-    let store = project_store(&app)?;
+    let store = project_store(&app)?.for_video(project_id, request.video_content_id.as_deref())?;
     let project = store.get(project_id)?;
+    if store.job_target(&project) != job_target(&app, job_id) { return Err("Nội dung video đã thay đổi trong hàng đợi TTS. Hãy tạo lại tác vụ.".into()); }
     let snapshot = transcript_service::get_transcript(&store, project_id)?
         .ok_or_else(|| "Không tìm thấy transcript.".to_string())?;
     let voice = effective_voice(request.voice.as_deref(), &project, &settings)?;
@@ -972,6 +983,8 @@ fn run_generation(
             model_revision: model_revision.clone(),
             raw_path,
             processing: project.dubbing.audio_processing.clone(),
+            source_checksum: project.source.checksum_sha256.clone(),
+            dubbing_snapshot: project.dubbing.clone(),
         });
     }
     // Refit from immutable raw cache, independently of the processing fingerprint.
@@ -1475,6 +1488,17 @@ fn effective_voice(
         .unwrap_or_else(|| settings.default_voice.clone()))
 }
 
+fn validate_tts_input(project: &crate::project_service::Project, target_language: &str, item: &WorkItem) -> Result<(), String> {
+    let old = &item.dubbing_snapshot;
+    let current = &project.dubbing;
+    if project.source.checksum_sha256 != item.source_checksum || project.translation.target_language != target_language
+        || current.voice != old.voice || current.voice_profile_id != old.voice_profile_id
+        || current.speed != old.speed || current.fit_mode != old.fit_mode || current.audio_processing != old.audio_processing {
+        return Err("Nguồn, ngôn ngữ hoặc cấu hình giọng đã đổi khi đang tạo audio. Hãy tạo lại đoạn này.".into());
+    }
+    Ok(())
+}
+
 fn commit_segment(
     store: &ProjectStore,
     project_id: &str,
@@ -1492,7 +1516,7 @@ fn commit_segment(
         return Err("VieNeu tạo ra file không phải WAV hợp lệ.".to_string());
     }
     let settings = item.processing.clone();
-    if store.get(project_id)?.dubbing.audio_processing != settings { return Err("Cấu hình audio đã đổi khi đang tạo giọng. Hãy tạo lại để áp dụng cấu hình mới.".into()); }
+    validate_tts_input(&store.get(project_id)?, target_language, item)?;
     let raw_signal = crate::audio::signal::inspect(&item.stage_path)?;
     if raw_signal.peak <= 0.00001 { return Err("Model tạo giọng đọc trống. Hãy thử tạo lại.".into()); }
     if fs::symlink_metadata(&item.raw_path).is_ok() { crate::audio::signal::regular_file(&item.raw_path)?; }
@@ -1518,10 +1542,15 @@ fn commit_segment(
     let status = if report.overflow { TranscriptTtsStatus::DurationOverflow } else { TranscriptTtsStatus::Ready };
     let warning = report.overflow.then(|| format!("Giọng đọc đoạn {} vượt khung {:.2}s ở giới hạn {:.2}×. Audio được giữ đầy đủ; hãy rút gọn hoặc điều chỉnh tốc độ.", item.segment.id,report.processed.duration-report.lead_seconds-report.slot_duration,settings.max_fit_speed));
     let duration = report.processed.duration;
-    let destination_rel = format!("audio/tts/{}", item.destination.file_name().unwrap_or_default().to_string_lossy());
+    let destination_rel = store.content_path(&format!("audio/tts/{}", item.destination.file_name().unwrap_or_default().to_string_lossy()));
     if canceled.load(Ordering::SeqCst) {let _=fs::remove_file(&item.destination);let _=fs::remove_file(item.destination.with_extension("audio.json"));return Err("Đã hủy tạo giọng đọc.".into());}
-    transcript_service::with_transcript_lock(project_id, || {
+    transcript_service::with_transcript_lock(&store.transcript_lock_key(project_id), || {
+        validate_tts_input(&store.get(project_id)?, target_language, item)?;
         let mut transcript = transcript_service::get_transcript(store, project_id)?.ok_or_else(|| "Transcript đã bị xóa khi TTS đang chạy.".to_string())?;
+        if transcript.segments.iter().find(|segment| segment.id == item.segment.id).is_some_and(|segment|
+            segment.start != item.segment.start || segment.end != item.segment.end || tts_slot_end(segment, &transcript.segments) != item.slot_end) {
+            return Err("Thời gian lời thoại đã thay đổi khi đang tạo giọng. Hãy tạo lại đoạn này.".into());
+        }
         let Some(segment) = transcript.segments.iter_mut().find(|segment| segment.id == item.segment.id) else { return Err("Segment đã bị xóa khi TTS đang chạy.".to_string()); };
         if segment.translated != item.segment.translated || segment.source_revision != item.segment.source_revision || segment.translated_revision != item.segment.translated_revision {
             return Err("Bản dịch đã thay đổi trong lúc tạo audio. Audio cũ được giữ nguyên; hãy tạo lại segment.".to_string());
@@ -1555,7 +1584,7 @@ fn raw_fingerprint(text: &str, language: &str, voice: &str, reference: Option<&s
 
 fn record_segment_failure(store: &ProjectStore, project_id: &str, item: &WorkItem, message: &str) {
     let _ = fs::remove_file(&item.stage_path);
-    let _ = transcript_service::with_transcript_lock(project_id, || {
+    let _ = transcript_service::with_transcript_lock(&store.transcript_lock_key(project_id), || {
         let Some(mut transcript) = transcript_service::get_transcript(store, project_id)? else {
             return Ok(());
         };
@@ -1630,7 +1659,7 @@ fn is_cached(
     let Some(path) = tts.audio_path.as_deref() else {
         return false;
     };
-    resolve_project_file(store, project_id, path, "audio/tts").is_ok_and(|p| {
+    resolve_tts_file(store, project_id, path).is_ok_and(|p| {
         crate::audio::signal::inspect(&p).is_ok_and(|signal| {
             crate::audio::processing::report(&p).is_some_and(|r| r.settings == *settings && (r.processed.duration-signal.duration).abs()<0.002)
         })
@@ -1683,31 +1712,13 @@ fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+fn resolve_tts_file(store: &ProjectStore, project_id: &str, relative: &str) -> Result<PathBuf, String> {
+    store.validate_audio_owner(project_id, relative)?;
+    resolve_project_file(store, project_id, relative, "audio/tts")
+}
+
 fn safe_tts_directory(store: &ProjectStore, project_id: &str) -> Result<PathBuf, String> {
-    let root = store
-        .project_directory(project_id)?
-        .canonicalize()
-        .map_err(|error| format!("Không thể xác minh thư mục dự án: {error}"))?;
-    let audio = root.join("audio");
-    let tts = audio.join("tts");
-    for directory in [&audio, &tts] {
-        match fs::symlink_metadata(directory) {
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-                return Err("Thư mục audio trong dự án không an toàn.".to_string())
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => fs::create_dir(directory)
-                .map_err(|create| format!("Không thể tạo thư mục audio TTS: {create}"))?,
-            Err(error) => return Err(format!("Không thể kiểm tra thư mục audio: {error}")),
-        }
-    }
-    let canonical = tts
-        .canonicalize()
-        .map_err(|error| format!("Không thể xác minh thư mục audio TTS: {error}"))?;
-    if !canonical.starts_with(&root) {
-        return Err("Đường dẫn audio TTS vượt khỏi thư mục dự án.".to_string());
-    }
-    Ok(canonical)
+    store.data_directory(project_id, "audio/tts")
 }
 
 fn job_id_for_name() -> String {
@@ -1733,6 +1744,7 @@ fn emit(
     segment_id: Option<String>,
 ) {
     let event = TtsJobEvent {
+        target: job_target(app, job_id),
         project_id: project_id.to_string(),
         job_id: job_id.to_string(),
         status: status.to_string(),
@@ -2090,6 +2102,7 @@ mod tests {
         jobs.inner.lock().unwrap().insert(
             "job-1".to_string(),
             TtsJobEntry {
+                target: Default::default(),
                 project_id: "project-1".to_string(),
                 canceled: canceled.clone(),
             },
@@ -2125,7 +2138,7 @@ mod tests {
         });
         let transcript = Transcript {
             schema_version: 1,
-            project_id: project.id.clone(),
+            project_id: project.id.clone(), video_content_id: None,
             source_type: crate::project_service::TranscriptSourceType::Asr,
             source_track: None,
             language: Some("en".to_string()),
@@ -2141,5 +2154,85 @@ mod tests {
         assert_eq!(audio.status, Some(TranscriptTtsStatus::Failed));
         assert_eq!(audio.audio_path.as_deref(), Some("audio/tts/missing.wav"));
         assert!(audio.warning.as_deref().unwrap().contains("thiếu"));
+    }
+}
+
+fn job_target(app: &AppHandle, job_id: &str) -> crate::video_content::JobTarget {
+    app.try_state::<TtsJobs>()
+        .and_then(|jobs| jobs.inner.lock().ok().and_then(|entries| entries.get(job_id).map(|entry| entry.target.clone())))
+        .unwrap_or_default()
+}
+pub fn has_active_content_job(jobs: &TtsJobs, project_id: &str, content_id: Option<&str>) -> bool {
+    jobs.inner.lock().map(|entries| entries.values().any(|entry| entry.project_id == project_id
+        && (entry.target.video_content_id.as_deref() == content_id || entry.target.video_content_id.is_none())))
+        .unwrap_or(true)
+}
+
+#[cfg(test)]
+mod content_tests {
+    use super::*;
+    use crate::project_service::TranscriptSourceType;
+
+    fn wave(path: &Path, frequency: f32) {
+        let mut writer = hound::WavWriter::create(path, hound::WavSpec { channels:1, sample_rate:16000,
+            bits_per_sample:32, sample_format:hound::SampleFormat::Float }).unwrap();
+        for index in 0..8000 {
+            writer.write_sample((index as f32 * frequency * 2.0 * std::f32::consts::PI / 16000.0).sin() * 0.2).unwrap();
+        }
+        writer.finalize().unwrap();
+    }
+
+    #[test]
+    fn two_video_jobs_cancel_and_lock_independently() {
+        let jobs = TtsJobs::default();
+        for id in ["a", "b"] {
+            jobs.inner.lock().unwrap().insert(id.into(), TtsJobEntry { project_id:"project".into(),
+                target:crate::video_content::JobTarget {video_content_id:Some(id.into()),content_revision:Some(3)},
+                canceled:Arc::new(AtomicBool::new(false)) });
+        }
+        assert!(has_active_content_job(&jobs,"project",Some("a")));
+        assert!(has_active_project_job(&jobs,"project"));
+        assert!(!has_active_content_job(&jobs,"project",Some("other")));
+        assert!(cancel(&jobs,"a").unwrap());
+        let entries=jobs.inner.lock().unwrap();
+        assert!(entries["a"].canceled.load(Ordering::SeqCst));
+        assert!(!entries["b"].canceled.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn generated_wavs_commit_to_their_video_after_reorder_and_reject_changed_voice() {
+        let (_dir, store, project, a, b) = crate::video_content::tests::fixture();
+        let first=store.for_video(&project.id,Some(&a)).unwrap();
+        let second=store.for_video(&project.id,Some(&b)).unwrap();
+        let mut items=Vec::new();
+        for (scoped, frequency) in [(&first,500.0),(&second,900.0)] {
+            let view=scoped.get(&project.id).unwrap();
+            let mut segment=TranscriptSegment::new(0.0,1.0,"source".into(),TranscriptSourceType::Asr);
+            segment.translated="Xin chào".into();
+            segment.translation_status=transcript_service::TranscriptTranslationStatus::Translated;
+            let value=Transcript {schema_version:1,project_id:project.id.clone(),video_content_id:scoped.content_id().map(str::to_owned),
+                source_type:TranscriptSourceType::Asr,source_track:None,language:Some("vi".into()),video_checksum:view.source.checksum_sha256.clone(),segments:vec![segment.clone()]};
+            transcript_service::save_transcript(scoped,&project.id,value).unwrap();
+            let directory=safe_tts_directory(scoped,&project.id).unwrap();
+            let stage=directory.join("same-stage.wav");wave(&stage,frequency);
+            items.push(WorkItem {segment,slot_end:1.0,fingerprint:"fingerprint".into(),text_hash:"text".into(),stage_path:stage,
+                destination:directory.join("same-cache-key.wav"),reference_audio:None,model_revision:"test".into(),raw_path:directory.join("same-raw.wav"),
+                processing:view.dubbing.audio_processing.clone(),source_checksum:view.source.checksum_sha256.clone(),dubbing_snapshot:view.dubbing});
+        }
+        store.edit_project(&project.id,|project| { let doc=project.timeline.as_mut().unwrap();
+            doc.clips[0].start_us=10_000_000;doc.clips[1].start_us=0;doc.clips[1].source_in_us=100_000;Ok(()) }).unwrap();
+        let canceled=AtomicBool::new(false);
+        for (scoped,item) in [(&first,&items[0]),(&second,&items[1])] {
+            commit_segment(scoped,&project.id,"vi",item,"Ngọc Huyền",1.0,false,&canceled).unwrap();
+            let value=transcript_service::get_transcript(scoped,&project.id).unwrap().unwrap();
+            assert_eq!(value.segments[0].tts.as_ref().unwrap().audio_path.as_deref(),Some(scoped.content_path("audio/tts/same-cache-key.wav").as_str()));
+            assert!(audio_path(scoped,&project.id,&item.segment.id).unwrap().ends_with("same-cache-key.wav"));
+        }
+        assert_ne!(std::fs::read(&items[0].destination).unwrap(),std::fs::read(&items[1].destination).unwrap());
+        let mut changed=second.get(&project.id).unwrap();changed.dubbing.voice=Some("Different voice".into());second.update_project(&changed).unwrap();
+        wave(&items[1].stage_path,1200.0);
+        let saved=std::fs::read(&items[1].destination).unwrap();
+        assert!(commit_segment(&second,&project.id,"vi",&items[1],"Ngọc Huyền",1.0,false,&canceled).is_err());
+        assert_eq!(std::fs::read(&items[1].destination).unwrap(),saved);
     }
 }

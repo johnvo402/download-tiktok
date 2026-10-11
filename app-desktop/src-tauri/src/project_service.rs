@@ -504,6 +504,8 @@ pub struct ProjectListResponse {
 #[derive(Clone)]
 pub struct ProjectStore {
     projects_root: PathBuf,
+    pub(crate) video_content_id: Option<String>,
+    touch_content_revision: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -514,7 +516,7 @@ struct ProjectLocationRegistry {
 
 impl ProjectStore {
     pub fn new(projects_root: PathBuf) -> Self {
-        Self { projects_root }
+        Self { projects_root, video_content_id: None, touch_content_revision: false }
     }
 
     pub fn create(&self, name: &str) -> Result<Project, String> {
@@ -692,7 +694,7 @@ impl ProjectStore {
         let id = canonical_project_id(id)?;
         self.ensure_root()?;
         let path = self.project_path(&id)?;
-        read_project(&path, &id)
+        self.project_view(read_project(&path, &id)?)
     }
 
     pub fn project_directory(&self, id: &str) -> Result<PathBuf, String> {
@@ -703,6 +705,8 @@ impl ProjectStore {
     /// Resolve/create owned subdirectories without following a junction even
     /// when it points to another directory inside this project.
     pub fn data_directory(&self, id: &str, relative: &str) -> Result<PathBuf, String> {
+        let scoped_relative = self.content_path(relative);
+        let relative = scoped_relative.as_str();
         let root=self.project_directory(id)?.canonicalize().map_err(|e|e.to_string())?;
         let mut current=root.clone();
         for component in Path::new(relative).components() {
@@ -727,10 +731,21 @@ impl ProjectStore {
         if existing.id != project.id {
             return Err("Mã dự án không hợp lệ.".to_string());
         }
+        if self.content_id().is_some() {
+            let merged = self.merge_video_update(project, &existing)?;
+            return self.project_view(self.persist_update(&merged, &existing, &path)?);
+        }
         if project.updated_at != existing.updated_at {
             return Err("Dự án đã thay đổi. Hãy tải lại trước khi lưu để không mất nguồn và nội dung mới.".into());
         }
         self.persist_update(project, &existing, &path)
+    }
+
+    /// Sidecar edits change content even when its metadata/segment count does not.
+    pub(crate) fn update_transcript_project(&self, project: &Project) -> Result<Project, String> {
+        let mut writer = self.clone();
+        writer.touch_content_revision = true;
+        writer.update_project(project)
     }
 
     /// Apply library edits to the latest document under the same save lock.
@@ -749,6 +764,12 @@ impl ProjectStore {
         let mut updated = project.clone();
         updated.schema_version = SCHEMA_VERSION;
         crate::timeline::reconcile_legacy(&mut updated, &existing)?;
+        if let Some(id) = self.content_id().filter(|_| self.touch_content_revision) {
+            let old = existing.timeline.as_ref().unwrap().video_contents.iter().find(|c| c.id == id).unwrap();
+            updated.timeline.as_mut().unwrap().video_contents.iter_mut().find(|c| c.id == id).unwrap()
+                .revision = old.revision.checked_add(1).filter(|r| *r <= crate::timeline::MAX_TIME_US)
+                .ok_or("Revision nội dung bị tràn.")?;
+        }
         updated.updated_at = now_iso_after(&existing.updated_at);
         write_project_file(&path.join("project.json"), &updated)?;
         Ok(updated)

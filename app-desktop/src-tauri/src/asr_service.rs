@@ -2,7 +2,7 @@ use crate::worker_manager::WorkerCommandExt;
 use crate::commands::projects_root;
 use crate::project_service::ProjectStore;
 use crate::transcript_service::{
-    save_transcript, Transcript, TranscriptSegment, TranscriptTranslationStatus,
+    Transcript, TranscriptSegment, TranscriptTranslationStatus,
 };
 use crate::video_service::resolve_video;
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
 const MODELS: &[&str] = &["tiny", "base", "small", "medium", "large-v3"];
@@ -65,6 +65,7 @@ pub fn set_project_deleting(jobs: &AsrJobs, project_id: &str) -> Result<(), Stri
 
 #[derive(Clone)]
 struct JobEntry {
+    target: crate::video_content::JobTarget,
     project_id: String,
     canceled: Arc<AtomicBool>,
 }
@@ -72,6 +73,8 @@ struct JobEntry {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AsrOptions {
+    #[serde(default)]
+    pub video_content_id: Option<String>,
     #[serde(default = "default_asr_engine")]
     pub engine: String,
     pub model: String,
@@ -172,6 +175,8 @@ fn default_ocr_device() -> String { "auto".to_string() }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TranscriptionEvent {
+    #[serde(flatten)]
+    target: crate::video_content::JobTarget,
     project_id: String,
     job_id: String,
     status: String,
@@ -657,8 +662,9 @@ pub fn generate_transcript(
     mut options: AsrOptions,
 ) -> Result<String, String> {
     let projects_root = projects_root(&app)?;
-    let store = ProjectStore::new(projects_root.clone());
+    let store = ProjectStore::new(projects_root.clone()).for_video(&project_id, options.video_content_id.as_deref())?;
     let project = store.get(&project_id)?;
+    options.video_content_id = store.content_id().map(str::to_owned);
     let global_asr = crate::settings_service::get_settings(&app)?.settings.asr;
     options.ocr_model = global_asr.ocr_model;
     options.ocr_device = global_asr.ocr_device;
@@ -760,7 +766,7 @@ pub fn generate_transcript(
         .inner
         .lock()
         .map_err(|_| "Không thể truy cập trạng thái Speech Recognition.".to_string())?;
-    if !entries.is_empty() {
+    if entries.values().any(|entry| entry.project_id == project_id && entry.target.video_content_id == options.video_content_id) {
         return Err(
             "Một tác vụ Speech Recognition khác đang chạy. Hãy đợi tác vụ đó hoàn tất.".to_string(),
         );
@@ -768,6 +774,7 @@ pub fn generate_transcript(
     entries.insert(
         job_id.clone(),
         JobEntry {
+            target: store.job_target(&project),
             project_id: project_id.clone(),
             canceled: canceled.clone(),
         },
@@ -902,7 +909,7 @@ fn run_transcription(
     options: &AsrOptions,
     canceled: &AtomicBool,
 ) -> Result<(), String> {
-    let store = ProjectStore::new(projects_root.to_path_buf());
+    let store = ProjectStore::new(projects_root.to_path_buf()).for_video(project_id, options.video_content_id.as_deref())?;
     let project = store.get(project_id)?;
     if options.mode == "ocr" {
         return run_ocr_transcription(app, projects_root, worker, project_id, job_id, options, canceled);
@@ -1004,7 +1011,7 @@ fn run_transcription(
     let latest = store
         .get(project_id)
         .map_err(|_| "Dự án đã bị xóa trong lúc transcription chạy.".to_string())?;
-    if latest.source.checksum_sha256 != source_checksum {
+    if latest.source.checksum_sha256 != source_checksum || store.job_target(&latest) != job_target(app, job_id) {
         let _ = fs::remove_file(&output_path);
         let _ = fs::remove_file(&audio_path);
         return Err(
@@ -1032,14 +1039,14 @@ fn run_transcription(
     let segments = crate::transcript_service::merge_adjacent_duplicate_segments(segments);
     let transcript = Transcript {
         schema_version: 1,
-        project_id: project_id.to_string(),
+        project_id: project_id.to_string(), video_content_id: store.content_id().map(str::to_owned),
         source_type: crate::project_service::TranscriptSourceType::Asr,
         source_track: None,
         language: worker_output.language,
         video_checksum: source_checksum,
         segments,
     };
-    if let Err(error) = save_transcript(&store, project_id, transcript) {
+    if let Err(error) = crate::transcript_service::save_generated_transcript(&store, project_id, transcript, &job_target(app, job_id)) {
         let _ = fs::remove_file(&output_path);
         let _ = fs::remove_file(&audio_path);
         return Err(error);
@@ -1072,7 +1079,7 @@ fn run_ocr_transcription(
     options: &AsrOptions,
     canceled: &AtomicBool,
 ) -> Result<(), String> {
-    let store = ProjectStore::new(projects_root.to_path_buf());
+    let store = ProjectStore::new(projects_root.to_path_buf()).for_video(project_id, options.video_content_id.as_deref())?;
     let project = store.get(project_id)?;
     let source_checksum = project.source.checksum_sha256.clone();
     let video_path = resolve_video(&store, project_id)?;
@@ -1124,7 +1131,7 @@ fn run_ocr_transcription(
         return Err("OCR không nhận dạng được subtitle trong vùng đã chọn. Hãy kiểm tra crop hoặc tăng tốc độ lấy mẫu lên 4 frame/s.".into());
     }
     let latest = store.get(project_id).map_err(|_| "Dự án đã bị xóa trong lúc OCR chạy.".to_string())?;
-    if latest.source.checksum_sha256 != source_checksum {
+    if latest.source.checksum_sha256 != source_checksum || store.job_target(&latest) != job_target(app, job_id) {
         return Err("Video nguồn đã thay đổi trong lúc OCR chạy; kết quả đã bị bỏ.".into());
     }
     let duration = project.source.duration.unwrap_or(f64::MAX);
@@ -1141,11 +1148,11 @@ fn run_ocr_transcription(
     if segments.is_empty() { return Err("OCR trả về timestamp không hợp lệ cho video này.".into()); }
     let segments = crate::transcript_service::merge_adjacent_duplicate_segments(segments);
     let transcript = Transcript {
-        schema_version: 1, project_id: project_id.to_string(),
+        schema_version: 1, project_id: project_id.to_string(), video_content_id: store.content_id().map(str::to_owned),
         source_type: crate::project_service::TranscriptSourceType::Ocr,
         source_track: None, language: worker_output.language, video_checksum: source_checksum, segments,
     };
-    save_transcript(&store, project_id, transcript)?;
+    crate::transcript_service::save_generated_transcript(&store, project_id, transcript, &job_target(app, job_id))?;
     emit_status(app, job_id, project_id, "completed", "Đã tạo transcript từ subtitle trên hình bằng OCR.", Some("completed"), Some(1.0));
     drop(artifacts);
     Ok(())
@@ -1571,6 +1578,7 @@ fn emit_status(
     progress: Option<f64>,
 ) {
     let event = TranscriptionEvent {
+        target: job_target(app, job_id),
         project_id: project_id.to_string(),
         job_id: job_id.to_string(),
         status: status.to_string(),
@@ -1679,6 +1687,7 @@ mod tests {
     #[test]
     fn validates_asr_model_device_and_language_options() {
         assert!(validate_options(&AsrOptions {
+            video_content_id: None,
             engine: "fasterWhisper".into(),
             model: "small".into(),
             device: "auto".into(),
@@ -1686,6 +1695,7 @@ mod tests {
         })
         .is_ok());
         assert!(validate_options(&AsrOptions {
+            video_content_id: None,
             engine: "fasterWhisper".into(),
             model: "small".into(),
             device: "cuda".into(),
@@ -1693,6 +1703,7 @@ mod tests {
         })
         .is_ok());
         assert!(validate_options(&AsrOptions {
+            video_content_id: None,
             engine: "fasterWhisper".into(),
             model: "unknown".into(),
             device: "auto".into(),
@@ -1700,6 +1711,7 @@ mod tests {
         })
         .is_err());
         assert!(validate_options(&AsrOptions {
+            video_content_id: None,
             engine: "fasterWhisper".into(),
             model: "small".into(),
             device: "shell".into(),
@@ -1707,6 +1719,7 @@ mod tests {
         })
         .is_err());
         assert!(validate_options(&AsrOptions {
+            video_content_id: None,
             engine: "fasterWhisper".into(),
             model: "small".into(),
             device: "auto".into(),
@@ -1754,4 +1767,15 @@ mod tests {
         assert!(remove_model_child(&root, "small").is_err());
         assert!(outside.join("keep.txt").is_file());
     }
+}
+
+fn job_target(app: &AppHandle, job_id: &str) -> crate::video_content::JobTarget {
+    app.try_state::<AsrJobs>()
+        .and_then(|jobs| jobs.inner.lock().ok().and_then(|entries| entries.get(job_id).map(|entry| entry.target.clone())))
+        .unwrap_or_default()
+}
+pub fn has_active_content_job(jobs: &AsrJobs, project_id: &str, content_id: Option<&str>) -> bool {
+    jobs.inner.lock().map(|entries| entries.values().any(|entry| entry.project_id == project_id
+        && (entry.target.video_content_id.as_deref() == content_id || entry.target.video_content_id.is_none())))
+        .unwrap_or(true)
 }

@@ -1,6 +1,6 @@
 # Kế hoạch timeline nhiều lớp trong phần Dịch
 
-Trạng thái: T01–T02 hoàn tất; T03–T11 chưa triển khai. Cập nhật: 2026-10-11.
+Trạng thái: T01–T03 hoàn tất; T04–T11 chưa triển khai. Cập nhật: 2026-10-11.
 
 ## Mục tiêu và bố cục
 
@@ -54,11 +54,15 @@ Hoàn tất khi: nhập A và B, thêm nhiều lần lên timeline, mở lại p
 
 ## T03 — Transcript, dịch và lồng tiếng theo từng video
 
+**Hoàn tất ngày 2026-10-11.** Chọn clip để sửa/nhận dạng/dịch/TTS đúng nội dung; ngôn ngữ, prompt/context, giọng và OCR riêng; scope một/các video chọn/tất cả, tiến độ/hủy riêng. Sidecar/cache/khóa theo ID nội dung, merge snapshot có kiểm tra revision và baseline segment. Mô tả API và kiểm tra tại [VIDEO_CONTENT_PROCESSING.md](VIDEO_CONTENT_PROCESSING.md).
+
 Chuyển API đọc/ghi, ASR/OCR, dịch, TTS, sự kiện tiến độ, khóa tác vụ và cache từ chỉ `projectId` sang định danh nội dung video. Bảng bên phải dùng clip đang chọn để tìm đúng nguồn/nội dung. Có phạm vi chạy một video, các video được chọn hoặc toàn bộ; báo lỗi và hủy riêng.
 
 Kết quả tác vụ phải gắn với ID và revision khi bắt đầu. Đổi clip đang chọn hoặc đổi thứ tự trong lúc chạy không được ghi kết quả sang video khác. Sửa lời dịch chỉ đánh dấu audio liên quan cần tạo lại; di chuyển clip không làm cache mất hiệu lực.
 
 Hoàn tất khi: A/B có ngôn ngữ, transcript, bản dịch và giọng riêng; đổi thứ tự hoặc cắt clip vẫn giữ đúng dữ liệu. Phụ thuộc T01–T02.
+
+Đã kiểm tra: build frontend; 45 test frontend; 210 test Rust qua, 23 test tùy chọn bỏ qua. Test WAV thật kiểm tra TTS riêng theo nguồn và từ chối giọng đã đổi; test UI kiểm tra lưu trước đổi video, kết quả A khi đang chọn B, shared clip, ngôn ngữ/TTS riêng, scope deduplicate, hủy riêng, preview nguồn/OCR B và panel hẹp. Preview nguồn bổ sung phục vụ xử lý từng video; phát nối tiếp/composite và export toàn timeline vẫn thuộc T08–T09.
 
 ## T04 — Giao diện timeline và điều hướng thời gian
 

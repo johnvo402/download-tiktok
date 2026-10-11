@@ -17,8 +17,8 @@ export const ttsService = {
   previewVoice: (voice: string) => call<string>('preview_tts_voice', { voice }),
   addVoiceProfile: (name: string, sourcePath: string, consent: boolean) => call<void>('add_tts_voice_profile', { name, sourcePath, consent }),
   deleteVoiceProfile: (profileId: string) => call<void>('delete_tts_voice_profile', { profileId }),
-  start: (projectId: string, request: { scope: 'all' | 'missing' | 'selected' | 'segment'; segmentIds: string[] }) =>
+  start: (projectId: string, request: { scope: 'all' | 'missing' | 'selected' | 'segment'; segmentIds: string[]; videoContentId?: string }) =>
     call<string>('start_tts_generation', { projectId, request }),
   cancel: (jobId: string) => call<boolean>('cancel_tts_generation', { jobId }),
-  getAudioPath: (projectId: string, segmentId: string) => call<string>('get_tts_audio_path', { projectId, segmentId }),
+  getAudioPath: (projectId: string, segmentId: string, videoContentId?: string) => call<string>('get_tts_audio_path', { projectId, segmentId, videoContentId }),
 };

@@ -11,7 +11,7 @@ T01 adds the persisted timeline foundation. Importing multiple sources, timeline
 - `tracks`: stable IDs, visual/audio/subtitle kind, name, layer order and enabled/locked/muted/solo state. Ascending order composites back to front.
 - `clips`: a reference to an asset/content, track, timeline start, source interval, rational playback rate, transform, linked parent and group ID. A video source can be used repeatedly without copying its file or transcript.
 - `settings`: canvas dimensions, rational output FPS and background color.
-- `legacyBinding`: the asset/content/clip used by existing single-video commands during the transition to T03.
+- `legacyBinding`: the asset/content/clip used by commands without an explicit content ID and by the existing one-source preview/export while T08–T09 are pending.
 
 The clip content union includes video, image, audio, text, subtitles and generated voice. Video clips must reference content belonging to the same asset. Subtitles/voice can link to a video clip with the same content ID. Independent visual/audio layers use timeline positions; edit transactions in T05 handle moving linked children.
 
@@ -35,7 +35,7 @@ A source with missing duration still becomes an asset and content, with a null b
 
 ## Transitional synchronization
 
-Until T03 moves AI commands to content IDs, the root `source`, transcript and editing preferences remain compatible with the current UI and services. `ProjectStore.update_project` reconciles changes through the legacy binding:
+T03 AI commands use explicit content IDs through a scoped ProjectStore view; see [VIDEO_CONTENT_PROCESSING.md](VIDEO_CONTENT_PROCESSING.md). Root `source`, transcript and editing preferences retain the legacy video's projection for older commands and one-source preview/export. `ProjectStore.update_project` reconciles changes through the legacy binding:
 
 - Existing single-video commands update only the bound asset/content. Clip placement, trims, IDs and other source contents are preserved.
 - Timeline-only changes to bound source settings update the legacy projection. Conflicting edits to both projections are rejected before saving.

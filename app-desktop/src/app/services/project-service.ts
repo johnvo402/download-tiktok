@@ -39,14 +39,14 @@ export const projectService = {
     duplicate: boolean;
     replaced: boolean;
   }>('import_video', { projectId, sourcePath, replace, restoreSource }),
-  getVideoAssetPath: (projectId: string) => call<string>('get_video_asset_path', { projectId }),
+  getVideoAssetPath: (projectId: string, videoContentId?: string) => call<string>('get_video_asset_path', { projectId, videoContentId }),
   createPreviewProxy: (projectId: string, forceRebuild = false) => call<string>('create_preview_proxy', { projectId, forceRebuild }),
   getVideoMetadata: (projectId: string) => call<Project['source']>('get_video_metadata', { projectId }),
   getSubtitleTracks: (projectId: string) => call<SubtitleTrackMetadata[]>('get_subtitle_tracks', { projectId }),
-  extractSubtitle: (projectId: string, trackIndex: number) => call<Transcript>('extract_subtitle', { projectId, trackIndex }),
-  getTranscript: (projectId: string) => call<Transcript | null>('get_transcript', { projectId }),
-  saveTranscript: (projectId: string, transcript: Transcript) => call<Project>('save_transcript', { projectId, transcript }),
-  updateTranslationLanguages: (projectId: string, sourceLanguage: string, targetLanguage: string) => call<Project>('update_translation_languages', { projectId, sourceLanguage, targetLanguage }),
+  extractSubtitle: (projectId: string, trackIndex: number, videoContentId?: string) => call<Transcript>('extract_subtitle', { projectId, videoContentId, trackIndex }),
+  getTranscript: (projectId: string, videoContentId?: string) => call<Transcript | null>('get_transcript', { projectId, videoContentId }),
+  saveTranscript: (projectId: string, transcript: Transcript, videoContentId?: string) => call<Project>('save_transcript', { projectId, videoContentId, transcript }),
+  updateTranslationLanguages: (projectId: string, sourceLanguage: string, targetLanguage: string, videoContentId?: string) => call<Project>('update_translation_languages', { projectId, videoContentId, sourceLanguage, targetLanguage }),
   updateSubtitleSettings: (projectId: string, subtitle: Project['subtitle']) => call<Project>('update_subtitle_settings', { projectId, subtitle }),
   saveVisualSettings: (projectId: string, settings: Pick<Project, 'subtitle' | 'blurRegions' | 'logos' | 'textOverlays'>) => call<Project>('save_visual_settings', { projectId, settings }),
   importLogo: (projectId: string, sourcePath: string) => call<{
@@ -65,9 +65,9 @@ export const projectService = {
     cleanupWarning: string | null;
   }>('remove_logo', { projectId, logoId }),
   getLogoAssetPath: (projectId: string, logoId: string) => call<string>('get_logo_asset_path', { projectId, logoId }),
-  updateDubbingSettings: (projectId: string, dubbing: Project['dubbing']) => call<Project>('update_dubbing_settings', { projectId, dubbing }),
-  updateProjectPreferences: (projectId: string, preferences: { customPrompt: string; translationContext: string; voice: string | null; voiceProfileId: string | null; transcriptSettings: TranscriptSettings }) => call<Project>('update_project_preferences', { projectId, ...preferences }),
-  updateTranscriptSettings: (projectId: string, settings: TranscriptSettings) => call<Project>('update_transcript_settings', { projectId, settings }),
+  updateDubbingSettings: (projectId: string, dubbing: Project['dubbing'], videoContentId?: string) => call<Project>('update_dubbing_settings', { projectId, videoContentId, dubbing }),
+  updateProjectPreferences: (projectId: string, preferences: { customPrompt: string; translationContext: string; voice: string | null; voiceProfileId: string | null; transcriptSettings: TranscriptSettings }, videoContentId?: string) => call<Project>('update_project_preferences', { projectId, videoContentId, ...preferences }),
+  updateTranscriptSettings: (projectId: string, settings: TranscriptSettings, videoContentId?: string) => call<Project>('update_transcript_settings', { projectId, videoContentId, settings }),
   getAsrEnvironment: (model: string, alignmentLanguage?: string, engine?: string, device?: string) => call<AsrEnvironment>('get_asr_environment', { model, engine, device, ...(alignmentLanguage ? { alignmentLanguage } : {}) }),
   getOcrEnvironment: (model: 'tiny' | 'small' | 'medium' = 'tiny') => call<OcrEnvironment>('get_ocr_environment', { model }),
   getTextRemovalEnvironment: () => call<TextRemovalEnvironment>('get_text_removal_environment'),
@@ -82,6 +82,6 @@ export const projectService = {
   installAsrModel: (model: string, backend?: string) => call<void>('install_asr_model', { model, backend }),
   installWhisperXAlignment: (language: string) => call<void>('install_whisperx_alignment', { language }),
   removeAsrModel: (model: string, backend?: string) => call<void>('remove_asr_model', { model, backend }),
-  generateTranscript: (projectId: string, options: { engine: 'auto' | 'fasterWhisper' | 'openVinoWhisper' | 'whisperX'; model: string; device: string; language: string; mode: 'speechRecognition' | 'ocr'; ocrFps: 1 | 2 | 4; ocrRegion: TranscriptSettings['ocrRegion']; ocrModel: 'tiny' | 'small' | 'medium'; ocrDevice: 'auto' | 'cpu' | 'cuda' | 'openvino' }) => call<string>('generate_transcript', { projectId, options }),
+  generateTranscript: (projectId: string, options: { videoContentId?: string; engine: 'auto' | 'fasterWhisper' | 'openVinoWhisper' | 'whisperX'; model: string; device: string; language: string; mode: 'speechRecognition' | 'ocr'; ocrFps: 1 | 2 | 4; ocrRegion: TranscriptSettings['ocrRegion']; ocrModel: 'tiny' | 'small' | 'medium'; ocrDevice: 'auto' | 'cpu' | 'cuda' | 'openvino' }) => call<string>('generate_transcript', { projectId, options }),
   cancelTranscription: (jobId: string) => call<boolean>('cancel_transcription', { jobId }),
 };

@@ -215,11 +215,13 @@ pub async fn retry_unified_job(
         let _guard = PROJECT_JOB_START_LOCK
             .lock()
             .map_err(|_| "Không thể khóa trạng thái project jobs.".to_string())?;
+        let target_id = payload.get("videoContentId").and_then(|value| value.as_str()).map(str::to_owned)
+            .or_else(|| ProjectStore::new(root.clone()).get(&project_id).ok().and_then(|project| project.timeline?.legacy_binding.map(|binding| binding.video_content_id)));
         let id = match previous.job_type.as_str() {
             "transcribe" => {
-                if translation_service::has_active_project_job(&translation_jobs, &project_id)
+                if translation_service::has_active_content_job(&translation_jobs, &project_id, target_id.as_deref())
                     || render_service::has_active_project_job(&render_jobs, &project_id)
-                    || tts_service::has_active_project_job(&tts_jobs, &project_id)
+                    || tts_service::has_active_content_job(&tts_jobs, &project_id, target_id.as_deref())
                 {
                     return Err("Dự án đang có job ghi hoặc đọc dữ liệu. Hãy đợi job đó kết thúc rồi thử lại.".into());
                 }
@@ -228,9 +230,9 @@ pub async fn retry_unified_job(
                 asr_service::generate_transcript(app.clone(), &asr_jobs, project_id.clone(), options)?
             }
             "translate" => {
-                if asr_service::has_active_project_job(&asr_jobs, &project_id)
+                if asr_service::has_active_content_job(&asr_jobs, &project_id, target_id.as_deref())
                     || render_service::has_active_project_job(&render_jobs, &project_id)
-                    || tts_service::has_active_project_job(&tts_jobs, &project_id)
+                    || tts_service::has_active_content_job(&tts_jobs, &project_id, target_id.as_deref())
                 {
                     return Err("Dự án đang có job ghi hoặc đọc dữ liệu. Hãy đợi job đó kết thúc rồi thử lại.".into());
                 }
@@ -239,8 +241,8 @@ pub async fn retry_unified_job(
                 translation_service::start_translation_job(app.clone(), &translation_jobs, project_id.clone(), request)?
             }
             "tts" => {
-                if asr_service::has_active_project_job(&asr_jobs, &project_id)
-                    || translation_service::has_active_project_job(&translation_jobs, &project_id)
+                if asr_service::has_active_content_job(&asr_jobs, &project_id, target_id.as_deref())
+                    || translation_service::has_active_content_job(&translation_jobs, &project_id, target_id.as_deref())
                     || render_service::has_active_project_job(&render_jobs, &project_id)
                 {
                     return Err("Dự án đang có job ghi hoặc đọc dữ liệu. Hãy đợi job đó kết thúc rồi thử lại.".into());
@@ -618,7 +620,7 @@ pub async fn start_translation(
     tts_jobs: tauri::State<'_, tts_service::TtsJobs>,
     render_jobs: tauri::State<'_, render_service::RenderJobs>,
     project_id: String,
-    request: translation_service::TranslationJobRequest,
+    mut request: translation_service::TranslationJobRequest,
 ) -> Result<String, String> {
     let jobs = jobs.inner().clone();
     let job_store = job_store.inner().clone();
@@ -629,14 +631,19 @@ pub async fn start_translation(
         let _guard = PROJECT_JOB_START_LOCK
             .lock()
             .map_err(|_| "Không thể khóa trạng thái project jobs.".to_string())?;
+        let document = store(&app)?.get(&project_id)?;
+        if request.video_content_id.is_none() {
+            request.video_content_id = document.timeline.as_ref().and_then(|d| d.legacy_binding.as_ref()).map(|b| b.video_content_id.clone());
+        }
+        store(&app)?.for_video(&project_id, request.video_content_id.as_deref())?;
         let payload = serde_json::to_value(&request).map_err(|error| error.to_string())?;
         if let Some(existing) = job_store.find_active_duplicate(&project_id, "translate", &payload)? {
             return Ok(existing.id);
         }
-        if asr_service::has_active_project_job(&asr_jobs, &project_id) {
+        if asr_service::has_active_content_job(&asr_jobs, &project_id, request.video_content_id.as_deref()) {
             return Err("Speech Recognition đang thay thế transcript của dự án. Hãy đợi tác vụ kết thúc trước khi dịch.".to_string());
         }
-        if tts_service::has_active_project_job(&tts_jobs, &project_id) {
+        if tts_service::has_active_content_job(&tts_jobs, &project_id, request.video_content_id.as_deref()) {
             return Err("TTS đang chạy trong dự án. Hãy đợi hoặc hủy TTS trước khi dịch.".to_string());
         }
         if render_service::has_active_project_job(&render_jobs, &project_id) { return Err("Video đang được export. Hãy đợi hoặc hủy export trước khi dịch.".into()); }
@@ -658,16 +665,18 @@ pub fn cancel_translation(
 pub fn update_translation_languages(
     app: tauri::AppHandle,
     project_id: String,
+    video_content_id: Option<String>,
     source_language: String,
     target_language: String,
 ) -> Result<Project, String> {
     validate_language(&source_language, true)?;
     validate_language(&target_language, false)?;
-    let projects = store(&app)?;
+    let projects = store(&app)?.for_video(&project_id, video_content_id.as_deref())?;
     let mut project = projects.get(&project_id)?;
     project.translation.source_language = source_language;
     project.translation.target_language = target_language;
-    projects.update_project(&project)
+    projects.update_project(&project)?;
+    store(&app)?.get(&project_id)
 }
 
 #[tauri::command]
@@ -880,7 +889,7 @@ pub async fn start_tts_generation(
     translation_jobs: tauri::State<'_, translation_service::TranslationJobs>,
     render_jobs: tauri::State<'_, render_service::RenderJobs>,
     project_id: String,
-    request: tts_service::TtsJobRequest,
+    mut request: tts_service::TtsJobRequest,
 ) -> Result<String, String> {
     let jobs = jobs.inner().clone();
     let job_store = job_store.inner().clone();
@@ -891,14 +900,19 @@ pub async fn start_tts_generation(
         let _guard = PROJECT_JOB_START_LOCK
             .lock()
             .map_err(|_| "Không thể khóa trạng thái project jobs.".to_string())?;
+        let document = store(&app)?.get(&project_id)?;
+        if request.video_content_id.is_none() {
+            request.video_content_id = document.timeline.as_ref().and_then(|d| d.legacy_binding.as_ref()).map(|b| b.video_content_id.clone());
+        }
+        store(&app)?.for_video(&project_id, request.video_content_id.as_deref())?;
         let payload = serde_json::to_value(&request).map_err(|error| error.to_string())?;
         if let Some(existing) = job_store.find_active_duplicate(&project_id, "tts", &payload)? {
             return Ok(existing.id);
         }
-        if asr_service::has_active_project_job(&asr_jobs, &project_id) {
+        if asr_service::has_active_content_job(&asr_jobs, &project_id, request.video_content_id.as_deref()) {
             return Err("Speech Recognition đang chạy trong dự án.".to_string());
         }
-        if translation_service::has_active_project_job(&translation_jobs, &project_id) {
+        if translation_service::has_active_content_job(&translation_jobs, &project_id, request.video_content_id.as_deref()) {
             return Err(
                 "Đang dịch transcript. Hãy đợi translation job hoàn tất trước khi tạo TTS."
                     .to_string(),
@@ -909,7 +923,7 @@ pub async fn start_tts_generation(
                 "Video đang được export. Hãy đợi hoặc hủy export trước khi tạo TTS.".into(),
             );
         }
-        if tts_service::has_active_project_job(&jobs, &project_id) {
+        if tts_service::has_active_content_job(&jobs, &project_id, request.video_content_id.as_deref()) {
             return Err("Đã có TTS job đang chạy trong dự án.".to_string());
         }
         tts_service::start_generation(app, &jobs, project_id, request)
@@ -930,9 +944,10 @@ pub fn cancel_tts_generation(
 pub fn get_tts_audio_path(
     app: tauri::AppHandle,
     project_id: String,
+    video_content_id: Option<String>,
     segment_id: String,
 ) -> Result<String, String> {
-    let path = tts_service::audio_path(&store(&app)?, &project_id, &segment_id)?;
+    let path = tts_service::audio_path(&store(&app)?.for_video(&project_id, video_content_id.as_deref())?, &project_id, &segment_id)?;
     allow_verified_media_asset(&app, std::path::Path::new(&path))?;
     Ok(path)
 }
@@ -941,6 +956,7 @@ pub fn get_tts_audio_path(
 pub fn update_dubbing_settings(
     app: tauri::AppHandle,
     project_id: String,
+    video_content_id: Option<String>,
     dubbing: crate::project_service::DubbingSettings,
 ) -> Result<Project, String> {
     dubbing.audio_processing.validate()?;
@@ -972,16 +988,18 @@ pub fn update_dubbing_settings(
     {
         return Err("Cấu hình lồng tiếng hoặc âm lượng không hợp lệ.".to_string());
     }
-    let projects = store(&app)?;
+    let projects = store(&app)?.for_video(&project_id, video_content_id.as_deref())?;
     let mut project = projects.get(&project_id)?;
     project.dubbing = dubbing;
-    projects.update_project(&project)
+    projects.update_project(&project)?;
+    store(&app)?.get(&project_id)
 }
 
 #[tauri::command]
 pub fn update_project_preferences(
     app: tauri::AppHandle,
     project_id: String,
+    video_content_id: Option<String>,
     custom_prompt: String,
     translation_context: String,
     voice: Option<String>,
@@ -1011,7 +1029,7 @@ pub fn update_project_preferences(
         } else { None }
     };
 
-    let projects = store(&app)?;
+    let projects = store(&app)?.for_video(&project_id, video_content_id.as_deref())?;
     let mut project = projects.get(&project_id)?;
     if let Some(settings) = transcript_settings {
         validate_transcript_settings(&settings)?;
@@ -1021,20 +1039,23 @@ pub fn update_project_preferences(
     project.translation.context = translation_context;
     if let Some(selected_voice) = selected_voice { project.dubbing.voice = Some(selected_voice); }
     if voice.is_some() || voice_profile_id.is_some() { project.dubbing.voice_profile_id = voice_profile_id; }
-    projects.update_project(&project)
+    projects.update_project(&project)?;
+    store(&app)?.get(&project_id)
 }
 
 #[tauri::command]
 pub fn update_transcript_settings(
     app: tauri::AppHandle,
     project_id: String,
+    video_content_id: Option<String>,
     settings: crate::project_service::TranscriptSettings,
 ) -> Result<Project, String> {
     validate_transcript_settings(&settings)?;
-    let projects = store(&app)?;
+    let projects = store(&app)?.for_video(&project_id, video_content_id.as_deref())?;
     let mut project = projects.get(&project_id)?;
     project.transcript_settings = settings;
-    projects.update_project(&project)
+    projects.update_project(&project)?;
+    store(&app)?.get(&project_id)
 }
 
 fn validate_transcript_settings(settings: &crate::project_service::TranscriptSettings) -> Result<(), String> {
@@ -1117,8 +1138,8 @@ pub async fn import_video(
 }
 
 #[tauri::command]
-pub fn get_video_asset_path(app: tauri::AppHandle, project_id: String) -> Result<String, String> {
-    let path = video_service::resolve_video(&store(&app)?, &project_id)?;
+pub fn get_video_asset_path(app: tauri::AppHandle, project_id: String, video_content_id: Option<String>) -> Result<String, String> {
+    let path = video_service::resolve_video(&store(&app)?.for_video(&project_id, video_content_id.as_deref())?, &project_id)?;
     allow_verified_media_asset(&app, &path)?;
     Ok(path.to_string_lossy().into_owned())
 }
@@ -1182,11 +1203,12 @@ pub fn get_subtitle_tracks(
 pub async fn extract_subtitle(
     app: tauri::AppHandle,
     project_id: String,
+    video_content_id: Option<String>,
     track_index: u32,
 ) -> Result<transcript_service::Transcript, String> {
     let root = projects_root(&app)?;
     let (transcript, _) = tauri::async_runtime::spawn_blocking(move || {
-        transcript_service::extract_subtitle(&ProjectStore::new(root), &project_id, track_index)
+        transcript_service::extract_subtitle(&ProjectStore::new(root).for_video(&project_id, video_content_id.as_deref())?, &project_id, track_index)
     })
     .await
     .map_err(|error| format!("Không thể trích xuất subtitle: {error}"))??;
@@ -1197,9 +1219,10 @@ pub async fn extract_subtitle(
 pub async fn get_transcript(
     app: tauri::AppHandle,
     project_id: String,
+    video_content_id: Option<String>,
 ) -> Result<Option<Transcript>, Box<crate::app_error::AppError>> {
     let context=crate::app_error::ErrorContext {feature:Some("transcript".into()),project_id:Some(project_id.clone()),stage:Some("load".into()),..Default::default()};
-    tauri::async_runtime::spawn_blocking(move ||crate::tts_service::get_transcript_with_audio_validation(&store(&app)?, &project_id)).await
+    tauri::async_runtime::spawn_blocking(move ||crate::tts_service::get_transcript_with_audio_validation(&store(&app)?.for_video(&project_id, video_content_id.as_deref())?, &project_id)).await
         .map_err(|e|Box::new(crate::app_error::AppError::classify(&e.to_string(),context.clone())))?
         .map_err(|e|Box::new(crate::app_error::AppError::classify(&e,context)))
 }
@@ -1208,10 +1231,11 @@ pub async fn get_transcript(
 pub async fn save_transcript(
     app: tauri::AppHandle,
     project_id: String,
+    video_content_id: Option<String>,
     transcript: Transcript,
 ) -> Result<Project, Box<crate::app_error::AppError>> {
     let context=crate::app_error::ErrorContext {feature:Some("transcript".into()),project_id:Some(project_id.clone()),stage:Some("save".into()),..Default::default()};
-    tauri::async_runtime::spawn_blocking(move ||transcript_service::save_transcript(&store(&app)?, &project_id, transcript)).await
+    tauri::async_runtime::spawn_blocking(move || { transcript_service::save_transcript(&store(&app)?.for_video(&project_id, video_content_id.as_deref())?, &project_id, transcript)?; store(&app)?.get(&project_id) }).await
         .map_err(|e|Box::new(crate::app_error::AppError::classify(&e.to_string(),context.clone())))?
         .map_err(|e|Box::new(crate::app_error::AppError::classify(&e,context)))
 }
@@ -1367,7 +1391,7 @@ pub async fn generate_transcript(
     tts_jobs: tauri::State<'_, tts_service::TtsJobs>,
     render_jobs: tauri::State<'_, render_service::RenderJobs>,
     project_id: String,
-    options: asr_service::AsrOptions,
+    mut options: asr_service::AsrOptions,
 ) -> Result<String, String> {
     let jobs = jobs.inner().clone();
     let job_store = job_store.inner().clone();
@@ -1376,14 +1400,19 @@ pub async fn generate_transcript(
     let render_jobs = render_jobs.inner().clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
         let _guard = PROJECT_JOB_START_LOCK.lock().map_err(|_| "Không thể khóa trạng thái project jobs.".to_string())?;
+        let document = store(&app)?.get(&project_id)?;
+        if options.video_content_id.is_none() {
+            options.video_content_id = document.timeline.as_ref().and_then(|d| d.legacy_binding.as_ref()).map(|b| b.video_content_id.clone());
+        }
+        store(&app)?.for_video(&project_id, options.video_content_id.as_deref())?;
         let payload = serde_json::to_value(&options).map_err(|error| error.to_string())?;
         if let Some(existing) = job_store.find_active_duplicate(&project_id, "transcribe", &payload)? {
             return Ok(existing.id);
         }
-        if translation_service::has_active_project_job(&translation_jobs, &project_id) {
+        if translation_service::has_active_content_job(&translation_jobs, &project_id, options.video_content_id.as_deref()) {
             return Err("Translation đang chạy trong dự án. Hãy đợi tác vụ kết thúc trước khi tạo lại transcript.".to_string());
         }
-        if tts_service::has_active_project_job(&tts_jobs, &project_id) {
+        if tts_service::has_active_content_job(&tts_jobs, &project_id, options.video_content_id.as_deref()) {
             return Err("TTS đang chạy trong dự án. Hãy đợi hoặc hủy TTS trước khi tạo lại transcript.".to_string());
         }
         if render_service::has_active_project_job(&render_jobs, &project_id) { return Err("Video đang được export. Hãy đợi hoặc hủy export trước khi tạo lại transcript.".into()); }

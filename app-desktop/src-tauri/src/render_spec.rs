@@ -916,7 +916,7 @@ mod tests {
     fn transcript(text: &str) -> Transcript {
         Transcript {
             schema_version: 1,
-            project_id: "p".into(),
+            project_id: "p".into(), video_content_id: None,
             source_type: TranscriptSourceType::Asr,
             source_track: None,
             language: None,

@@ -22,6 +22,8 @@ static TRANSCRIPT_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = Once
 pub struct Transcript {
     pub schema_version: u32,
     pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_content_id: Option<String>,
     pub source_type: TranscriptSourceType,
     pub source_track: Option<u32>,
     pub language: Option<String>,
@@ -104,7 +106,7 @@ pub enum TranscriptTtsStatus {
 }
 
 impl TranscriptSegment {
-    fn new(start: f64, end: f64, source: String, source_type: TranscriptSourceType) -> Self {
+    pub(crate) fn new(start: f64, end: f64, source: String, source_type: TranscriptSourceType) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
             start,
@@ -127,7 +129,7 @@ pub fn get_transcript(
     project_id: &str,
 ) -> Result<Option<Transcript>, String> {
     let project = store.get(project_id)?;
-    let Some(metadata) = project.transcript else {
+    let Some(ref metadata) = project.transcript else {
         return Ok(None);
     };
     if metadata.status != TranscriptStatus::Completed {
@@ -140,8 +142,9 @@ pub fn get_transcript(
     if !parent.starts_with(&root) { return Err("Transcript nằm ngoài dự án.".into()); }
     let path = parent.join(candidate.file_name().ok_or("Tên transcript không hợp lệ.")?);
     let transcript = crate::recovery_store::read(&path, Some(1), |bytes| {
-        let transcript: Transcript = serde_json::from_slice(bytes)
+        let mut transcript: Transcript = serde_json::from_slice(bytes)
             .map_err(|_| "File transcript.json bị lỗi hoặc không hợp lệ.".to_string())?;
+        check_content_identity(store, &project, &mut transcript)?;
         if transcript.project_id != project_id { return Err("Transcript không thuộc dự án hiện tại.".into()); }
         if transcript.video_checksum != project.source.checksum_sha256 { return Err("Transcript không khớp với video nguồn hiện tại.".into()); }
         if transcript.schema_version != 1 { return Err("Phiên bản transcript chưa được hỗ trợ.".into()); }
@@ -151,12 +154,48 @@ pub fn get_transcript(
     Ok(Some(transcript))
 }
 
+fn check_content_identity(store: &ProjectStore, project: &Project, transcript: &mut Transcript) -> Result<(), String> {
+    if store.content_id().is_none() {
+        let bound = project.timeline.as_ref().and_then(|doc| doc.legacy_binding.as_ref()).map(|binding| binding.video_content_id.as_str());
+        if transcript.video_content_id.as_deref().is_some_and(|id| Some(id) != bound) {
+            return Err("Transcript không thuộc video chính của dự án.".into());
+        }
+    }
+    if let Some(id) = store.content_id() {
+        let bound = project.timeline.as_ref().and_then(|d| d.legacy_binding.as_ref())
+            .is_some_and(|binding| binding.video_content_id == id);
+        if transcript.video_content_id.as_deref() != Some(id) {
+            if transcript.video_content_id.is_some() || !bound {
+                return Err("Transcript không thuộc nội dung video được chọn.".into());
+            }
+            transcript.video_content_id = Some(id.to_owned());
+        }
+        if let Some(metadata) = &project.transcript {
+            let expected = store.content_path(TRANSCRIPT_PATH);
+            if metadata.path != expected && !(bound && metadata.path == TRANSCRIPT_PATH) {
+                return Err("Đường dẫn transcript không thuộc nội dung video.".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn save_generated_transcript(store: &ProjectStore, project_id: &str, transcript: Transcript, target: &crate::video_content::JobTarget) -> Result<Project, String> {
+    with_transcript_lock(&store.transcript_lock_key(project_id), || {
+        let latest = store.get(project_id)?;
+        if &store.job_target(&latest) != target {
+            return Err("Nội dung video đã thay đổi khi đang nhận dạng; kết quả cũ đã được bỏ.".into());
+        }
+        save_transcript_locked(store, project_id, transcript)
+    })
+}
+
 pub fn save_transcript(
     store: &ProjectStore,
     project_id: &str,
     mut transcript: Transcript,
 ) -> Result<Project, String> {
-    with_transcript_lock(project_id, || {
+    with_transcript_lock(&store.transcript_lock_key(project_id), || {
         if let Some(latest) = get_transcript(store, project_id)? {
             preserve_newer_translation_state(&mut transcript, &latest);
         }
@@ -196,6 +235,7 @@ pub fn save_transcript_locked(
     mut transcript: Transcript,
 ) -> Result<Project, String> {
     let project = store.get(project_id)?;
+    check_content_identity(store, &project, &mut transcript)?;
     if transcript.project_id != project_id {
         return Err("Transcript không thuộc dự án hiện tại.".to_string());
     }
@@ -228,6 +268,8 @@ pub fn save_transcript_locked(
         }
     }
     validate_transcript(&transcript, project.source.duration)?;
+    let bound = project.timeline.as_ref().and_then(|doc| doc.legacy_binding.as_ref()).map(|binding| binding.video_content_id.clone());
+    let writer = store.for_video(project_id, store.content_id().or(bound.as_deref()))?;
     let transcript_path = store.data_directory(project_id, "subtitles")?.join("transcript.json");
     let previous_bytes = fs::read(&transcript_path).ok();
     let bytes = serde_json::to_vec_pretty(&transcript)
@@ -237,13 +279,13 @@ pub fn save_transcript_locked(
     let mut updated = project;
     updated.transcript = Some(TranscriptMetadata {
         status: TranscriptStatus::Completed,
-        path: TRANSCRIPT_PATH.to_string(),
+        path: store.content_path(TRANSCRIPT_PATH),
         source_type: Some(transcript.source_type.clone()),
         source_track: transcript.source_track,
         language: transcript.language.clone(),
         segment_count: transcript.segments.len(),
     });
-    match store.update_project(&updated) {
+    match writer.update_transcript_project(&updated) {
         Ok(project) => Ok(project),
         Err(error) => {
             match previous_bytes {
@@ -322,7 +364,7 @@ pub fn extract_subtitle(
     segments = merge_adjacent_duplicate_segments(segments);
     let transcript = Transcript {
         schema_version: 1,
-        project_id: project_id.to_string(),
+        project_id: project_id.to_string(), video_content_id: store.content_id().map(str::to_owned),
         source_type: TranscriptSourceType::Subtitle,
         source_track: Some(track_index),
         language: track.language.clone(),
@@ -330,12 +372,11 @@ pub fn extract_subtitle(
         segments,
     };
     validate_transcript(&transcript, project.source.duration)?;
-    let project_dir = store.project_directory(project_id)?;
     atomic_write(
-        &project_dir.join("subtitles").join("original.srt"),
+        &store.data_directory(project_id, "subtitles")?.join("original.srt"),
         original.as_bytes(),
     )?;
-    let project = save_transcript(store, project_id, transcript.clone())?;
+    let project = save_generated_transcript(store, project_id, transcript.clone(), &store.job_target(&project))?;
     Ok((transcript, project))
 }
 
@@ -528,7 +569,7 @@ mod tests {
     fn rejects_invalid_segment_time_and_duplicate_ids() {
         let mut transcript = Transcript {
             schema_version: 1,
-            project_id: "project".to_string(),
+            project_id: "project".to_string(), video_content_id: None,
             source_type: TranscriptSourceType::Asr,
             source_track: None,
             language: None,
@@ -639,7 +680,7 @@ mod tests {
     fn corrupt_transcript_recovers_and_thousand_segments_roundtrip() {
         let temp=tempdir().unwrap();let store=ProjectStore::new(temp.path().join("projects"));let mut project=store.create("Large transcript").unwrap();
         project.source.video_path=Some("media/source/video.mp4".into());project.source.duration=Some(7200.0);let project=store.update_project(&project).unwrap();
-        let transcript=Transcript {schema_version:1,project_id:project.id.clone(),source_type:TranscriptSourceType::Subtitle,source_track:None,language:Some("vi".into()),video_checksum:None,
+        let transcript=Transcript {schema_version:1,project_id:project.id.clone(), video_content_id: None,source_type:TranscriptSourceType::Subtitle,source_track:None,language:Some("vi".into()),video_checksum:None,
             segments:(0..5000).map(|i|TranscriptSegment::new(i as f64,i as f64+0.8,format!("Câu tiếng Việt {i}"),TranscriptSourceType::Subtitle)).collect()};
         save_transcript(&store,&project.id,transcript.clone()).unwrap();let mut edited=transcript.clone();edited.segments[0].source="Đã sửa".into();save_transcript(&store,&project.id,edited).unwrap();
         let path=store.project_directory(&project.id).unwrap().join("subtitles/transcript.json");fs::write(path,b"broken").unwrap();
@@ -666,7 +707,7 @@ mod tests {
         let first_id = first.id.clone();
         let transcript = Transcript {
             schema_version: 1,
-            project_id: project.id.clone(),
+            project_id: project.id.clone(), video_content_id: None,
             source_type: TranscriptSourceType::Subtitle,
             source_track: Some(2),
             language: Some("en".to_string()),
@@ -725,7 +766,7 @@ mod tests {
         });
         let transcript = Transcript {
             schema_version: 1,
-            project_id: project.id.clone(),
+            project_id: project.id.clone(), video_content_id: None,
             source_type: TranscriptSourceType::Asr,
             source_track: None,
             language: Some("en".to_string()),
@@ -747,7 +788,7 @@ mod tests {
     fn stale_frontend_save_preserves_a_translation_saved_during_the_request() {
         let mut incoming = Transcript {
             schema_version: 1,
-            project_id: "project".to_string(),
+            project_id: "project".to_string(), video_content_id: None,
             source_type: TranscriptSourceType::Asr,
             source_track: None,
             language: Some("en".to_string()),
