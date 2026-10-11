@@ -1,6 +1,6 @@
 # Kế hoạch timeline nhiều lớp trong phần Dịch
 
-Trạng thái: T01–T10 hoàn tất; T11 chưa triển khai. Cập nhật: 2026-10-12.
+Trạng thái: T01–T11 hoàn tất triển khai và kiểm tra cục bộ. Cập nhật: 2026-10-12. CI GitHub chạy khi push commit.
 
 ## Mục tiêu và bố cục
 
@@ -146,11 +146,15 @@ Hoàn tất khi: mỗi hiệu ứng triển khai có cùng kết quả preview/e
 
 ## T11 — Kiểm thử tích hợp và ổn định
 
+**Hoàn tất ngày 2026-10-12.** Chỉ mục interval cho preview/editor/audio, dọn cache và undo khi đóng dự án, chặn manifest muộn sau đóng/mở lại; export chia vùng theo một lưới frame và tối đa 32 input hình mỗi FFmpeg, master audio liên tục; sửa điểm cắt VFR giữ frame trước PTS kế tiếp. Snapshot export gắn journal để recovery dọn partial thuộc project và giữ retry payload. Chi tiết gate, benchmark và phạm vi tại [TIMELINE_STABILITY.md](TIMELINE_STABILITY.md).
+
 Kiểm thử xuyên suốt migration, lưu/mở, kéo/cắt/undo, đổi lựa chọn khi AI đang chạy, hủy/resume tác vụ, thiếu nguồn, Unicode path, nguồn VFR, nhiều FPS và nhiều audio stream. Dùng media ngắn có hình/tiếng đánh dấu để đo sai lệch preview/export; ngưỡng hình theo một frame đầu ra, tránh cộng dồn sai số trên timeline dài.
 
 Đo độ phản hồi và bộ nhớ khi mở dự án 30–90 phút với nhiều clip/lớp; giải phóng cache, decoder và tác vụ khi đóng dự án. Kiểm tra tính năng Dịch cũ, batch và Tạo video AI không bị ảnh hưởng.
 
 Hoàn tất khi: kịch bản chấp nhận bên dưới chạy qua, test frontend/Rust/Python liên quan và CI thành công. Task này được làm xuyên suốt, với một lượt kiểm tra tổng thể sau T09–T10.
+
+Đã kiểm tra: build production; 100 test frontend, 234 test Rust (30 tùy chọn), 5 test công cụ Node, 86 test worker Python (10 tùy chọn) và 4 test cache qua. Năm media acceptance FFmpeg/FFprobe và UI T05–T11 qua; native hidden GPU chạy riêng. UI 90 phút/2.700 clip mở khoảng 368ms, query 1.000 scene khoảng 33ms, seek nguồn khoảng 83–108ms trên fixture máy dev. Export đủ 90 phút/900 clip ở 64×36/2FPS đúng 10.800 frame; benchmark không đại diện export 1080p. Test crash/recovery giữ layout/effects/nội dung nguồn và job retry, không xóa media/final. Workflow Windows đã bổ sung media acceptance, UI T11 và artifact số đo; kết quả GitHub cho commit này chỉ có sau push.
 
 ## Các mốc triển khai
 

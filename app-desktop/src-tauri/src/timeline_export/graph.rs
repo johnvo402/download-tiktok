@@ -15,6 +15,7 @@ pub struct Graph {
     pub inputs: Vec<Vec<std::ffi::OsString>>,
     pub filters: String,
     pub audio: bool,
+    pub copy_video: bool,
 }
 fn num(n: f64) -> String {
     format!("{n:.9}")
@@ -61,6 +62,7 @@ pub fn build(
             plan.document.settings.background_color
         ),
         audio: master.is_some(),
+        copy_video: false,
     };
     let mut raster = TextRasterizer::default();
     let mut fonts = FontSystem::new();
@@ -97,10 +99,9 @@ pub fn build(
                 ]
             } else {
                 vec![
+                    "-noaccurate_seek".into(),
                     "-ss".into(),
                     num(seconds(c.timeline_to_source_us(from)?.unwrap())),
-                    "-t".into(),
-                    num(duration * rate),
                     "-threads".into(),
                     "1".into(),
                 ]
@@ -113,7 +114,10 @@ pub fn build(
             format!("[{idx}:v]setpts=PTS-STARTPTS,fps={fps},format=rgba")
         } else {
             format!(
-                "[{idx}:v]setpts=(PTS-STARTPTS)/{},fps={fps},format=rgba",
+                // Retain the keyframe preroll and signed PTS after input -ss.
+                // fps holds the prior VFR frame until its successor's timestamp;
+                // STARTPTS would pull that future frame to the cut/batch start.
+                "[{idx}:v]setpts=PTS/{},fps={fps}:start_time=0:round=up,format=rgba",
                 num(rate)
             )
         };

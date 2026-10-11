@@ -271,6 +271,388 @@ fn options() -> ExportOptions {
 }
 
 #[test]
+fn batch_windows_share_one_fractional_frame_grid_on_ninety_minutes() {
+    let mut p = plan();
+    p.start = 123456;
+    p.end = p.start + 5400_000_000;
+    p.options.frame_rate = Rational {
+        numerator: 30000,
+        denominator: 1001,
+    };
+    let template = p.document.clips[0].clone();
+    p.document.clips = (0..1800)
+        .map(|i| {
+            let mut c = template.clone();
+            c.id = format!("clip-{i}");
+            c.start_us = p.start + i * 3_000_000;
+            c.source_in_us = 0;
+            c.source_out_us = 3_000_000;
+            c.rate = Rational::default();
+            c
+        })
+        .collect();
+    let windows = super::batches::windows(&p).unwrap();
+    assert_eq!(windows.first().unwrap().0, p.start);
+    assert_eq!(windows.last().unwrap().1, p.end);
+    let mut frames = 0u64;
+    for (i, &(from, to, count)) in windows.iter().enumerate() {
+        assert_eq!(
+            from,
+            p.start + (frames as u128 * 1_001_000_000 / 30000) as u64
+        );
+        if i > 0 {
+            assert_eq!(windows[i - 1].1, from);
+        }
+        assert!(
+            p.document
+                .clips
+                .iter()
+                .filter(|c| c.start_us < to && c.end_us().unwrap() > from)
+                .count()
+                <= super::batches::MAX_LAYERS
+        );
+        frames += count;
+    }
+    assert_eq!(
+        frames,
+        (5400_000_000u128 * 30000).div_ceil(1_001_000_000) as u64
+    );
+    p.document.clips = (0..33)
+        .map(|i| {
+            let mut c = template.clone();
+            c.id = format!("layer-{i}");
+            c.start_us = p.start;
+            c.source_in_us = 0;
+            c.source_out_us = 5400_000_000;
+            c.rate = Rational::default();
+            c
+        })
+        .collect();
+    assert!(super::batches::windows(&p).unwrap_err().contains("32"));
+}
+
+#[test]
+#[ignore = "Requires FFmpeg/FFprobe; T11 bounded inputs, packet concat, frame grid and continuous audio."]
+fn media_batched_export_keeps_fractional_frames_audio_and_cancellation() {
+    let (_dir, store, mut p, _, _) = fixture();
+    let doc = p.timeline.as_mut().unwrap();
+    let a = doc.clips[0].clone();
+    let b = doc.clips[1].clone();
+    doc.settings.frame_rate = Rational {
+        numerator: 30000,
+        denominator: 1001,
+    };
+    doc.clips = (0..65)
+        .map(|i| {
+            let mut c = if i % 2 == 0 { a.clone() } else { b.clone() };
+            c.id = Uuid::new_v4().to_string();
+            c.track_id = a.track_id.clone();
+            c.start_us = i * 100100;
+            c.source_in_us = 0;
+            c.source_out_us = 100100;
+            c.rate = Rational::default();
+            c.transform.fit = crate::timeline::Fit::Stretch;
+            c
+        })
+        .collect();
+    doc.legacy_binding.as_mut().unwrap().clip_id = Some(doc.clips[0].id.clone());
+    p = store.update_project(&p).unwrap();
+    let mut opts = options();
+    opts.timeline.as_mut().unwrap().frame_rate = doc_rate(&p);
+    let snap = capture(&store, &p.id, &opts).unwrap();
+    let state = AtomicU8::new(0);
+    assert!(render(&snap, &opts, &state, |progress, _, _| {
+        if progress > 0.08 && progress < 0.92 {
+            state.store(crate::render_service::JOB_CANCELLED, Ordering::SeqCst);
+        }
+    })
+    .is_err());
+    assert!(fs::read_dir(&snap.output_directory).unwrap().all(|p| !p
+        .unwrap()
+        .path()
+        .extension()
+        .is_some_and(|v| v == "mp4")));
+    drop(snap);
+    let snap = capture(&store, &p.id, &opts).unwrap();
+    let mut progress = vec![];
+    let (out, _) = render(&snap, &opts, &AtomicU8::new(0), |p, _, _| progress.push(p)).unwrap();
+    assert!(snap
+        .directory
+        .path()
+        .join("video-batches.ffconcat")
+        .exists());
+    assert!(progress.windows(2).all(|p| p[0] <= p[1]));
+    for i in [0, 15, 16, 31, 32, 47, 48, 64] {
+        let at = i as f64 * 0.1001 + 0.0333667;
+        let color = pixel(&frame(Path::new(&out), at), 320, 160, 90);
+        assert!(
+            if i % 2 == 0 {
+                color[0] > 220 && color[2] < 25
+            } else {
+                color[2] > 220 && color[0] < 25
+            },
+            "batch frame {i}: {color:?}"
+        );
+    }
+    let audio = pcm(Path::new(&out));
+    for i in [0, 16, 32, 48, 64] {
+        let from = i as f64 * 0.1001 + 0.02;
+        assert!(
+            tone(&audio, from, from + 0.06, 440.0) > 0.05,
+            "missing continuous audio at batch {i}"
+        );
+    }
+    let probe = crate::runtime_paths::ffprobe_command()
+        .unwrap()
+        .args([
+            "-v",
+            "error",
+            "-count_frames",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=nb_read_frames",
+            "-of",
+            "json",
+        ])
+        .arg(&out)
+        .output_contained(Duration::from_secs(30))
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+    assert_eq!(json["streams"][0]["nb_read_frames"], "195");
+}
+fn doc_rate(p: &Project) -> Rational {
+    p.timeline.as_ref().unwrap().settings.frame_rate
+}
+
+#[test]
+#[ignore = "Opt-in long export benchmark; 90 minutes/900 clips at 64x36, 2 FPS (not a 1080p performance claim)."]
+fn benchmark_ninety_minute_export_has_bounded_inputs_and_no_duration_drift() {
+    let (_dir, store, mut p, _, _) = fixture();
+    let root = store.project_directory(&p.id).unwrap();
+    let original: Vec<_> = p
+        .timeline
+        .as_ref()
+        .unwrap()
+        .assets
+        .iter()
+        .map(|a| {
+            (
+                root.join(&a.relative_path),
+                fs::read(root.join(&a.relative_path)).unwrap(),
+            )
+        })
+        .collect();
+    let doc = p.timeline.as_mut().unwrap();
+    doc.settings.width = 64;
+    doc.settings.height = 36;
+    let a = doc.clips[0].clone();
+    let b = doc.clips[1].clone();
+    doc.clips = (0..900)
+        .map(|i| {
+            let mut c = if i % 2 == 0 { a.clone() } else { b.clone() };
+            c.id = Uuid::new_v4().to_string();
+            c.track_id = a.track_id.clone();
+            c.start_us = i * 6_000_000;
+            c.source_in_us = 0;
+            c.source_out_us = 4_000_000;
+            c.rate = Rational {
+                numerator: 2,
+                denominator: 3,
+            };
+            c.transform.fit = crate::timeline::Fit::Stretch;
+            let mut audio = audio_settings(doc, &c);
+            audio.muted = true;
+            audio.voice_enabled = false;
+            c.audio = Some(audio);
+            c
+        })
+        .collect();
+    doc.legacy_binding.as_mut().unwrap().clip_id = Some(doc.clips[0].id.clone());
+    p = store.update_project(&p).unwrap();
+    let mut opts = options();
+    opts.video_bitrate_kbps = Some(500);
+    let output = opts.timeline.as_mut().unwrap();
+    output.width = 64;
+    output.height = 36;
+    output.frame_rate = Rational {
+        numerator: 2,
+        denominator: 1,
+    };
+    let snap = capture(&store, &p.id, &opts).unwrap();
+    assert_eq!(snap.plan.duration(), 5400.0);
+    let started = std::time::Instant::now();
+    let baseline = working_set();
+    let mut peak = baseline;
+    let (out, duration) = render(&snap, &opts, &AtomicU8::new(0), |_, _, _| {
+        peak = peak.max(working_set());
+    })
+    .unwrap();
+    assert_eq!(duration, 5400.0);
+    for (at, blue) in [(0.5, false), (1799.0, true), (3599.0, true), (5399.0, true)] {
+        let color = pixel(&frame(Path::new(&out), at), 64, 32, 18);
+        assert!(if blue {
+            color[2] > 220 && color[0] < 25
+        } else {
+            color[0] > 220 && color[2] < 25
+        });
+    }
+    let probe = crate::runtime_paths::ffprobe_command()
+        .unwrap()
+        .args([
+            "-v",
+            "error",
+            "-count_frames",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=nb_read_frames",
+            "-of",
+            "json",
+        ])
+        .arg(out)
+        .output_contained(Duration::from_secs(60))
+        .unwrap();
+    let data: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+    assert_eq!(data["streams"][0]["nb_read_frames"], "10800");
+    for (path, bytes) in original {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+    println!("T11 full 90min export / 900 clips / 64x36@2: {:.2}s; Rust sampled working set baseline {:.1}MiB / peak {:.1}MiB (FFmpeg children excluded)", started.elapsed().as_secs_f64(), baseline as f64 / 1048576.0, peak as f64 / 1048576.0);
+    assert!(peak.saturating_sub(baseline) < 512 * 1024 * 1024);
+}
+fn working_set() -> usize {
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::{
+            ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
+            Threading::GetCurrentProcess,
+        };
+        let mut memory = PROCESS_MEMORY_COUNTERS::default();
+        memory.cb = std::mem::size_of_val(&memory) as u32;
+        if unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut memory, memory.cb) }.is_ok() {
+            return memory.WorkingSetSize;
+        }
+    }
+    0
+}
+
+#[test]
+#[ignore = "Requires FFmpeg/FFprobe; T11 Unicode paths, VFR source and default audio stream."]
+fn media_unicode_vfr_multi_audio_late_range_matches_source_timestamps() {
+    let (_dir, store, mut p, _, _) = fixture();
+    let root = store.data_directory(&p.id, "media/source").unwrap();
+    let name = "Chiến tranh 日本語 ' #.mp4";
+    let path = root.join(name);
+    let output = crate::runtime_paths::ffmpeg_command().unwrap().args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=red:s=320x180:r=60:d=4", "-f", "lavfi", "-i", "sine=frequency=440:duration=4", "-f", "lavfi", "-i", "sine=frequency=880:duration=4", "-map", "0:v", "-map", "1:a", "-map", "2:a", "-vf", "drawbox=color=blue:t=fill:enable='gte(t,2)',select='if(lt(t,2),not(mod(n,3)),not(mod(n,7)))'", "-fps_mode", "vfr", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-disposition:a:0", "0", "-disposition:a:1", "default"])
+        .arg(&path).output_contained(Duration::from_secs(30)).unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let probe = crate::runtime_paths::ffprobe_command()
+        .unwrap()
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "frame=best_effort_timestamp_time",
+            "-of",
+            "json",
+        ])
+        .arg(&path)
+        .output_contained(Duration::from_secs(30))
+        .unwrap();
+    let frames: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+    let gaps: Vec<f64> = frames["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            f["best_effort_timestamp_time"]
+                .as_str()
+                .unwrap()
+                .parse::<f64>()
+                .unwrap()
+        })
+        .collect();
+    assert!(gaps.windows(2).any(|v| v[1] - v[0] > 0.10));
+    assert!(gaps.windows(2).any(|v| v[1] - v[0] < 0.06));
+    let doc = p.timeline.as_mut().unwrap();
+    let asset = &mut doc.assets[0];
+    asset.relative_path = format!("media/source/{name}");
+    asset.metadata.video_path = Some(asset.relative_path.clone());
+    asset.variable_frame_rate = Some(true);
+    asset
+        .metadata
+        .audio_streams
+        .push(asset.metadata.audio_streams[0].clone());
+    asset.metadata.audio_streams[1].stream_index = 2;
+    p.source = asset.metadata.clone();
+    doc.clips.truncate(1);
+    let c = &mut doc.clips[0];
+    c.start_us = 5396_000_000;
+    c.source_in_us = 0;
+    c.source_out_us = 4_000_000;
+    c.rate = Rational::default();
+    p = store.update_project(&p).unwrap();
+    let asset_id = &p.timeline.as_ref().unwrap().assets[0].id;
+    let wave = crate::media_library::cache(&store, &p.id, asset_id, "waveform")
+        .unwrap()
+        .waveform
+        .unwrap();
+    let cache_dir = store
+        .data_directory(&p.id, &format!("cache/assets/{asset_id}/{}", wave.checksum))
+        .unwrap();
+    assert!(cache_dir.join("waveform-default-v2.json").exists());
+    assert!(!cache_dir.join("waveform-v1.json").exists());
+    assert_eq!(wave.peaks.len(), 512);
+    assert_eq!(
+        wave.peaks,
+        crate::media_library::cache(&store, &p.id, asset_id, "waveform")
+            .unwrap()
+            .waveform
+            .unwrap()
+            .peaks
+    );
+    let mut opts = options();
+    let range = opts.timeline.as_mut().unwrap();
+    range.start_us = Some(5397_000_000);
+    range.end_us = Some(5399_000_000);
+    let snap = capture(&store, &p.id, &opts).unwrap();
+    let (out, _) = render(&snap, &opts, &AtomicU8::new(0), |_, _, _| {}).unwrap();
+    let before = pixel(&frame(Path::new(&out), 0.5), 320, 160, 90);
+    let after = pixel(&frame(Path::new(&out), 1.2), 320, 160, 90);
+    assert!(before[0] > 220 && before[2] < 25);
+    assert!(after[2] > 220 && after[0] < 25);
+    let audio = pcm(Path::new(&out));
+    assert_eq!(snap.plan.audio[0].stream, Some(2));
+    assert!(tone(&audio, 0.2, 0.8, 880.0) > 0.08);
+    assert!(tone(&audio, 0.2, 0.8, 440.0) < 0.005);
+    // The cut falls between VFR frames. The previous red frame is held until
+    // the first blue source PTS at 2.1s; never pull that future frame to time zero.
+    let range = opts.timeline.as_mut().unwrap();
+    range.start_us = Some(5397_990_000);
+    range.end_us = Some(5398_490_000);
+    let snap = capture(&store, &p.id, &opts).unwrap();
+    let (out, _) = render(&snap, &opts, &AtomicU8::new(0), |_, _, _| {}).unwrap();
+    let held = pixel(&frame(Path::new(&out), 0.04), 320, 160, 90);
+    let next = pixel(&frame(Path::new(&out), 0.16), 320, 160, 90);
+    assert!(
+        held[0] > 220 && held[2] < 25,
+        "VFR cut must hold previous frame: {held:?}"
+    );
+    assert!(
+        next[2] > 220 && next[0] < 25,
+        "VFR blue PTS must arrive on the output clock: {next:?}"
+    );
+    assert!(path.exists());
+}
+
+#[test]
 #[ignore = "Requires FFmpeg/FFprobe; T10 motion/fade/dissolve/wipe, audio crossfade and range parity."]
 fn media_keyframes_fades_transitions_and_ranges() {
     use crate::timeline_effects::{Keyframe, Transition, TransitionKind, VisualEffects};

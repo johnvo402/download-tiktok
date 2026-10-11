@@ -411,4 +411,85 @@ mod tests {
         let undone = apply_layout(&store, &project.id, next, before).unwrap();
         assert!(undone.timeline.unwrap().clips[0].audio.is_none());
     }
+    #[test]
+    fn ninety_minute_layout_recovers_last_valid_snapshot_with_effects_and_source_settings() {
+        let (_dir, store, project, _, _) = crate::video_content::tests::fixture();
+        let before = EditLayout::from_document(project.timeline.as_ref().unwrap());
+        let mut next = before.clone();
+        next.settings.width = 1080;
+        next.settings.height = 1920;
+        next.clips = (0..900)
+            .map(|i| {
+                let mut c = before.clips[i % 2].clone();
+                if i != 0 {
+                    c.id = uuid::Uuid::new_v4().to_string();
+                }
+                c.start_us = i as u64 * 6_000_000;
+                c.source_in_us = 0;
+                c.source_out_us = 4_000_000;
+                c.rate = timeline::Rational {
+                    numerator: 2,
+                    denominator: 3,
+                };
+                c.effects = Some(crate::timeline_effects::VisualEffects {
+                    fade_in_us: 500000,
+                    fade_out_us: 500000,
+                    keyframes: vec![
+                        crate::timeline_effects::Keyframe {
+                            source_us: 0,
+                            x: 0.25,
+                            y: 0.5,
+                            scale_x: 0.5,
+                            scale_y: 0.5,
+                            opacity: 0.5,
+                        },
+                        crate::timeline_effects::Keyframe {
+                            source_us: 4_000_000,
+                            x: 0.75,
+                            y: 0.5,
+                            scale_x: 1.0,
+                            scale_y: 1.0,
+                            opacity: 1.0,
+                        },
+                    ],
+                });
+                c
+            })
+            .collect();
+        let saved = apply_layout(&store, &project.id, before, next.clone()).unwrap();
+        assert_eq!(
+            saved.timeline.as_ref().unwrap().duration_us().unwrap(),
+            5400_000_000
+        );
+        let contents = saved.timeline.as_ref().unwrap().video_contents.clone();
+        let mut later = next.clone();
+        later.clips.last_mut().unwrap().start_us += 6_000_000;
+        apply_layout(&store, &project.id, next.clone(), later).unwrap();
+        let file = store
+            .project_directory(&project.id)
+            .unwrap()
+            .join("project.json");
+        std::fs::write(&file, b"{truncated after app crash").unwrap();
+        let reopened = crate::project_service::ProjectStore::new(
+            store
+                .project_directory(&project.id)
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf(),
+        );
+        let recovered = reopened.get(&project.id).unwrap();
+        assert_eq!(
+            EditLayout::from_document(recovered.timeline.as_ref().unwrap()),
+            next
+        );
+        assert_eq!(recovered.timeline.unwrap().video_contents, contents);
+        assert!(std::fs::read_dir(file.parent().unwrap())
+            .unwrap()
+            .any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("corrupt")));
+    }
 }

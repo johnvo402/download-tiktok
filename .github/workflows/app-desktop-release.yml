@@ -105,6 +105,26 @@ jobs:
         run: New-Item -ItemType Directory -Force -Path app-desktop/src-tauri/resources/ai-worker, app-desktop/src-tauri/resources/downloader-worker | Out-Null
       - name: Run Rust tests
         run: cargo test --locked --manifest-path app-desktop/src-tauri/Cargo.toml --lib
+      - name: Run timeline media acceptance tests
+        run: cargo test --locked --manifest-path app-desktop/src-tauri/Cargo.toml --lib timeline_export::tests::media_ -- --ignored --nocapture
+      - name: Install browser for timeline integration tests
+        working-directory: app-desktop
+        run: |
+          npm install --no-save --package-lock=false playwright@1.62.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node node_modules/playwright/cli.js install chromium
+      - name: Check long timeline UI and resource cleanup
+        working-directory: app-desktop
+        run: npm run test:timeline-ui
+      - name: Upload timeline measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timeline-stability-measurements
+          path: |
+            app-desktop/.release-cache/timeline-stability-ui/*.json
+            app-desktop/.release-cache/timeline-stability-ui/*.png
+          if-no-files-found: ignore
       - name: Install model-free media fixture dependencies
         run: python -m pip install "av==18.1.0" "numpy==2.5.3" "packaging==26.3" "opencv-python-headless==5.0.0.93"
       - name: Run Python worker and cache tests

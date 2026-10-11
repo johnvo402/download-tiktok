@@ -1,5 +1,6 @@
 //! Immutable timeline render plan. Times and audio rules mirror timeline/{time,audio-layout}.ts.
 mod audio;
+mod batches;
 mod graph;
 mod runner;
 #[cfg(test)]
@@ -37,6 +38,7 @@ pub struct AudioRegion {
     pub clip: Clip,
     pub path: PathBuf,
     pub voice: bool,
+    pub stream: Option<u32>,
     pub start: u64,
     pub end: u64,
     pub source_start: u64,
@@ -44,6 +46,7 @@ pub struct AudioRegion {
     pub speech: (u64, u64),
     pub audio: ClipAudio,
 }
+#[derive(Clone)]
 pub struct Plan {
     pub document: TimelineDocument,
     pub options: TimelineExportOptions,
@@ -60,6 +63,41 @@ pub struct Snapshot {
     pub plan: Plan,
     pub directory: tempfile::TempDir,
     pub output_directory: PathBuf,
+    pub journal: Option<(String, PathBuf)>,
+}
+impl Snapshot {
+    pub fn bind_job(
+        &mut self,
+        store: &ProjectStore,
+        project_id: &str,
+        job_id: &str,
+    ) -> Result<(), String> {
+        if uuid::Uuid::parse_str(job_id)
+            .map_err(|e| e.to_string())?
+            .to_string()
+            != job_id
+        {
+            return Err("Job ID không hợp lệ.".into());
+        }
+        let directory = store.data_directory(project_id, &format!("cache/render/{job_id}"))?;
+        self.journal = Some((job_id.into(), directory.clone()));
+        crate::recovery_store::write(
+            &directory.join("timeline-snapshot.json"),
+            &serde_json::to_vec(&serde_json::json!({
+                "directory": self.directory.path().file_name().unwrap().to_string_lossy()
+            }))
+            .map_err(|e| e.to_string())?,
+        )
+    }
+}
+impl Drop for Snapshot {
+    fn drop(&mut self) {
+        if let Some((_, path)) = &self.journal {
+            if crate::project_service::verify_tree_has_no_reparse_points(path).is_ok() {
+                let _ = fs::remove_dir_all(path);
+            }
+        }
+    }
 }
 impl Plan {
     pub fn duration(&self) -> f64 {
@@ -316,6 +354,7 @@ pub fn build(
                     clip: c.clone(),
                     path: PathBuf::from(&asset.relative_path),
                     voice: false,
+                    stream: None,
                     start: c.start_us,
                     end: c.end_us()?,
                     source_start: 0,
@@ -374,6 +413,7 @@ pub fn build(
                 clip: c.clone(),
                 path: v.path.clone().into(),
                 voice: true,
+                stream: None,
                 start: from,
                 end: to,
                 source_start: v.start_us,
@@ -407,15 +447,36 @@ pub fn build(
         })?;
         plan.assets.insert(asset.id.clone(), path);
     }
+    let mut streams = HashMap::new();
     for r in &mut plan.audio {
         if !r.voice && r.start < end && r.end > start {
-            r.path = plan.assets[asset_id(&r.clip).unwrap()].clone();
+            let id = asset_id(&r.clip).unwrap();
+            r.path = plan.assets[id].clone();
+            if plan
+                .document
+                .assets
+                .iter()
+                .find(|a| a.id == id)
+                .is_some_and(|a| a.metadata.audio_streams.len() > 1)
+            {
+                let stream = if let Some(stream) = streams.get(id) {
+                    *stream
+                } else {
+                    let stream = crate::video_service::preferred_audio_stream(&r.path)?;
+                    streams.insert(id.to_string(), stream);
+                    stream
+                };
+                r.stream = Some(stream);
+            }
         }
     }
     if store.get(project_id)?.timeline.as_ref() != Some(&plan.document) {
         return Err(
             "Timeline vừa thay đổi khi chuẩn bị export. Hãy xuất lại để lấy snapshot mới.".into(),
         );
+    }
+    if plan.visual_clips().len() > batches::MAX_LAYERS {
+        batches::windows(&plan)?;
     }
     Ok(plan)
 }
@@ -480,6 +541,7 @@ pub fn capture(
         plan,
         directory,
         output_directory,
+        journal: None,
     })
 }
 /// Caption intervals include empty states and join overlapping segments like preview.

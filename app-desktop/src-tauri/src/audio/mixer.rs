@@ -81,6 +81,15 @@ impl Decoder {
         channels: u16,
         window: Option<(f64, f64)>,
     ) -> Result<Self, String> {
+        Self::timed_stream(path, start, channels, window, None)
+    }
+    pub(crate) fn timed_stream(
+        path: &Path,
+        start: f64,
+        channels: u16,
+        window: Option<(f64, f64)>,
+        stream: Option<u32>,
+    ) -> Result<Self, String> {
         let mut command = crate::runtime_paths::ffmpeg_command()?;
         command
             .args(["-v", "error", "-nostdin", "-threads", "1", "-ss"])
@@ -91,7 +100,13 @@ impl Decoder {
         command
             .arg("-i")
             .arg(path)
-            .args(["-map", "0:a:0", "-vn", "-ar", "48000", "-ac"])
+            .arg("-map")
+            .arg(
+                stream
+                    .map(|i| format!("0:{i}"))
+                    .unwrap_or_else(|| "0:a:0".into()),
+            )
+            .args(["-vn", "-ar", "48000", "-ac"])
             .arg(channels.to_string());
         if let Some((_, mut rate)) = window {
             if !rate.is_finite() || rate <= 0.0 {

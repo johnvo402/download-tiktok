@@ -3,9 +3,10 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import { Eye, EyeOff, Lock, Unlock, Volume2, VolumeX, Play, Pause, ZoomIn, ZoomOut, Scan, SkipBack, StepBack, StepForward, ChevronUp, ChevronDown } from 'lucide-solid';
 import { currentProject } from '../../app/project-state';
 import { clipDurationUs, clipEndUs, timelineDurationUs } from './time';
-import { activeClips, fitScale, formatTimelineTime, limitScale, orderedTracks, RULER_HEIGHT, rulerTicks, TRACK_HEIGHT, timeAtPixel, visibleClips, zoomAt } from './navigation';
+import { fitScale, formatTimelineTime, limitScale, orderedTracks, RULER_HEIGHT, rulerTicks, TRACK_HEIGHT, timeAtPixel, zoomAt } from './navigation';
 import { seekTimeline, selectTimelineClip, selectedTimelineIds, setTimelineSelection, setTimelinePlaying, setTimelineScrubbing, stepTimeline, timelinePlaying, timelinePreviewActive, timelineCursorUs, timelineTimeUs, toggleTrack, trackSaving } from './timeline-state';
-import { timelineCache } from './timeline-cache';
+import { clearTimelineCache, timelineCache } from './timeline-cache';
+import { IntervalIndex } from './interval-index';
 import type { TimelineClip, TimelineDocument } from './types';
 import { applyEdit, editClosure, editLayout, snapMove, snapTime, type EditCommand, type EditLayout } from './edit-commands';
 import { canPaste, commitEdit, copyTimelineClips, editBusy, editNotice, pasteTimelineClips, redoTimeline, setSnapEnabled, snapEnabled, undoTimeline } from './edit-state';
@@ -87,10 +88,14 @@ export default function TimelineEditor() {
   const usableWidth = () => Math.max(1, size().width - gutter());
   const duration = createMemo(() => timelineDurationUs(currentProject()?.timeline.clips ?? []));
   const tracks = createMemo(() => currentProject() ? orderedTracks(currentProject()!.timeline) : []);
-  const playingIds = createMemo(() => new Set(timelinePreviewActive() && currentProject() ? activeClips(currentProject()!.timeline, timelineTimeUs()).map(c => c.id) : []));
+  const clipIndex = createMemo(() => new IntervalIndex(currentProject()?.timeline.clips ?? [], c => c.startUs, clipEndUs));
+  const enabledTracks = createMemo(() => new Set(tracks().filter(t => t.enabled).map(t => t.id)));
+  const playingIds = createMemo(() => new Set(timelinePreviewActive() ? clipIndex().at(timelineTimeUs()).filter(c => enabledTracks().has(c.trackId)).map(c => c.id) : []));
+  createEffect(on(() => currentProject()?.id, id => { if (id) onCleanup(() => clearTimelineCache(id)); }));
   const canvasWidth = () => Math.max(usableWidth(), Math.max(duration(), timelineDurationUs(draft()?.next?.clips ?? [])) / 1e6 * scale() + 24);
   const fromUs = () => timeAtPixel(scroll().x, scale(), duration());
   const toUs = () => timeAtPixel(scroll().x + usableWidth(), scale(), duration()) + 1;
+  const visible = createMemo(() => clipIndex().intersect(fromUs(), toUs()));
   const indexedRows = createMemo(() => tracks().map((track, index) => ({ track, index })));
   const rows = () => indexedRows().filter(row => (row.index + 1) * TRACK_HEIGHT > scroll().y - TRACK_HEIGHT && row.index * TRACK_HEIGHT < scroll().y + size().height);
   const ticks = () => rulerTicks(scale(), scroll().x, usableWidth()).filter(time => time <= duration());
@@ -257,7 +262,7 @@ export default function TimelineEditor() {
             <button type="button" disabled={trackSaving()} aria-label={`${row.track.enabled ? 'Tắt' : 'Bật'} ${row.track.name}`} aria-pressed={row.track.enabled} onClick={() => void toggleTrack(row.track.id, 'enabled')}>{row.track.enabled ? <Eye size={13} /> : <EyeOff size={13} />}</button>
             <Show when={row.track.kind !== 'subtitle'}><button type="button" disabled={trackSaving()} aria-label={`${row.track.muted ? 'Bật tiếng' : 'Tắt tiếng'} ${row.track.name}`} aria-pressed={row.track.muted} onClick={() => void toggleTrack(row.track.id, 'muted')}>{row.track.muted ? <VolumeX size={13} /> : <Volume2 size={13} />}</button><button type="button" disabled={trackSaving()} aria-label={`Solo ${row.track.name}`} aria-pressed={row.track.solo} onClick={() => void toggleTrack(row.track.id, 'solo')}>S</button></Show>
           </div></div>
-          <div class="timeline-track-clips" style={{ left: `${gutter()}px` }}><For each={visibleClips(currentProject()?.timeline.clips ?? [], row.track.id, fromUs(), toUs())}>{clip => <ClipVisual clip={clip} scale={scale()} fromUs={fromUs()} toUs={toUs()} playing={playingIds().has(clip.id)} startDrag={startDrag} suppressClick={() => ignoreClick} context={(c, x, y, restore) => void openContext(c, x, y, restore)} />}</For></div>
+          <div class="timeline-track-clips" style={{ left: `${gutter()}px` }}><For each={visible().filter(c => c.trackId === row.track.id)}>{clip => <ClipVisual clip={clip} scale={scale()} fromUs={fromUs()} toUs={toUs()} playing={playingIds().has(clip.id)} startDrag={startDrag} suppressClick={() => ignoreClick} context={(c, x, y, restore) => void openContext(c, x, y, restore)} />}</For></div>
         </div>}</For>
         <For each={draft()?.next?.clips.filter(c => draft()?.ids.has(c.id)) ?? []}>{clip => <div class="timeline-drag-ghost" style={{ left: `${gutter() + clip.startUs / 1e6 * scale()}px`, top: `${RULER_HEIGHT + tracks().findIndex(t => t.id === clip.trackId) * TRACK_HEIGHT + 8}px`, width: `${clipDurationUs(clip) / 1e6 * scale()}px` }} />}</For>
         <div class="timeline-playhead" style={{ left: `${gutter() + displayTime() / 1e6 * scale()}px` }} aria-hidden="true"><span /></div>

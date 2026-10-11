@@ -11,7 +11,7 @@ import { refreshSourceMedia, sourceMedia, watchSourceMedia } from './source-medi
 import TimelineAudio from './TimelineAudio';
 import { clipTypography, layerTransform, sourceGeometry } from './visual-layout';
 import { previewClip, previewSettings } from './visual-state';
-import { nativeSceneClip, residentClips, timelineScene } from './scene-plan';
+import { nativeSceneClip, playbackIndex, residentClips, timelineScene } from './scene-plan';
 import { PreviewClock, PreviewPlayers } from './preview-clock';
 import { mediaPlayer } from './media-player';
 import { createTimelineNativePreview } from './native-preview';
@@ -85,7 +85,8 @@ export default function TimelinePreview() {
   const aspect = () => (previewSettings()?.width ?? 16) / (previewSettings()?.height ?? 9);
   const width = () => Math.min(bounds().width, bounds().height * aspect());
   const height = () => Math.min(bounds().height, bounds().width / aspect());
-  const resident = createMemo(() => currentProject() ? residentClips(currentProject()!.timeline, timelineTimeUs()) : []);
+  const residentIndex = createMemo(() => currentProject() ? playbackIndex(currentProject()!.timeline) : undefined);
+  const resident = createMemo(() => currentProject() ? residentClips(currentProject()!.timeline, timelineTimeUs(), residentIndex()) : []);
   watchSourceMedia(() => [...resident(), ...(currentProject()?.timeline.clips.filter(c => selectedTimelineIds().includes(c.id)) ?? [])].flatMap(c => contentId(c) ? [contentId(c)!] : []));
   const sources = createMemo(() => new Map((currentProject()?.timeline.videoContents ?? []).flatMap(v => {
     const data = sourceMedia(v.id)?.data; return data ? [[v.id, data] as const] : [];
@@ -95,7 +96,8 @@ export default function TimelinePreview() {
     const doc = currentProject()?.timeline;
     return doc ? { ...doc, settings: previewSettings() ?? doc.settings, clips: doc.clips.map(previewClip) } : undefined;
   });
-  const scene = createMemo(() => visualDocument() ? timelineScene(visualDocument()!, sources(), timelineTimeUs(), regions()) : undefined);
+  const index = createMemo(() => visualDocument() ? playbackIndex(visualDocument()!, regions()) : undefined);
+  const scene = createMemo(() => visualDocument() ? timelineScene(visualDocument()!, sources(), timelineTimeUs(), regions(), index()) : undefined);
   const clips = createMemo(() => resident().filter(c => ['video', 'image', 'text', 'subtitles'].includes(c.content.kind)));
   const activeIds = () => new Set(scene()?.layers.map(l => l.clip.id) ?? []);
   const nativeClip = createMemo(() => {

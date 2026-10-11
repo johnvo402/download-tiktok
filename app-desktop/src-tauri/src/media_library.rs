@@ -626,8 +626,14 @@ pub fn cache(
             })
         }
         "waveform" if !source.metadata.audio_streams.is_empty() => {
-            let relative = format!("cache/assets/{asset_id}/{checksum}/waveform-v1.json");
-            let path = folder.join("waveform-v1.json");
+            let multiple = source.metadata.audio_streams.len() > 1;
+            let filename = if multiple {
+                "waveform-default-v2.json"
+            } else {
+                "waveform-v1.json"
+            };
+            let relative = format!("cache/assets/{asset_id}/{checksum}/{filename}");
+            let path = folder.join(filename);
             if resolve_project_file(store, id, &relative, "cache").is_ok()
                 && fs::metadata(&path).is_ok_and(|m| m.len() <= 128 * 1024)
             {
@@ -656,11 +662,16 @@ pub fn cache(
                 .ok_or("Nguồn không có thời lượng audio.")?;
             crate::disk_space::require(&folder, duration / 1_000_000 * 16_000 + 4096)?;
             let temp = tempfile::NamedTempFile::new_in(&folder).map_err(|e| e.to_string())?;
+            let stream = if multiple {
+                format!("0:{}", crate::video_service::preferred_audio_stream(&input)?)
+            } else {
+                "0:a:0".into()
+            };
             let output = crate::runtime_paths::ffmpeg_command()?
                 .args(["-y", "-v", "error", "-i"])
-                .arg(input)
+                .arg(&input)
                 .args([
-                    "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "8000", "-f", "s16le",
+                    "-map", &stream, "-vn", "-ac", "1", "-ar", "8000", "-f", "s16le",
                 ])
                 .arg(temp.path())
                 .output_contained(std::time::Duration::from_secs(90))

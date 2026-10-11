@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run --environment=node",
-    "test:ci": "node --test scripts/tests/*.node-test.mjs"
+    "test:ci": "node --test scripts/tests/*.node-test.mjs",
+    "test:timeline-ui": "node scripts/timeline-stability-ui.mjs"
   },
   "dependencies": {
     "@solidjs/router": "^0.15.3",

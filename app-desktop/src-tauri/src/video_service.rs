@@ -388,6 +388,24 @@ pub fn resolve_project_file(
     Ok(canonical_file)
 }
 
+/// Chromium/WebView's source audio uses the first default track, otherwise the first audio track.
+pub(crate) fn preferred_audio_stream(path: &Path) -> Result<u32, String> {
+    let output = crate::runtime_paths::ffprobe_command()?
+        .args(["-v", "error", "-select_streams", "a", "-show_streams", "-of", "json"])
+        .arg(path)
+        .output_contained(std::time::Duration::from_secs(30))
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err("Không đọc được audio stream của nguồn.".into());
+    }
+    let probe: ProbeOutput = serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
+    probe.streams.iter()
+        .find(|s| s.disposition.get("default") == Some(&1))
+        .or_else(|| probe.streams.first())
+        .map(|s| s.index)
+        .ok_or_else(|| "Nguồn không có audio stream.".into())
+}
+
 pub fn probe_video(path: &Path, file_size: u64) -> Result<ProbeMetadata, String> {
     let output = crate::runtime_paths::ffprobe_command()?
         .args([

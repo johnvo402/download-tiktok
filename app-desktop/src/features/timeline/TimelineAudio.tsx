@@ -7,18 +7,20 @@ import { timelineTimeUs } from './timeline-state';
 import { PREFETCH_US } from './scene-plan';
 import { mediaPlayer } from './media-player';
 import type { PreviewPlayers } from './preview-clock';
+import { IntervalIndex } from './interval-index';
 
 /** Existing files stream into one gain/compressor graph. The shared preview
  * transport gates all nodes together and immediately mutes old seeks. */
 export default function TimelineAudio(props: { players: PreviewPlayers; regions: AudioRegion[]; fail(id: string, error: string): void }) {
   let context: AudioContext | undefined, output: DynamicsCompressorNode | undefined;
   const regions = () => props.regions;
+  const index = createMemo(() => {
+    const doc = currentProject()?.timeline;
+    return new IntervalIndex(regions().filter(r => doc && regionAudible(r, doc)), r => r.startUs, r => r.endUs);
+  });
   const resident = createMemo(() => {
-    const doc = currentProject()?.timeline, time = timelineTimeUs();
-    const audible = regions().filter(r => doc && regionAudible(r, doc));
-    const active = audible.filter(r => r.startUs <= time && r.endUs > time);
-    const next = audible.filter(r => r.startUs > time && r.startUs <= time + PREFETCH_US).sort((a, b) => a.startUs - b.startUs).slice(0, 8);
-    return [...active, ...next];
+    const time = timelineTimeUs();
+    return [...index().at(time), ...index().upcoming(time, time + PREFETCH_US, 8)];
   });
   const ids = createMemo(() => resident().map(r => r.id));
   function graph(media: HTMLAudioElement) {

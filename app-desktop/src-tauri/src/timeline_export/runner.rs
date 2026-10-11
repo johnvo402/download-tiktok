@@ -1,4 +1,4 @@
-use super::{audio, graph, Snapshot};
+use super::{audio, batches, Snapshot};
 use crate::{
     hardware_acceleration::{self, EncodingProfile, VideoEncoder},
     render_service::{JOB_CANCELLED, JOB_COMMITTED, JOB_RUNNING},
@@ -48,23 +48,39 @@ pub fn render(
         None,
         "Đang dựng các lớp của snapshot timeline…".into(),
     );
-    let graph = graph::build(
+    let graph = batches::build(
         plan,
+        options,
         snapshot.directory.path(),
         master.as_deref(),
         &cancelled,
+        |p, message| progress(0.08 + p * 0.84, None, message),
     )?;
     if cancelled() {
         return Err("Đã hủy export.".into());
     }
     let filter = snapshot.directory.path().join("filtergraph.txt");
     fs::write(&filter, &graph.filters).map_err(|e| e.to_string())?;
+    let prefix = snapshot
+        .journal
+        .as_ref()
+        .map(|(id, _)| format!(".avl-render-{id}-"))
+        .unwrap_or_else(|| ".avl-timeline-".into());
     let temp = tempfile::Builder::new()
-        .prefix(".avl-timeline-")
+        .prefix(&prefix)
         .suffix(".partial.mp4")
         .tempfile_in(&snapshot.output_directory)
         .map_err(|e| format!("Không tạo được file export tạm: {e}"))?
         .into_temp_path();
+    if let Some((id, directory)) = &snapshot.journal {
+        crate::recovery_store::write(
+            &directory.join("temporary-output.json"),
+            &serde_json::to_vec(
+                &serde_json::json!({"jobId":id,"outputPath":temp.to_string_lossy()}),
+            )
+            .map_err(|e| e.to_string())?,
+        )?;
+    }
     let candidates = hardware_acceleration::fallback_candidates(
         options.video_codec,
         options.encoder,
@@ -87,29 +103,43 @@ pub fn render(
         for args in &graph.inputs {
             cmd.args(args);
         }
-        cmd.arg("-filter_complex_script")
-            .arg(&filter)
-            .args(["-map", "[vout]"]);
+        if graph.copy_video {
+            cmd.args(["-map", "0:v:0"]);
+        } else {
+            cmd.arg("-filter_complex_script")
+                .arg(&filter)
+                .args(["-map", "[vout]"]);
+        }
         if graph.audio {
             cmd.args([
-                "-map", "[aout]", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+                "-map",
+                if graph.copy_video { "1:a:0" } else { "[aout]" },
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-ar",
+                "48000",
             ]);
         } else {
             cmd.arg("-an");
         }
-        cmd.args(hardware_acceleration::encoder_arguments(
-            options.video_codec,
-            backend,
-            &options.quality,
-            options.video_bitrate_kbps,
-            EncodingProfile::Export,
-        )?);
-        cmd.args(["-pix_fmt", "yuv420p", "-r"])
-            .arg(format!(
+        if graph.copy_video {
+            cmd.args(["-c:v", "copy"]);
+        } else {
+            cmd.args(hardware_acceleration::encoder_arguments(
+                options.video_codec,
+                backend,
+                &options.quality,
+                options.video_bitrate_kbps,
+                EncodingProfile::Export,
+            )?);
+            cmd.args(["-pix_fmt", "yuv420p", "-r"]).arg(format!(
                 "{}/{}",
                 plan.options.frame_rate.numerator, plan.options.frame_rate.denominator
-            ))
-            .arg("-t")
+            ));
+        }
+        cmd.arg("-t")
             .arg(format!("{duration:.9}"))
             .args(["-movflags", "+faststart", "-progress", "pipe:1", "-nostats"])
             .arg(&temp)
@@ -183,7 +213,11 @@ pub fn render(
                         "speed" => speed = value.trim_end_matches('x').parse().ok(),
                         "progress" if emit.elapsed() >= Duration::from_millis(250) => {
                             progress(
-                                0.08 + (at / duration).clamp(0.0, 0.99) * 0.92,
+                                if graph.copy_video {
+                                    0.92 + (at / duration).clamp(0.0, 0.99) * 0.075
+                                } else {
+                                    0.08 + (at / duration).clamp(0.0, 0.99) * 0.915
+                                },
                                 speed,
                                 format!("Đang xuất timeline · {}", backend.label()),
                             );

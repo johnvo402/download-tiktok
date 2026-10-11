@@ -1,10 +1,25 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MediaCache } from '../../app/services/media-service';
 const mock = vi.hoisted(() => ({ requests: [] as Array<{ assetId: string; resolve: (cache: MediaCache) => void }> }));
 vi.mock('../../app/services/media-service', () => ({ mediaService: { cache: (_project: string, assetId: string) => new Promise<MediaCache>(resolve => mock.requests.push({ assetId, resolve })) } }));
-import { timelineCache } from './timeline-cache';
+import { clearTimelineCache, timelineCache } from './timeline-cache';
 const empty: MediaCache = { thumbnailPath: null, waveform: null };
+beforeEach(async () => { await Promise.resolve(); await Promise.resolve(); mock.requests.length = 0; });
 describe('visible timeline cache requests', () => {
+  it('closing a project drops queued work and cached results without reviving a reopened request', async () => {
+    const offset = mock.requests.length;
+    const a = timelineCache('closing', 'a', null, 'thumbnail'), b = timelineCache('closing', 'b', null, 'thumbnail');
+    const queued = timelineCache('closing', 'queued', null, 'thumbnail'), result = queued.promise.catch(() => 'cancelled');
+    clearTimelineCache('closing');
+    expect(await result).toBe('cancelled');
+    const reopened = timelineCache('closing', 'a', null, 'thumbnail');
+    expect(reopened.promise).not.toBe(a.promise);
+    mock.requests[offset]!.resolve(empty); mock.requests[offset + 1]!.resolve(empty);
+    await Promise.all([a.promise, b.promise]);
+    await vi.waitFor(() => expect(mock.requests).toHaveLength(offset + 3));
+    mock.requests[offset + 2]!.resolve(empty); await reopened.promise;
+    a.release(); b.release(); queued.release(); reopened.release(); clearTimelineCache('closing');
+  });
   it('deduplicates sources, limits decoding to two and cancels offscreen queued work', async () => {
     const a = timelineCache('cache-test', 'a', 'hash', 'thumbnail');
     const duplicate = timelineCache('cache-test', 'a', 'hash', 'thumbnail');

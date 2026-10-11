@@ -1,4 +1,4 @@
-import { createSignal } from 'solid-js';
+import { createEffect, createRoot, createSignal, on } from 'solid-js';
 import { currentProject, setCurrentProject, setNotice, setProjectSaveState } from '../../app/project-state';
 import { flushOtherSaves, registerSaveTask } from '../../app/save-guard';
 import { flushAllVisualSettings } from '../overlays/overlay-state';
@@ -21,6 +21,15 @@ export const canRedo = () => history().redo.length > 0 && !editBusy();
 export const undoLabel = () => history().undo.at(-1)?.label;
 export const redoLabel = () => history().redo.at(-1)?.label;
 const [clipboard, setClipboard] = createSignal<{ projectId: string; clips: TimelineClip[] }>();
+// Layout snapshots can be large. Closing/switching a project ends its in-memory
+// history; changing workspace tabs keeps it because the project ID is unchanged.
+createRoot(() => createEffect(on(() => currentProject()?.id, (id, previous) => {
+  if (previous && previous !== id) {
+    histories.delete(previous);
+    if (clipboard()?.projectId === previous) setClipboard(undefined);
+    setVersion(v => v + 1);
+  }
+})));
 export const canPaste = () => clipboard()?.projectId === currentProject()?.id && !!clipboard()?.clips.length;
 export function copyTimelineClips() {
   const project = currentProject(); if (!project) return;

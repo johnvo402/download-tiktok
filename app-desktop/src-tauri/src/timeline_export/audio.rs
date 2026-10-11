@@ -201,15 +201,25 @@ pub fn render(
                 } else {
                     super::asset_id(&r.clip)
                         .and_then(|id| plan.document.assets.iter().find(|a| a.id == id))
-                        .and_then(|a| a.metadata.audio_streams.first())
+                        .and_then(|a| {
+                            if let Some(stream) = r.stream {
+                                a.metadata
+                                    .audio_streams
+                                    .iter()
+                                    .find(|s| s.stream_index == stream)
+                            } else {
+                                a.metadata.audio_streams.first()
+                            }
+                        })
                         .is_some_and(|s| s.channels == Some(1))
                 };
                 readers[i] = Some(Reader {
-                    decoder: Decoder::timed(
+                    decoder: Decoder::timed_stream(
                         &r.path,
                         source,
                         2,
                         Some((seconds(r.end.min(plan.end) - start) * r.speed, r.speed)),
+                        r.stream,
                     )?,
                     samples: VecDeque::new(),
                     // Web Audio duplicates mono into both speakers; swresample's center
@@ -278,6 +288,7 @@ mod tests {
             clip: clip.clone(),
             path: PathBuf::new(),
             voice: false,
+            stream: None,
             start: 0,
             end: 4_000_000,
             source_start: 0,

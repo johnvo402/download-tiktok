@@ -180,7 +180,7 @@ pub fn start_export(
     // Resolve and validate all immutable project inputs before a background job is registered.
     resolve_export_directory(&store, &project_id, options.output_directory.as_deref())?;
     validate_export_options(&options)?;
-    let snapshot = if options.timeline.is_some() {
+    let mut snapshot = if options.timeline.is_some() {
         Some(crate::timeline_export::capture(&store, &project_id, &options)?)
     } else {
         None
@@ -192,6 +192,7 @@ pub fn start_export(
         (spec.output.encoder, spec.duration, spec.subtitle.warnings)
     };
     let id = Uuid::new_v4().to_string();
+    if let Some(snapshot) = &mut snapshot { snapshot.bind_job(&store, &project_id, &id)?; }
     crate::job_service::register_job(
         &app,
         id.clone(),
