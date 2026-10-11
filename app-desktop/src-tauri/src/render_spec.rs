@@ -60,6 +60,9 @@ pub struct TextOverlayRenderSpec {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportOptions {
+    /// Absent for legacy single-source/batch exports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<crate::timeline_export::TimelineExportOptions>,
     #[serde(default = "default_quality")]
     pub quality: String,
     #[serde(default)]
@@ -118,6 +121,7 @@ fn default_output_file_name() -> String {
 impl Default for ExportOptions {
     fn default() -> Self {
         Self {
+            timeline: None,
             quality: default_quality(),
             video_codec: VideoCodec::default(),
             encoder: VideoEncoder::default(),

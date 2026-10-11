@@ -1,6 +1,6 @@
 # Kế hoạch timeline nhiều lớp trong phần Dịch
 
-Trạng thái: T01–T08 hoàn tất; T09–T11 chưa triển khai. Cập nhật: 2026-10-11.
+Trạng thái: T01–T09 hoàn tất; T10–T11 chưa triển khai. Cập nhật: 2026-10-12.
 
 ## Mục tiêu và bố cục
 
@@ -126,9 +126,13 @@ Hoàn tất khi: phát và seek qua A/B ổn định, không lẫn frame/tiếng
 
 ## T09 — Export toàn bộ timeline
 
+**Hoàn tất ngày 2026-10-12.** Export mặc định timeline, có toàn bộ/vùng thời gian/các clip chọn, độ phân giải, FPS phân số, H.264/HEVC và encoder. Plan chụp document/transcript/TTS cùng media trước khi đăng ký job; chỉnh dự án/relink/tạo lại giọng không đổi snapshot đang chạy. FFmpeg ghép nhiều nguồn/lớp/transform/caption/khoảng trống; audio trộn theo khối nhỏ với trim/rate/voice speed/mute/solo/fade/ducking. Có validation nguồn thiếu, tiến độ/hủy, kiểm tra file cuối và commit không ghi đè. Chi tiết và phạm vi xử lý vùng nguồn tại [TIMELINE_EXPORT.md](TIMELINE_EXPORT.md).
+
 Xây kế hoạch render từ snapshot dự án: nhiều nguồn, in/out, tốc độ, thứ tự lớp, khoảng trống, canvas, caption và audio mix. Chuẩn hóa nguồn khác codec/FPS/kích thước; xuất toàn bộ hoặc vùng được chọn; cấu hình codec, độ phân giải và FPS. Hỗ trợ tiến độ, hủy, kiểm tra file cuối và lỗi tài nguyên thiếu.
 
 Hoàn tất khi: file xuất khớp các mốc hình/tiếng/phụ đề trong preview; hủy không để file cuối hỏng; thay đổi project trong lúc export không làm lệch snapshot. Phụ thuộc T06–T08.
+
+Đã kiểm tra: build frontend; 87 test frontend; 227 test Rust qua, 26 test tùy chọn bỏ qua trong suite thường. Hai test media export chạy riêng với H.264/HEVC, nhiều FPS/kích thước, trim/rate/ảnh xoay/caption/tiếng đánh dấu/khoảng trống và xuất vùng HEVC 29.97 FPS; xác minh pixel/PCM, snapshot sau sửa/xóa nguồn/tạo lại WAV, voice speed/duck/fade, hủy và nguồn thiếu. UI kiểm tra default timeline, vùng/resolution/FPS/payload, tiến độ/hủy/khóa thiết lập, lỗi vùng và chế độ export nguồn cũ. Compositor giữ phạm vi preview T06/T08: OCR/blur/STTN là hướng dẫn nguồn; xử lý vùng thực hiện qua export nguồn trước khi dựng. Đo dự án dài và phục hồi sau app crash tiếp tục ở T11.
 
 ## T10 — Công cụ dựng bổ sung
 

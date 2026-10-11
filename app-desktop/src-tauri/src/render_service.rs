@@ -34,9 +34,9 @@ struct RenderJobEntry {
     state: Arc<AtomicU8>,
 }
 
-const JOB_RUNNING: u8 = 0;
-const JOB_COMMITTED: u8 = 1;
-const JOB_CANCELLED: u8 = 2;
+pub(crate) const JOB_RUNNING: u8 = 0;
+pub(crate) const JOB_COMMITTED: u8 = 1;
+pub(crate) const JOB_CANCELLED: u8 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,6 +105,9 @@ pub fn validate_export(
 ) -> Result<ExportValidation, String> {
     validate_export_options(options)?;
     resolve_export_directory(store, project_id, options.output_directory.as_deref())?;
+    if options.timeline.is_some() {
+        return Ok(crate::timeline_export::build(store, project_id, options)?.validation());
+    }
     let (project, transcript, spec, dubbing_count, expected_audio) =
         prepare(store, project_id, options)?;
     let normal = spec
@@ -169,14 +172,25 @@ pub fn start_export(
         return Err("Đã có export đang chạy trong dự án này.".into());
     }
     let project = store.get(&project_id)?;
-    if project.source.video_path.is_none() {
+    if options.timeline.is_none() && project.source.video_path.is_none() {
         return Err("Dự án chưa có video nguồn.".into());
     }
     // prepare_export_patches validates OCR/STTN only for missing work.
     // Completed immutable patches remain exportable after model removal.
     // Resolve and validate all immutable project inputs before a background job is registered.
     resolve_export_directory(&store, &project_id, options.output_directory.as_deref())?;
-    let (_, _, spec, _, _) = prepare(&store, &project_id, &options)?;
+    validate_export_options(&options)?;
+    let snapshot = if options.timeline.is_some() {
+        Some(crate::timeline_export::capture(&store, &project_id, &options)?)
+    } else {
+        None
+    };
+    let (encoder, duration, warnings) = if let Some(snapshot) = &snapshot {
+        (snapshot.plan.encoder, snapshot.plan.duration(), Vec::new())
+    } else {
+        let (_, _, spec, _, _) = prepare(&store, &project_id, &options)?;
+        (spec.output.encoder, spec.duration, spec.subtitle.warnings)
+    };
     let id = Uuid::new_v4().to_string();
     crate::job_service::register_job(
         &app,
@@ -184,7 +198,14 @@ pub fn start_export(
         project_id.clone(),
         project.name.clone(),
         "export",
-        if spec.output.encoder.hardware() || crate::render::RenderBackend::configured()? != crate::render::RenderBackend::Legacy { &["gpu", "cpu", "ffmpeg", "disk"] } else { &["cpu", "ffmpeg", "disk"] },
+        if encoder.hardware()
+            || snapshot.is_none()
+                && crate::render::RenderBackend::configured()? != crate::render::RenderBackend::Legacy
+        {
+            &["gpu", "cpu", "ffmpeg", "disk"]
+        } else {
+            &["cpu", "ffmpeg", "disk"]
+        },
         serde_json::to_value(&options).ok(),
     )?;
     let state = Arc::new(AtomicU8::new(JOB_RUNNING));
@@ -206,11 +227,11 @@ pub fn start_export(
             "queued",
             0.0,
             0.0,
-            spec.duration,
+            duration,
             None,
             None,
             "Đang chuẩn bị tiến trình export…".into(),
-            spec.subtitle.warnings,
+            warnings,
         ),
     );
     let jobs = jobs.clone();
@@ -247,7 +268,7 @@ pub fn start_export(
                     }
                 }
             };
-            let _ = run_export(app, &store, &project_id, &job_id, options, state);
+            let _ = run_export(app, &store, &project_id, &job_id, options, state, snapshot);
             drop(ffmpeg_permit);
             drop(cpu_permit);
             if let Ok(mut active) = jobs.inner.lock() {
@@ -296,7 +317,7 @@ pub fn export_directory(store: &ProjectStore, project_id: &str) -> Result<PathBu
     store.data_directory(project_id,"exports")
 }
 
-fn resolve_export_directory(
+pub(crate) fn resolve_export_directory(
     store: &ProjectStore,
     project_id: &str,
     requested_directory: Option<&str>,
@@ -527,13 +548,33 @@ fn run_export(
     job_id: &str,
     options: ExportOptions,
     state: Arc<AtomicU8>,
+    snapshot: Option<crate::timeline_export::Snapshot>,
 ) -> Result<(), String> {
     let started = Instant::now();
-    let warnings = prepare(store, project_id, &options)
-        .map(|(_, _, spec, _, _)| spec.subtitle.warnings)
-        .unwrap_or_default();
+    let warnings = if snapshot.is_some() {
+        Vec::new()
+    } else {
+        prepare(store, project_id, &options)
+            .map(|(_, _, spec, _, _)| spec.subtitle.warnings)
+            .unwrap_or_default()
+    };
     let result = if state.load(Ordering::SeqCst) == JOB_CANCELLED {
         Err("Đã hủy export trước khi bắt đầu mã hóa.".into())
+    } else if let Some(snapshot) = &snapshot {
+        crate::timeline_export::render(snapshot, &options, &state, |progress, speed, message| {
+            emit_event(&app, event(
+                project_id,
+                job_id,
+                "running",
+                progress,
+                started.elapsed().as_secs_f64(),
+                snapshot.plan.duration(),
+                speed,
+                None,
+                message,
+                Vec::new(),
+            ));
+        })
     } else {
         run_export_inner(&app, store, project_id, job_id, &options, &state, started)
     };
@@ -551,11 +592,13 @@ fn run_export(
         ),
         Err(error) => (None, error.clone()),
     };
-    let total = store
-        .get(project_id)
-        .ok()
-        .and_then(|p| p.source.duration)
-        .unwrap_or(0.0);
+    let total = snapshot.as_ref().map(|s| s.plan.duration()).unwrap_or_else(|| {
+        store
+            .get(project_id)
+            .ok()
+            .and_then(|p| p.source.duration)
+            .unwrap_or(0.0)
+    });
     let history_entry = ExportHistoryEntry {
         id: job_id.into(),
         project_id: project_id.into(),
@@ -1405,7 +1448,7 @@ fn filter_path(path: &Path) -> String {
         .replace(']', "\\]")
 }
 
-fn unique_output_path(directory: &Path, name: &str) -> PathBuf {
+pub(crate) fn unique_output_path(directory: &Path, name: &str) -> PathBuf {
     let base = name
         .trim()
         .strip_suffix_case_insensitive(".mp4")
@@ -1461,7 +1504,7 @@ impl StripSuffixCaseInsensitive for str {
     }
 }
 
-fn validate_output(
+pub(crate) fn validate_output(
     path: &Path,
     width: u32,
     height: u32,
@@ -1473,7 +1516,7 @@ fn validate_output(
         || fs::metadata(path)
             .map(|metadata| metadata.len())
             .unwrap_or(0)
-            < 2048
+            == 0
     {
         return Err("FFmpeg không tạo được video đầu ra hợp lệ.".into());
     }

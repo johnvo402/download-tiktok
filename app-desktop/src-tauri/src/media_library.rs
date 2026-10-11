@@ -79,7 +79,7 @@ fn kind_for_extension(extension: &str) -> Result<MediaKind, String> {
         Err("Định dạng chưa được hỗ trợ. Chọn video, ảnh PNG/JPG/WEBP hoặc audio.".into())
     }
 }
-fn owned_file(
+pub(crate) fn owned_file(
     store: &ProjectStore,
     project: &Project,
     source: &MediaAsset,

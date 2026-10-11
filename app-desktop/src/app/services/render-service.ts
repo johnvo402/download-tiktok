@@ -4,6 +4,7 @@ import type { ExportCapabilities, VideoCodec, VideoEncoder } from './video-encod
 export type { ExportCapabilities } from './video-encoding';
 
 export interface ExportOptions {
+  timeline?: TimelineExportOptions;
   quality: 'fast' | 'balanced' | 'high';
   videoCodec: VideoCodec;
   encoder?: VideoEncoder;
@@ -29,6 +30,14 @@ export interface SubtitleLayoutWarning {
   start: number;
   end: number;
   message: string;
+}
+
+export interface TimelineExportOptions {
+  width: number;
+  height: number;
+  frameRate: { numerator: number; denominator: number };
+  startUs: number | null;
+  endUs: number | null;
 }
 
 export interface ExportValidation {

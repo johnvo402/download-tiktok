@@ -1,6 +1,6 @@
 //! Deterministic CPU mixer. Preview and offline export call the same next_block.
-use crate::worker_manager::WorkerCommandExt;
 use super::{signal, timeline::Voice, ProcessingSettings, BLOCK, RATE};
+use crate::worker_manager::WorkerCommandExt;
 use std::{
     collections::HashMap,
     io::Read,
@@ -65,7 +65,7 @@ impl Mix {
     }
 }
 /// Streaming FFmpeg decoder with a bounded two-block queue. Drop kills and joins it.
-struct Decoder {
+pub(crate) struct Decoder {
     rx: Option<mpsc::Receiver<Result<Vec<f32>, String>>>,
     child: Arc<Mutex<crate::worker_manager::ManagedWorker>>,
     reader: Option<thread::JoinHandle<()>>,
@@ -73,13 +73,43 @@ struct Decoder {
 }
 impl Decoder {
     fn new(path: &Path, start: f64, channels: u16) -> Result<Self, String> {
-        let mut child = crate::runtime_paths::ffmpeg_command()?
-            .args(["-v", "error", "-nostdin", "-ss"])
-            .arg(format!("{start:.9}"))
+        Self::timed(path, start, channels, None)
+    }
+    pub(crate) fn timed(
+        path: &Path,
+        start: f64,
+        channels: u16,
+        window: Option<(f64, f64)>,
+    ) -> Result<Self, String> {
+        let mut command = crate::runtime_paths::ffmpeg_command()?;
+        command
+            .args(["-v", "error", "-nostdin", "-threads", "1", "-ss"])
+            .arg(format!("{start:.9}"));
+        if let Some((duration, _)) = window {
+            command.arg("-t").arg(format!("{duration:.9}"));
+        }
+        command
             .arg("-i")
             .arg(path)
             .args(["-map", "0:a:0", "-vn", "-ar", "48000", "-ac"])
-            .arg(channels.to_string())
+            .arg(channels.to_string());
+        if let Some((_, mut rate)) = window {
+            if !rate.is_finite() || rate <= 0.0 {
+                return Err("Tốc độ audio không hợp lệ.".into());
+            }
+            let mut filters = Vec::new();
+            while rate > 2.0 {
+                filters.push("atempo=2".to_string());
+                rate /= 2.0;
+            }
+            while rate < 0.5 {
+                filters.push("atempo=0.5".to_string());
+                rate *= 2.0;
+            }
+            filters.push(format!("atempo={rate:.12}"));
+            command.arg("-af").arg(filters.join(","));
+        }
+        let mut child = command
             .args(["-f", "f32le", "pipe:1"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -168,7 +198,7 @@ impl Decoder {
             stopped,
         })
     }
-    fn block(&mut self, cancelled: &impl Fn() -> bool) -> Result<Vec<f32>, String> {
+    pub(crate) fn block(&mut self, cancelled: &impl Fn() -> bool) -> Result<Vec<f32>, String> {
         let began = std::time::Instant::now();
         loop {
             if began.elapsed() > Duration::from_secs(15) {
