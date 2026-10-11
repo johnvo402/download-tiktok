@@ -168,7 +168,7 @@ $signature = Get-AuthenticodeSignature -LiteralPath $Artifact
 @{
     version = $Package.version
     channel = $(if ($Package.version -match '-rc') { 'rc' } elseif ($Package.version -match '-') { 'beta' } else { 'stable' })
-    projectSchemaVersion = 11
+    projectSchemaVersion = 12
     transcriptSchemaVersion = 1
     workerProtocolVersion = 2
     optionalRuntimeAbi = 7

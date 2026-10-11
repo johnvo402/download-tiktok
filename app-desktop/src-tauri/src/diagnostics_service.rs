@@ -60,7 +60,7 @@ pub fn export(app: &AppHandle, destination: &str) -> Result<String, String> {
         metadata: json!({
             "sessionId":crate::app_session::id(),
             "session":app.try_state::<crate::app_session::AppSession>().map(|s|s.status.clone()),
-            "projectSchemaVersion":11,"transcriptSchemaVersion":1,
+            "projectSchemaVersion":crate::project_service::SCHEMA_VERSION,"transcriptSchemaVersion":1,
             "workerProtocolVersion":crate::worker_manager::PROTOCOL_VERSION,
             "optionalRuntimeVersion":crate::runtime_registry::registry().runtime_version,
             "recentErrors":recent_errors,"encoders":encoders,

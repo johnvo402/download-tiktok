@@ -117,6 +117,16 @@ pub fn read<T>(
     maximum_schema: Option<u32>,
     validate: impl Fn(&[u8]) -> Result<T, String>,
 ) -> Result<T, String> {
+    read_with_schema_guard(path, maximum_schema, |_| false, validate)
+}
+
+/// Additional versioned subdocuments must also fail closed on future schemas.
+pub fn read_with_schema_guard<T>(
+    path: &Path,
+    maximum_schema: Option<u32>,
+    unsupported_schema: impl Fn(&[u8]) -> bool,
+    validate: impl Fn(&[u8]) -> Result<T, String>,
+) -> Result<T, String> {
     let _guard = IO_LOCK
         .lock()
         .map_err(|_| "Không thể khóa dữ liệu để đọc.")?;
@@ -137,7 +147,7 @@ pub fn read<T>(
     };
     if original
         .as_deref()
-        .is_some_and(|bytes| newer_schema(bytes, maximum_schema))
+        .is_some_and(|bytes| newer_schema(bytes, maximum_schema) || unsupported_schema(bytes))
     {
         return Err("Dữ liệu được tạo bằng phiên bản ứng dụng mới hơn. Hãy cập nhật JC AI để mở; tệp được giữ nguyên.".into());
     }
@@ -153,7 +163,7 @@ pub fn read<T>(
         let Ok(bytes) = read_regular(&backup_path(path, index)) else {
             continue;
         };
-        if newer_schema(&bytes, maximum_schema) {
+        if newer_schema(&bytes, maximum_schema) || unsupported_schema(&bytes) {
             continue;
         }
         let Ok(value) = validate(&bytes) else {

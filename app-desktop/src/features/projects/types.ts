@@ -1,5 +1,8 @@
+import type { TimelineDocument } from '../timeline/types';
+
 export interface Project {
   schemaVersion: number;
+  timeline: TimelineDocument;
   id: string;
   name: string;
   createdAt: string;

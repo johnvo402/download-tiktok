@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use uuid::Uuid;
 
-const SCHEMA_VERSION: u32 = 11;
+pub const SCHEMA_VERSION: u32 = 12;
 const LEGACY_TTS_VOICE: &str = "Ngọc Lan";
 const DEFAULT_TTS_VOICE: &str = "Ngọc Huyền";
 const MAX_NAME_CHARS: usize = 100;
@@ -28,6 +28,8 @@ static PROJECT_LOCATION_LOCK: Mutex<()> = Mutex::new(());
 #[serde(rename_all = "camelCase")]
 pub struct Project {
     pub schema_version: u32,
+    #[serde(default)]
+    pub timeline: Option<crate::timeline::TimelineDocument>,
     pub id: String,
     pub name: String,
     pub created_at: String,
@@ -544,6 +546,7 @@ impl ProjectStore {
         let now = now_iso();
         let project = Project {
             schema_version: SCHEMA_VERSION,
+            timeline: Some(crate::timeline::TimelineDocument::default()),
             id: id.clone(),
             name,
             created_at: now.clone(),
@@ -725,6 +728,7 @@ impl ProjectStore {
         validate_project_name(&project.name)?;
         let mut updated = project.clone();
         updated.schema_version = SCHEMA_VERSION;
+        crate::timeline::reconcile_legacy(&mut updated, &existing)?;
         updated.updated_at = now_iso_after(&existing.updated_at);
         write_project_file(&path.join("project.json"), &updated)?;
         Ok(updated)
@@ -958,7 +962,11 @@ fn canonical_project_id(id: &str) -> Result<String, String> {
 
 fn read_project(project_dir: &Path, expected_id: &str) -> Result<Project, String> {
     let metadata = project_dir.join("project.json");
-    let mut project = crate::recovery_store::read(&metadata, Some(SCHEMA_VERSION), |bytes| {
+    let mut project = crate::recovery_store::read_with_schema_guard(&metadata, Some(SCHEMA_VERSION), |bytes| {
+        serde_json::from_slice::<serde_json::Value>(bytes).ok()
+            .and_then(|document| document.get("timeline")?.get("schemaVersion")?.as_u64())
+            .is_some_and(|version| version > 1)
+    }, |bytes| {
         let mut project: Project = serde_json::from_slice(bytes)
             .map_err(|_| "File project.json bị lỗi hoặc không hợp lệ.".to_string())?;
         if project.id != expected_id { return Err("Mã dự án trong project.json không khớp với thư mục.".into()); }
@@ -984,7 +992,7 @@ fn read_project(project_dir: &Path, expected_id: &str) -> Result<Project, String
 }
 
 /// Versioned migrations are additive. Serde defaults supply fields introduced
-/// in versions 2–11; only the v5 built-in voice alias changes an existing value.
+/// in versions 2–11; v12 adds a timeline preserving the single-video content.
 fn migrate_project(project: &mut Project) -> Result<(),String> {
     if !(1..=SCHEMA_VERSION).contains(&project.schema_version) {return Err("Phiên bản dữ liệu dự án chưa được hỗ trợ.".into());}
     while project.schema_version < SCHEMA_VERSION {
@@ -992,6 +1000,7 @@ fn migrate_project(project: &mut Project) -> Result<(),String> {
         if next==5 && project.dubbing.voice_profile_id.is_none() && project.dubbing.voice.as_deref()==Some(LEGACY_TTS_VOICE) {
             project.dubbing.voice=Some(DEFAULT_TTS_VOICE.to_string());
         }
+        if next == 12 { project.timeline = Some(crate::timeline::TimelineDocument::from_legacy(project)?); }
         project.schema_version=next;
     }
     validate_project_document(project)
@@ -1028,6 +1037,9 @@ fn write_project_file(path: &Path, project: &Project) -> Result<(), String> {
 }
 
 fn validate_project_document(project: &Project) -> Result<(), String> {
+    if project.schema_version >= 12 {
+        crate::timeline::validate(project.timeline.as_ref().ok_or("Thiếu dữ liệu timeline của dự án.")?)?;
+    }
     validate_project_name(&project.name)?;
     validate_translation_custom_prompt(&project.translation.custom_prompt)?;
     validate_translation_context(&project.translation.context)?;
@@ -1044,8 +1056,14 @@ fn validate_project_document(project: &Project) -> Result<(), String> {
     crate::overlays_service::validate_blur_regions(&project.blur_regions)?;
     crate::overlays_service::validate_text_overlays(&project.text_overlays)?;
     crate::overlays_service::validate_subtitle_settings(&project.subtitle)?;
+    validate_logo_documents(&project.logos)?;
+    // Missing assets remain editable. Presence is checked when that feature is used.
+    Ok(())
+}
+
+pub(crate) fn validate_logo_documents(logos: &[ProjectLogo]) -> Result<(), String> {
     let mut ids = HashSet::new();
-    for logo in &project.logos {
+    for logo in logos {
         validate_relative_asset(&logo.relative_path, "media/overlays")?;
         if !ids.insert(&logo.id) || Uuid::parse_str(&logo.id).is_err()
             || !logo.opacity.is_finite() || !(0.0..=1.0).contains(&logo.opacity)
@@ -1055,7 +1073,6 @@ fn validate_project_document(project: &Project) -> Result<(), String> {
             return Err("Thuộc tính logo không hợp lệ.".into());
         }
     }
-    // Missing assets remain editable. Presence is checked when that feature is used.
     Ok(())
 }
 
@@ -1286,7 +1303,7 @@ mod tests {
         fs::write(&path, serde_json::to_vec_pretty(&old).unwrap()).unwrap();
 
         let upgraded = store.get(&project.id).unwrap();
-        assert_eq!(upgraded.schema_version, 11);
+        assert_eq!(upgraded.schema_version, SCHEMA_VERSION);
         assert_eq!(upgraded.id, project.id);
         assert_eq!(upgraded.name, "Legacy project");
         assert_eq!(upgraded.source.video_path, None);
@@ -1295,7 +1312,7 @@ mod tests {
         assert_eq!(upgraded.subtitle.alignment, "center");
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(persisted["schemaVersion"], 11);
+        assert_eq!(persisted["schemaVersion"], SCHEMA_VERSION);
         assert_eq!(
             fs::read_dir(path.parent().unwrap())
                 .unwrap()
@@ -1328,10 +1345,10 @@ mod tests {
         assert_eq!(loaded.blur_regions[0].edge_blend, 0);
         assert_eq!(loaded.blur_regions[0].pixel_noise, 0);
         assert_eq!(loaded.blur_regions[0].text_removal_scan_fps, 2);
-        assert_eq!(loaded.schema_version, 11);
+        assert_eq!(loaded.schema_version, SCHEMA_VERSION);
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(file).unwrap()).unwrap();
-        assert_eq!(persisted["schemaVersion"], 11);
+        assert_eq!(persisted["schemaVersion"], SCHEMA_VERSION);
         assert_eq!(persisted["blurRegions"][0]["role"], "generic");
     }
 

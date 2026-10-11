@@ -860,6 +860,7 @@ mod tests {
     fn project(width: u32, height: u32, rect: (f64, f64, f64, f64)) -> Project {
         Project {
             schema_version: 3,
+            timeline: None,
             id: "p".into(),
             name: "Test".into(),
             created_at: String::new(),

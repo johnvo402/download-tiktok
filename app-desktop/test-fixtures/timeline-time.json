@@ -1,0 +1,34 @@
+{
+  "cases": [
+    {
+      "name": "trimmed video moved after another video",
+      "startUs": 60000000, "sourceInUs": 10000000, "sourceOutUs": 30000000,
+      "rate": { "numerator": 1, "denominator": 1 }, "durationUs": 20000000, "endUs": 80000000,
+      "timelinePoints": [[59999999, null], [60000000, 10000000], [65000000, 15000000], [80000000, null]],
+      "sourcePoints": [[9999999, null], [10000000, 60000000], [15000000, 65000000], [30000000, null]],
+      "intervals": [[0, 15000000, [60000000, 65000000]], [30000000, 40000000, null], [20000000, 35000000, [70000000, 80000000]]]
+    },
+    {
+      "name": "fractional speed and VFR source timestamps",
+      "startUs": 7000000, "sourceInUs": 2000000, "sourceOutUs": 7000000,
+      "rate": { "numerator": 3, "denominator": 2 }, "durationUs": 3333334, "endUs": 10333334,
+      "timelinePoints": [[8000000, 3500000], [10333333, 6999999], [10333334, null]],
+      "sourcePoints": [[2500000, 7333333], [5000000, 9000000]],
+      "intervals": [[2500000, 6500000, [7333333, 10000000]], [4000000, 4000000, null]]
+    },
+    {
+      "name": "microsecond slow motion and rounding at clip boundary",
+      "startUs": 2, "sourceInUs": 11, "sourceOutUs": 14,
+      "rate": { "numerator": 1, "denominator": 3 }, "durationUs": 9, "endUs": 11,
+      "timelinePoints": [[3, 11], [10, 13], [11, null]],
+      "sourcePoints": [[12, 5]], "intervals": [[12, 14, [5, 11]]]
+    },
+    {
+      "name": "safe integers above 32-bit timestamps",
+      "startUs": 9007199254740981, "sourceInUs": 0, "sourceOutUs": 5,
+      "rate": { "numerator": 1, "denominator": 1 }, "durationUs": 5, "endUs": 9007199254740986,
+      "timelinePoints": [[9007199254740983, 2]], "sourcePoints": [[2, 9007199254740983]],
+      "intervals": [[0, 5, [9007199254740981, 9007199254740986]]]
+    }
+  ]
+}
