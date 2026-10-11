@@ -4,9 +4,11 @@ import { flushPendingSaves } from '../../app/save-guard';
 import { flushAllVisualSettings } from '../overlays/overlay-state';
 import { mediaService } from '../../app/services/media-service';
 import { selectVideoClip, selectedClipId, selectedVideoId } from './video-context-state';
-import { clipEndUs, sourceToTimelineUs, timelineDurationUs } from './time';
+import { clipEndUs, frameStepUs, sourceToTimelineUs, timelineDurationUs } from './time';
 
-const [transport, setTransport] = createSignal({ projectId: '', timeUs: 0, active: false, playing: false });
+const [transport, setTransport] = createSignal({ projectId: '', timeUs: 0, active: false, playing: false, revision: 0, scrubbing: false });
+export const [timelineBuffering, setTimelineBuffering] = createSignal(false);
+export const timelineSeekRevision = () => transport().revision;
 const [selection, setSelection] = createSignal<{ projectId: string; clipId: string; editingClipId?: string }>();
 const [multiSelection, setMultiSelection] = createSignal<{ projectId: string; ids: string[] }>();
 export const selectedTimelineIds = () => {
@@ -22,6 +24,7 @@ export function setTimelineSelection(ids: string[]) {
 export const timelineTimeUs = () => transport().projectId === currentProject()?.id ? transport().timeUs : 0;
 export const timelinePreviewActive = () => transport().projectId === currentProject()?.id && transport().active;
 export const timelinePlaying = () => timelinePreviewActive() && transport().playing;
+export const timelineAdvancing = () => timelinePlaying() && !transport().scrubbing;
 export function timelineCursorUs(): number {
   if (timelinePreviewActive()) return timelineTimeUs();
   const doc = currentProject()?.timeline;
@@ -33,13 +36,20 @@ export const timelineSelectedClipId = () => selection()?.projectId === currentPr
 export function seekTimeline(timeUs: number) {
   if (!Number.isFinite(timeUs)) return;
   const project = currentProject(); if (!project) return;
-  setTransport({ projectId: project.id, timeUs: Math.round(Math.max(0, Math.min(timelineDurationUs(project.timeline.clips), timeUs))), active: true, playing: timelinePlaying() });
+  setTransport(value => ({ ...value, projectId: project.id, timeUs: Math.round(Math.max(0, Math.min(timelineDurationUs(project.timeline.clips), timeUs))), active: true, playing: timelinePlaying(), revision: value.revision + 1 }));
+}
+/** Clock publication is distinct from a user seek; it never invalidates decoders. */
+export function publishTimelineTime(timeUs: number) { setTransport(value => value.timeUs === timeUs ? value : { ...value, timeUs }); }
+export function setTimelineScrubbing(scrubbing: boolean) { setTransport(value => value.scrubbing === scrubbing ? value : { ...value, scrubbing }); }
+export function stepTimeline(direction: -1 | 1) {
+  const rate = currentProject()?.timeline.settings.frameRate; if (!rate) return;
+  setTimelinePlaying(false); seekTimeline(frameStepUs(timelineCursorUs(), rate, direction));
 }
 export function setTimelinePlaying(playing: boolean) {
   if (playing && !timelinePreviewActive()) seekTimeline(timelineTimeUs());
-  setTransport(value => ({ ...value, playing }));
+  setTransport(value => value.playing === playing ? value : { ...value, playing });
 }
-export function reviewSelectedSource() { setTransport(value => ({ ...value, active: false, playing: false })); }
+export function reviewSelectedSource() { setTransport(value => ({ ...value, active: false, playing: false, scrubbing: false })); setTimelineBuffering(false); }
 export async function selectTimelineClip(clipId: string, additive = false) {
   const project = currentProject(); const clip = project?.timeline.clips.find(c => c.id === clipId);
   if (!project || !clip) return;

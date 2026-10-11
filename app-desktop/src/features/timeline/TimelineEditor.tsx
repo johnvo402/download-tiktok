@@ -1,10 +1,10 @@
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { convertFileSrc } from '@tauri-apps/api/core';
-import { Eye, EyeOff, Lock, Unlock, Volume2, VolumeX, Play, Pause, ZoomIn, ZoomOut, Scan, SkipBack, ChevronUp, ChevronDown } from 'lucide-solid';
+import { Eye, EyeOff, Lock, Unlock, Volume2, VolumeX, Play, Pause, ZoomIn, ZoomOut, Scan, SkipBack, StepBack, StepForward, ChevronUp, ChevronDown } from 'lucide-solid';
 import { currentProject } from '../../app/project-state';
 import { clipDurationUs, clipEndUs, timelineDurationUs } from './time';
 import { activeClips, fitScale, formatTimelineTime, limitScale, orderedTracks, RULER_HEIGHT, rulerTicks, TRACK_HEIGHT, timeAtPixel, visibleClips, zoomAt } from './navigation';
-import { seekTimeline, selectTimelineClip, selectedTimelineIds, setTimelineSelection, setTimelinePlaying, timelinePlaying, timelinePreviewActive, timelineCursorUs, timelineTimeUs, toggleTrack, trackSaving } from './timeline-state';
+import { seekTimeline, selectTimelineClip, selectedTimelineIds, setTimelineSelection, setTimelinePlaying, setTimelineScrubbing, stepTimeline, timelinePlaying, timelinePreviewActive, timelineCursorUs, timelineTimeUs, toggleTrack, trackSaving } from './timeline-state';
 import { timelineCache } from './timeline-cache';
 import type { TimelineClip, TimelineDocument } from './types';
 import { applyEdit, editClosure, editLayout, snapMove, snapTime, type EditCommand, type EditLayout } from './edit-commands';
@@ -136,7 +136,10 @@ export default function TimelineEditor() {
     if (!editBusy() && ['Delete', 'Backspace'].includes(event.key)) void commitEdit({ kind: 'delete', ids: selectedTimelineIds(), ripple: event.shiftKey }, event.shiftKey ? 'Xóa ripple' : 'Xóa clip');
     if (!editBusy() && event.key.toLowerCase() === 's') void commitEdit({ kind: 'split', ids: selectedTimelineIds(), atUs: displayTime() }, 'Cắt clip');
     if (['ArrowLeft', 'ArrowRight', 'Home', 'End', ' ', '+', '=', '-', 'f', 'F'].includes(event.key)) event.preventDefault();
-    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') seekTimeline(displayTime() + (event.key === 'ArrowLeft' ? -1 : 1) * (event.shiftKey ? 10e6 : 1e6));
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      const direction = event.key === 'ArrowLeft' ? -1 : 1;
+      if (event.shiftKey) seekTimeline(displayTime() + direction * 1e6); else stepTimeline(direction);
+    }
     if (event.key === 'Home') seekTimeline(0);
     if (event.key === 'End') seekTimeline(duration());
     if (event.key === ' ') { if (!timelinePreviewActive()) seekTimeline(displayTime()); if (displayTime() >= duration()) seekTimeline(0); setTimelinePlaying(!timelinePlaying()); }
@@ -208,6 +211,7 @@ export default function TimelineEditor() {
     }
   }
   onCleanup(cancelDrag);
+  onCleanup(() => setTimelineScrubbing(false));
   let resizing: { y: number; height: number } | undefined;
   return <section class="timeline-editor" aria-label="Timeline dự án" onKeyDown={keys} style={{ height: `${height()}px` }}>
     <div class="timeline-height-handle" role="separator" aria-label="Đổi chiều cao timeline" aria-orientation="horizontal" aria-valuemin={160} aria-valuemax={Math.round(maxHeight())} aria-valuenow={Math.round(Math.min(height(), maxHeight()))} tabindex="0"
@@ -218,7 +222,9 @@ export default function TimelineEditor() {
     <div class="timeline-toolbar">
       <strong>Timeline</strong>
       <button type="button" aria-label="Về đầu timeline" title="Về đầu (Home)" onClick={() => seekTimeline(0)}><SkipBack size={15} /></button>
+      <button type="button" aria-label="Lùi một khung hình" title="Lùi một frame (←); Shift + ← lùi 1 giây" disabled={!duration()} onClick={() => stepTimeline(-1)}><StepBack size={15} /></button>
       <button type="button" aria-label={timelinePlaying() ? 'Tạm dừng timeline' : 'Phát timeline'} title="Phát / tạm dừng (Space)" disabled={!duration()} onClick={() => { if (!timelinePreviewActive()) seekTimeline(displayTime()); if (displayTime() >= duration()) seekTimeline(0); setTimelinePlaying(!timelinePlaying()); }}>{timelinePlaying() ? <Pause size={16} /> : <Play size={16} />}</button>
+      <button type="button" aria-label="Tiến một khung hình" title="Tiến một frame (→); Shift + → tiến 1 giây" disabled={!duration()} onClick={() => stepTimeline(1)}><StepForward size={15} /></button>
       <span class="timeline-time">{formatTimelineTime(displayTime(), true)} <small>/ {formatTimelineTime(duration())}</small></span>
       <span class="timeline-toolbar-spacer" />
       <button type="button" aria-label="Thu nhỏ timeline" title="Thu nhỏ (-), Ctrl + cuộn quanh con trỏ" onClick={() => zoom(1 / 1.5)}><ZoomOut size={16} /></button>
@@ -229,8 +235,8 @@ export default function TimelineEditor() {
     <Show when={draft()}><p class="timeline-drag-status" role="status" classList={{ invalid: !!draft()?.error }}>{draft()?.error ?? (snapEnabled() ? 'Thả để lưu · Alt bỏ hít mép · Esc hủy' : 'Thả để lưu · Esc hủy')}</p></Show>
     <div class="timeline-viewport" ref={viewport} tabindex="0" aria-label="Thước thời gian và các track; dùng mũi tên để seek, Space để phát" onScroll={() => setScroll({ x: viewport.scrollLeft, y: viewport.scrollTop })}
       onWheel={event => { if (event.ctrlKey || event.metaKey) { event.preventDefault(); zoom(Math.exp(-event.deltaY * .003), Math.max(0, event.clientX - viewport.getBoundingClientRect().left - gutter())); } else if (event.shiftKey) { event.preventDefault(); viewport.scrollLeft += event.deltaY || event.deltaX; } }}
-      onPointerDown={event => { if (event.button !== 0 || editBusy() || event.clientX - viewport.getBoundingClientRect().left < gutter()) return; event.preventDefault(); viewport.focus(); setScrubbing(true); viewport.setPointerCapture(event.pointerId); seekTimeline(pointerTime(event)); }}
-      onPointerMove={event => { if (scrubbing()) seekTimeline(pointerTime(event)); }} onPointerUp={() => { setScrubbing(false); }} onPointerCancel={() => { setScrubbing(false); cancelDrag(); }}>
+      onPointerDown={event => { if (event.button !== 0 || editBusy() || event.clientX - viewport.getBoundingClientRect().left < gutter()) return; event.preventDefault(); viewport.focus(); setScrubbing(true); setTimelineScrubbing(true); viewport.setPointerCapture(event.pointerId); seekTimeline(pointerTime(event)); }}
+      onPointerMove={event => { if (scrubbing()) seekTimeline(pointerTime(event)); }} onPointerUp={() => { setScrubbing(false); setTimelineScrubbing(false); }} onPointerCancel={() => { setScrubbing(false); setTimelineScrubbing(false); cancelDrag(); }}>
       <div class="timeline-canvas" style={{ width: `${gutter() + canvasWidth()}px`, height: `${RULER_HEIGHT + Math.max(1, tracks().length) * TRACK_HEIGHT}px` }}>
         <div class="timeline-ruler"><span class="timeline-ruler-label" style={{ width: `${gutter()}px` }}>Lớp / nguồn</span><For each={ticks()}>{time => <span class="timeline-tick" style={{ left: `${gutter() + time / 1e6 * scale()}px` }}>{formatTimelineTime(time, time < 1e6 || scale() > 100)}</span>}</For></div>
         <For each={rows()}>{row => <div class="timeline-track" classList={{ disabled: !row.track.enabled, locked: row.track.locked }} style={{ top: `${RULER_HEIGHT + row.index * TRACK_HEIGHT}px` }}>

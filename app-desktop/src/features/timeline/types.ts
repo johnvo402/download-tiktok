@@ -67,6 +67,6 @@ export interface TimelineDocument {
   schemaVersion: 1;
   settings: TimelineSettings;
   assets: MediaAsset[]; videoContents: VideoContent[]; tracks: TimelineTrack[]; clips: TimelineClip[];
-  /** Default for commands without a content ID; legacy preview/export until T08–T09. */
+  /** Default for commands without a content ID; preserves legacy source editor/export. */
   legacyBinding: { assetId: string; videoContentId: string; clipId: string | null } | null;
 }

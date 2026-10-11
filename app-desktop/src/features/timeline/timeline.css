@@ -102,3 +102,6 @@
 .timeline-preview-gap,.timeline-preview-text { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#b6c1d3; }
 .timeline-source-error { position:relative; margin:4px; padding:6px; background:#401e25; color:#ffbfc4; font-size:12px; z-index:2; }
 @media (max-width:540px) { .timeline-toolbar { padding-left:6px; padding-right:6px; gap:2px; } .timeline-toolbar strong { display:none; } .timeline-track-header { padding-left:6px; padding-right:6px; } }
+.timeline-preview-status { margin: 0; padding: 6px 10px; font-size: 12px; color: var(--text-muted); background: var(--surface-2); }
+.timeline-preview-status.error { color: var(--danger, #f87171); }
+.timeline-preview-status button { margin-left: 8px; min-height: 28px; }

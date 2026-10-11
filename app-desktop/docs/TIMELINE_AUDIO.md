@@ -23,7 +23,7 @@ Frontend chia sẻ manifest theo project/content/revision, trạng thái transcr
 
 `audio-layout.ts` cung cấp kế hoạch interval, offset, tốc độ và gain thuần để tiếp tục dùng trong T08–T09. Preview hiện phát media trực tiếp qua HTML audio và Web Audio: mỗi region có gain, trộn chung qua compressor giới hạn tín hiệu lớn (threshold −1dB, knee 0, ratio 20, attack 3ms, release 100ms). Video compositor luôn mute để không phát tiếng gốc hai lần. WAV được giới hạn tại mép clip, dùng source offset khi trim/split; không tạo MP4 hoặc file mix cho preview. Pause/seek/đóng preview ngừng và giải phóng audio nodes/context.
 
-T08 tiếp tục hoàn thiện clock/prefetch, đồng bộ decoder khi phát qua biên và native/GPU preview. T09 tiếp tục export toàn timeline theo cùng quy tắc. Preview nguồn cũ vẫn dùng cho xử lý riêng từng video; export cũ chưa trở thành export nhiều clip trong T07.
+T08 đã bổ sung clock chung, prefetch, seek có revision và native/GPU preview; xem [TIMELINE_PREVIEW.md](TIMELINE_PREVIEW.md). T09 tiếp tục export toàn timeline theo cùng quy tắc. Preview nguồn cũ vẫn dùng cho xử lý riêng từng video; export cũ chưa trở thành export nhiều clip trong T07–T08.
 
 ## Kiểm tra
 

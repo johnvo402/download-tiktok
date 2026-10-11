@@ -49,6 +49,12 @@ impl Clock {
             let _ = self.seek(time);
         }
     }
+    /// A timeline session only samples its external clock; it never advances
+    /// independently between samples or inherits the source editor's audio clock.
+    pub fn external_anchor(&mut self, time: f64) -> Result<(), String> {
+        self.set_playing(false);
+        self.seek(time)
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -67,5 +73,16 @@ mod tests {
         assert_eq!(c.now(), 42.123);
         assert!(c.seek(f64::NAN).is_err());
         assert!(c.seek(5000.0).is_err());
+    }
+    #[test]
+    fn external_timeline_samples_are_exact_and_never_advance_while_buffering() {
+        let mut clock = Clock::new(6000.0);
+        clock.set_playing(true);
+        for time in [5400.123456, 2.0, 2.033367, 0.0, 5999.9] {
+            clock.external_anchor(time).unwrap();
+            assert!(!clock.playing);
+            assert_eq!(clock.at(clock.anchor + std::time::Duration::from_secs(60)), time);
+        }
+        assert!(clock.external_anchor(f64::NAN).is_err());
     }
 }

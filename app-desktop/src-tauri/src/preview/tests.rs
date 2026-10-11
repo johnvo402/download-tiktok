@@ -342,6 +342,60 @@ fn create_desktop_preview_fixture() {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "Real hidden GPU surface: multi-source external clock, seek cancellation and software fallback"]
+fn timeline_hidden_gpu_sources_and_seek_generations() {
+    use windows::{core::w, Win32::{Foundation::*, UI::WindowsAndMessaging::*}};
+    struct Host(HWND);
+    impl Drop for Host { fn drop(&mut self) { unsafe { let _ = DestroyWindow(self.0); } } }
+    let host = Host(unsafe { CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"), w!("Timeline GPU validation"), WS_OVERLAPPEDWINDOW,
+        0, 0, 640, 360, None, None, None, None).unwrap() });
+    let dir = tempfile::tempdir().unwrap();
+    let (_store, mut project, transcript) = fixture(dir.path().join("projects"));
+    project.subtitle.enabled = false; project.blur_regions.clear(); project.logos.clear(); project.text_overlays.clear();
+    let gpu = crate::render::device::create_with_power(None, wgpu::PowerPreference::LowPower).unwrap();
+    let scene = scene::build(&project, &transcript).unwrap();
+    let mut renderer = Renderer::with_device(scene, &[], gpu.clone()).unwrap();
+    let bounds = Bounds { x: 0., y: 0., width: 640., height: 360., dpr: 1., visible: false };
+    let surface = surface::NativeSurface::new(host.0.0 as isize, Box::new(|_,_,_,_| {}), Box::new(|_| {}), &gpu, bounds).unwrap();
+    let mut paths = Vec::new();
+    for color in ["blue", "red"] {
+        let path = dir.path().join(format!("{color}-nguồn.mp4"));
+        let input = format!("color=c={color}:s=640x360:r=30:d=3");
+        assert!(crate::runtime_paths::ffmpeg_command().unwrap().args(["-v","error","-f","lavfi","-i", &input,"-c:v","libx264","-preset","ultrafast","-g","30","-y"]).arg(&path).status().unwrap().success());
+        paths.push(path);
+    }
+    for path in &paths {
+        let mut source = crate::media_gpu::windows::preview::PreviewSource::new(&renderer, path).unwrap();
+        for time in [2.0, 0.333333, 1.5, 0.0] {
+            source.seek(time).unwrap();
+            // A superseded selection returns no frame, so the old source cannot present.
+            assert!(source.select(time, || true).unwrap().is_none());
+            let pts = source.select(time, || false).unwrap().unwrap();
+            assert!(pts <= time + 0.001 && time - pts < 0.035, "{time} -> {pts}");
+            let frame = surface.surface.get_current_texture().unwrap();
+            source.present(&mut renderer, &frame.texture.create_view(&Default::default()), (640,360), pts, None).unwrap();
+            frame.present();
+        }
+        drop(source);
+    }
+    let mut software = software::SoftwareSource::new(&paths[1], (640,360)).unwrap();
+    software.seek(1.5).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let pts = loop {
+        if let Some(pts) = software.select(1.5, || false).unwrap() { break pts; }
+        assert!(std::time::Instant::now() < deadline, "software decode stalled");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    assert!((pts - 1.5).abs() < 0.035);
+    software.upload(&renderer).unwrap();
+    let frame = surface.surface.get_current_texture().unwrap();
+    renderer.present_preview(None, &frame.texture.create_view(&Default::default()), (640,360), pts, None).unwrap(); frame.present();
+    println!("Hidden timeline GPU A/B seek/cancel/software fallback: {}", renderer.adapter_name());
+    drop(software); drop(surface); drop(renderer); drop(host);
+}
+
+#[cfg(windows)]
+#[test]
 #[ignore = "Real DX12 native swapchain, decoder seek/resize and fixed-resource exercise"]
 fn native_surface_play_seek_resize_and_long_source() {
     use windows::{

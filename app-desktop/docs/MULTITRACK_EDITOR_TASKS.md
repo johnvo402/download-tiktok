@@ -1,6 +1,6 @@
 # Kế hoạch timeline nhiều lớp trong phần Dịch
 
-Trạng thái: T01–T06 hoàn tất; T07–T11 chưa triển khai. Cập nhật: 2026-10-11.
+Trạng thái: T01–T08 hoàn tất; T09–T11 chưa triển khai. Cập nhật: 2026-10-11.
 
 ## Mục tiêu và bố cục
 
@@ -114,11 +114,15 @@ Hoàn tất khi: A/B đổi vị trí, trim hoặc split thì tiếng và chữ 
 
 ## T08 — Preview nhiều nguồn và đồng bộ phát
 
+**Hoàn tất ngày 2026-10-11.** Một đồng hồ timeline dùng mốc thời gian tuyệt đối, dừng chờ tất cả nguồn đang cần và đi qua từng biên clip/audio. Seek có revision riêng, ngắt tiếng và ẩn frame cũ ngay, chỉ nhận frame của seek mới; kéo playhead giữ ý định phát và tiếp tục khi thả. Có bước tiến/lùi theo FPS đầu ra, prefetch 1.5 giây với giới hạn player, giải phóng media/gain/context khi rời clip hoặc đóng preview. Scene plan chung mô tả lớp, thời gian nguồn, caption và audio để T09 xây export từ snapshot.
+
 Một đồng hồ timeline điều khiển video, audio, subtitle và overlay. Chuyển nguồn ở biên clip, prefetch clip sắp phát, xử lý seek liên tục, frame stepping, khoảng trống và video chồng lớp. Dùng cùng mô tả cảnh với export, quản lý cache và giải phóng decoder/frame/audio cũ khi nguồn đổi.
 
 Tiếp tục hỗ trợ đường preview native/GPU và phương án dự phòng phù hợp. Hủy seek cũ, tránh hiện frame hoặc tiếng của clip trước sau khi người dùng kéo playhead sang nguồn khác.
 
 Hoàn tất khi: phát và seek qua A/B ổn định, không lẫn frame/tiếng/phụ đề; chỉnh ảnh/chữ không tạo video đầu ra. Phụ thuộc T01–T04, tích hợp dần T05–T07.
+
+Đã kiểm tra: build frontend; 85 test frontend; 223 test Rust qua, 24 test tùy chọn bỏ qua trong suite thường. Test GPU tùy chọn mới chạy riêng thành công trên Intel Iris Xe với nguồn A/B thật, surface ẩn, seek/cancel và fallback decoder CPU. UI media thật qua clock chung, prefetch im lặng, biên A/B, clip lặp, khoảng trống, ảnh, hai video chồng lớp, seek liên tục/chờ nguồn, frame stepping, giải phóng player và lỗi/thử lại; hồi quy T05–T07 qua. Protocol native kiểm tra mở theo clip A/B, bỏ phiên mở/seek cũ, lấy mẫu clock timeline và chuyển compositor khi có caption/dialog. Native tăng tốc cảnh một video nguyên khung; cảnh nhiều lớp dùng compositor trình duyệt. Chi tiết: [TIMELINE_PREVIEW.md](TIMELINE_PREVIEW.md).
 
 ## T09 — Export toàn bộ timeline
 

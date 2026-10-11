@@ -63,3 +63,10 @@ export function mapSourceInterval(clip: TimelineClip, start: TimeUs, end: TimeUs
 export function timelineDurationUs(clips: TimelineClip[]): TimeUs {
   return clips.reduce((duration, clip) => Math.max(duration, clipEndUs(clip)), 0);
 }
+/** Step to the neighbouring output-frame timestamp, including fractional FPS. */
+export function frameStepUs(timeUs: TimeUs, rate: Rational, direction: -1 | 1): TimeUs {
+  const [n, d] = rational(rate), period = BigInt(TIMEBASE) * d;
+  const index = (integer(timeUs) * n + period / 2n) / period;
+  const next = direction < 0 ? (index > 0n ? index - 1n : 0n) : index + 1n;
+  return safe((next * period + n / 2n) / n);
+}

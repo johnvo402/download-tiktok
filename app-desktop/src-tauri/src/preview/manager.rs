@@ -25,6 +25,7 @@ pub struct Status {
     pub duration: f64,
     pub playing: bool,
     pub frame_pts: f64,
+    pub frame_generation: u64,
     pub renderer: String,
     pub decode: String,
     pub render_ms: f64,
@@ -110,6 +111,7 @@ pub struct Session {
     pub project_id: String,
     pub size: (u32, u32),
     pub range: (f64, f64),
+    pub external_clock: bool,
     pub updates: Mutex<Updates>,
     pub wake: mpsc::SyncSender<()>,
     pub stopped: AtomicBool,
@@ -189,6 +191,7 @@ impl PreviewManager {
         offset: f64,
         end: f64,
         bounds: Bounds,
+        external_clock: bool,
     ) -> Result<String, String> {
         let _operation = self.operation.lock().map_err(|_| "Preview bận.")?;
         self.close_inner(None, None);
@@ -208,6 +211,7 @@ impl PreviewManager {
             owner,
             project_id: project.id.clone(),
             range: (offset, end.min(duration)),
+            external_clock,
             size: (
                 project.source.width.unwrap_or(1),
                 project.source.height.unwrap_or(1),
@@ -224,6 +228,7 @@ impl PreviewManager {
                 duration,
                 playing: false,
                 frame_pts: offset,
+                frame_generation: 0,
                 renderer: String::new(),
                 decode: String::new(),
                 render_ms: 0.0,
@@ -324,7 +329,7 @@ fn run(
     let scene = scene::build(&project, &transcript)?.scaled(scale);
     let paths = scene::logos(store, &project.id, &scene)?;
     let mut renderer = Renderer::with_device(scene, &paths, gpu.clone())?;
-    let cached = if offset == 0. {
+    let cached = if offset == 0. && !s.external_clock {
         crate::text_removal_service::cached_preview_patches(app, store, &project)?
     } else {
         vec![]
@@ -454,7 +459,7 @@ fn run(
             let scene = scene::build(&project, &transcript)?.scaled(scale);
             let paths = scene::logos(store, &project.id, &scene)?;
             renderer.update_scene(scene, &paths)?;
-            let cached = if offset == 0. {
+            let cached = if offset == 0. && !s.external_clock {
                 crate::text_removal_service::cached_preview_patches(app, store, &project)?
             } else {
                 vec![]
@@ -466,7 +471,7 @@ fn run(
             clock.set_playing(p);
         }
         if let Some(t) = updates.audio {
-            clock.audio_anchor(t);
+            if s.external_clock { clock.external_anchor(t)?; dirty = true; } else { clock.audio_anchor(t); }
         }
         if let Some((generation, t)) = updates.seek {
             let t = t.clamp(s.range.0, s.range.1);
@@ -499,10 +504,7 @@ fn run(
         // Native video samples the shared device clock directly; IPC is UI telemetry only.
         use tauri::Manager;
         let audio = app.state::<crate::audio::transport::AudioManager>();
-        let master = audio
-            .status(&s.project_id)
-            .ok()
-            .filter(|a| a.error.is_none());
+        let master = if s.external_clock { None } else { audio.status(&s.project_id).ok().filter(|a| a.error.is_none()) };
         if let Some(master) = &master {
             clock.set_playing(master.playing && !master.buffering);
             clock.audio_anchor(master.time.clamp(s.range.0, s.range.1));
@@ -525,7 +527,8 @@ fn run(
                 let _ = audio.control(&s.project_id, "pause", None, None, None);
             }
         }
-        if visible && !busy && (clock.playing || dirty) {
+        // Render hidden external-clock sessions before showing their first frame.
+        if (visible || s.external_clock) && !busy && (clock.playing || dirty) {
             let generation = s.generation.load(Ordering::SeqCst);
             let stale = || {
                 s.stopped.load(Ordering::SeqCst)
@@ -608,6 +611,7 @@ fn run(
                     dirty = false;
                     let mut st = s.status.lock().unwrap();
                     st.frame_pts = pts;
+                    st.frame_generation = generation;
                     st.render_ms = start.elapsed().as_secs_f64() * 1000.0;
                     st.present_ms = present_ms;
                     st.render_scale = scale;
@@ -654,7 +658,7 @@ fn run(
                 drop(new_source);
                 renderer = new_renderer;
                 scale = next;
-                let cached = if offset == 0. {
+                let cached = if offset == 0. && !s.external_clock {
                     crate::text_removal_service::cached_preview_patches(app, store, &project)?
                 } else {
                     vec![]
