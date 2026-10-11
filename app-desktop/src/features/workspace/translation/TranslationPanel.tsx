@@ -16,6 +16,7 @@ import type { AsrEnvironment, OcrEnvironment, TextRemovalEnvironment, Transcript
 import type { AppSettings } from '../../../app/services/translation-service';
 import { compareSegmentTime, formatTimestamp, ttsWindowEnd, validateTranscript } from '../../transcript/transcript-utils';
 import Modal from '../../../shared/components/Modal';
+import MediaLibrary from '../../media/MediaLibrary';
 import { open } from '@tauri-apps/plugin-dialog';
 import { flushVisualSettings, mergeVisualProject, updateVisualSettings } from '../../overlays/overlay-state';
 import type { WorkspacePanelTab } from '../../../app/project-state';
@@ -1195,8 +1196,8 @@ export default function TranslationPanel() {
 
       <Show when={activeWorkspacePanelTab() === 'media'}>
         <div class="resource-panel-content" role="tabpanel">
-          <div class="resource-section-heading"><div><span>PROJECT ASSETS</span><h3>Thư viện media</h3></div><FileImage size={16} /></div>
-          <Show when={hasVideo()} fallback={<div class="asset-empty-card"><div class="asset-empty-icon"><FileImage size={19} /></div><strong>Chưa có video nguồn</strong><p>Chọn video tại khu vực xem trước để thêm media vào dự án.</p><button class="button button-outline" type="button" onClick={() => setNotice({ kind: 'info', message: 'Dùng nút Chọn video tại khu vực xem trước.' })}>Chọn video</button></div>}>
+          <MediaLibrary />
+          <Show when={hasVideo()}>
             <div class="resource-subsection"><span class="resource-subtitle">VIDEO NGUỒN</span>
               <div class="media-video-card">
                 <div class="media-video-title"><span class="resource-type-icon"><FileImage size={15} /></span><span><strong>{currentProject()?.source.originalName ?? 'Video nguồn'}</strong><small>{formatBytes(currentProject()?.source.fileSize)}</small></span></div>

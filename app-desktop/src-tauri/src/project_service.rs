@@ -23,6 +23,7 @@ const PROJECT_DIRECTORIES: &[&str] = &[
 ];
 const PROJECT_LOCATIONS_FILENAME: &str = "project-locations.json";
 static PROJECT_LOCATION_LOCK: Mutex<()> = Mutex::new(());
+static PROJECT_UPDATE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -719,12 +720,31 @@ impl ProjectStore {
     }
 
     pub fn update_project(&self, project: &Project) -> Result<Project, String> {
+        let _guard = PROJECT_UPDATE_LOCK.lock().map_err(|_| "Không thể khóa dự án để lưu.")?;
         let id = canonical_project_id(&project.id)?;
         let path = self.project_path(&id)?;
         let existing = read_project(&path, &id)?;
         if existing.id != project.id {
             return Err("Mã dự án không hợp lệ.".to_string());
         }
+        if project.updated_at != existing.updated_at {
+            return Err("Dự án đã thay đổi. Hãy tải lại trước khi lưu để không mất nguồn và nội dung mới.".into());
+        }
+        self.persist_update(project, &existing, &path)
+    }
+
+    /// Apply library edits to the latest document under the same save lock.
+    pub fn edit_project(&self, id: &str, edit: impl FnOnce(&mut Project) -> Result<(), String>) -> Result<Project, String> {
+        let _guard = PROJECT_UPDATE_LOCK.lock().map_err(|_| "Không thể khóa dự án để lưu.")?;
+        let id = canonical_project_id(id)?;
+        let path = self.project_path(&id)?;
+        let existing = read_project(&path, &id)?;
+        let mut project = existing.clone();
+        edit(&mut project)?;
+        self.persist_update(&project, &existing, &path)
+    }
+
+    fn persist_update(&self, project: &Project, existing: &Project, path: &Path) -> Result<Project, String> {
         validate_project_name(&project.name)?;
         let mut updated = project.clone();
         updated.schema_version = SCHEMA_VERSION;
@@ -735,6 +755,7 @@ impl ProjectStore {
     }
 
     pub fn rename(&self, id: &str, name: &str) -> Result<Project, String> {
+        let _guard = PROJECT_UPDATE_LOCK.lock().map_err(|_| "Không thể khóa dự án để lưu.")?;
         let id = canonical_project_id(id)?;
         let name = validate_project_name(name)?;
         let path = self.project_path(&id)?;

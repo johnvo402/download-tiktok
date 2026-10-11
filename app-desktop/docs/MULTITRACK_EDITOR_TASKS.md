@@ -1,6 +1,6 @@
 # Kế hoạch timeline nhiều lớp trong phần Dịch
 
-Trạng thái: T01 hoàn tất; T02–T11 chưa triển khai. Cập nhật: 2026-10-11.
+Trạng thái: T01–T02 hoàn tất; T03–T11 chưa triển khai. Cập nhật: 2026-10-11.
 
 ## Mục tiêu và bố cục
 
@@ -44,9 +44,13 @@ Hoàn tất khi: mở lại dự án cũ cho kết quả tương đương; lưu/
 
 ## T02 — Kho nguồn và nhập nhiều media
 
+**Hoàn tất ngày 2026-10-11.** Tab Media có kho nguồn, nhập nhiều tệp/kéo thả, tìm kiếm/lọc, trạng thái nguồn, thumbnail và waveform theo nhu cầu; thêm nhiều clip từ cùng nguồn; tìm lại nguồn bằng checksum. Mô tả API và lưu trữ tại [MEDIA_LIBRARY.md](MEDIA_LIBRARY.md).
+
 Nhập nhiều video, ảnh, audio bằng hộp chọn hoặc kéo thả; đọc metadata, tạo thumbnail/waveform theo nhu cầu; phát hiện nguồn trùng, nguồn lỗi hoặc thiếu. Đặt lại đường dẫn nguồn bằng kiểm tra định danh, tránh gắn transcript của video khác. Cache và file nằm trong cấu trúc theo asset.
 
 Hoàn tất khi: nhập A và B, thêm nhiều lần lên timeline, mở lại project và liên kết lại nguồn bị di chuyển thành công. Phụ thuộc T01.
+
+Đã kiểm tra bằng media thật: nhập hỗn hợp và lỗi từng tệp; không sao chép nguồn trùng; A/B/A lưu–mở giữ ID/nội dung; ảnh/audio vào track phù hợp; tìm lại tệp bị thiếu hoặc hỏng vẫn đọc được transcript/TTS; thumbnail/waveform được tái sử dụng và tạo lại khi cache lỗi. Kiểm thử trình duyệt cho tìm kiếm Unicode, lọc, thêm clip, sóng âm, relink, chỉ thử lại tệp lỗi và panel hẹp. Build frontend thành công; 41 test frontend và 203 test Rust qua, 23 test tùy chọn bỏ qua.
 
 ## T03 — Transcript, dịch và lồng tiếng theo từng video
 

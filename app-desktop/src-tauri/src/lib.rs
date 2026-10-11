@@ -37,6 +37,7 @@ mod text_removal_cache;
 mod translation_service;
 mod tts_service;
 mod video_service;
+mod media_library;
 mod video_tools_service;
 
 use tauri::Manager;
@@ -122,6 +123,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            media_library::import_media_assets,
+            media_library::inspect_media_assets,
+            media_library::relink_media_asset,
+            media_library::append_media_clip,
+            media_library::get_media_cache,
             studio_service::load_studio_draft,
             studio_service::has_studio_draft,
             studio_service::save_studio_draft,

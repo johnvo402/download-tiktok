@@ -2,6 +2,8 @@ import { Dynamic } from 'solid-js/web';
 import { createNativePreview } from './native-preview';
 import { createAudioPreview } from './audio-preview';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { browseMedia, importMediaPaths, mediaBusy, setMediaProgress } from '../../media/media-state';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open } from '@tauri-apps/plugin-dialog';
 import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from 'solid-js';
@@ -26,10 +28,6 @@ function formatTime(seconds: number) {
   return hours > 0
     ? `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`
     : `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
-}
-
-function isVideoPath(path: string) {
-  return /\.(mp4|mov|mkv|webm)$/i.test(path);
 }
 
 export default function TranslationView() {
@@ -290,9 +288,7 @@ export default function TranslationView() {
   onMount(() => {
     const nativeDrop = (event: Event) => {
       const paths = (event as CustomEvent<string[]>).detail;
-      const path = paths.find(isVideoPath);
-      if (path) void selectVideo(path);
-      else setNotice({ kind: 'error', message: 'Hãy thả một tệp MP4, MOV, MKV hoặc WEBM.' });
+      void importMediaPaths(paths);
     };
     window.addEventListener('native-preview-drop', nativeDrop);
     onCleanup(() => window.removeEventListener('native-preview-drop', nativeDrop));
@@ -309,17 +305,19 @@ export default function TranslationView() {
       else if (event.payload.type === 'leave') setDragging(false);
       else if (event.payload.type === 'drop') {
         setDragging(false);
-        const filePath = event.payload.paths.find(isVideoPath);
-        if (!filePath) {
-          setNotice({ kind: 'error', message: 'Hãy thả một tệp MP4, MOV, MKV hoặc WEBM.' });
-          return;
-        }
-        void selectVideo(filePath);
+        void importMediaPaths(event.payload.paths);
       }
     }).then((unlisten) => {
       if (componentAlive) removeDropListener = unlisten;
       else unlisten();
     }).catch(() => setNotice({ kind: 'error', message: 'Không thể bật kéo thả tệp video.' }));
+    let removeProgressListener: (() => void) | undefined;
+    void listen<{ projectId: string; index: number; total: number; name: string }>('media-import-progress', event => {
+      if (componentAlive && mediaBusy() && currentProject()?.id === event.payload.projectId) {
+        setMediaProgress(`Đang nhập ${event.payload.index + 1}/${event.payload.total}: ${event.payload.name}`);
+      }
+    }).then(unlisten => { if (componentAlive) removeProgressListener = unlisten; else unlisten(); }).catch(() => undefined);
+    onCleanup(() => removeProgressListener?.());
   });
 
   let observedProjectId: string | undefined;
@@ -648,12 +646,12 @@ export default function TranslationView() {
           <Show when={activeVideoUrl()} fallback={
             <div class="no-video-content">
               <div class="no-video-symbol"><Film size={27} strokeWidth={1.5} /><span /></div>
-              <h2>{importing() ? 'Đang nhập video…' : 'Thêm video của bạn'}</h2>
-              <p>Kéo video vào đây hoặc chọn tệp từ máy tính. Video sẽ được sao chép vào dự án.</p>
-              <button class="button button-outline" type="button" disabled={importing()} onClick={browse}>
-                <Plus size={15} /> Chọn video
+              <h2>{mediaBusy() ? 'Đang nhập media…' : 'Thêm nguồn vào timeline'}</h2>
+              <p>Nhập video, ảnh và audio ở kho nguồn, rồi chọn “Thêm vào timeline” để bắt đầu.</p>
+              <button class="button button-outline" type="button" disabled={mediaBusy() || importing()} onClick={() => { setActiveWorkspacePanelTab('media'); void browseMedia(); }}>
+                <Plus size={15} /> Nhập media
               </button>
-              <span class="video-coming-note">MP4 · MOV · MKV · WEBM</span>
+              <span class="video-coming-note">VIDEO · PNG/JPG/WEBP · AUDIO</span>
               <Show when={loadingVideo()}><span class="media-loading-label"><span class="spin status-spinner media-loading-spinner" aria-hidden="true" /> {mediaStatus() || 'Đang mở video…'}</span></Show>
             </div>
           }>
@@ -726,7 +724,7 @@ export default function TranslationView() {
               <button class="video-center-play" type="button" aria-label="Phát video" onClick={togglePlayback}><Play size={22} fill="currentColor" /></button>
             </Show>
           </Show>
-          <Show when={dragging()}><div class="drop-overlay"><div><Film size={25} /><strong>Thả video để nhập vào dự án</strong></div></div></Show>
+          <Show when={dragging()}><div class="drop-overlay"><div><Film size={25} /><strong>Thả video, ảnh hoặc audio vào kho nguồn</strong></div></div></Show>
           <Show when={activeAiPreview()}><div class="ai-removal-preview-badge" role="status">Đoạn đã xử lý bằng AI · {formatTime(activeAiPreview()!.startSeconds)}–{formatTime(activeAiPreview()!.endSeconds)}</div></Show>
           <Show when={mediaStatus() && videoUrl()}><div class="media-status-overlay" role="status"><span class="spin status-spinner media-status-spinner" aria-hidden="true" /><span class="media-status-message">{mediaStatus()}</span></div></Show>
           <Show when={mediaError()}><div class="media-error-overlay" role="alert"><AlertTriangle size={17} /><span class="media-error-message">{mediaError()}</span><Show when={currentProject()?.source.videoPath}><button class="media-error-retry" type="button" onClick={retryPreview}>{usingProxy() ? 'Tạo lại preview' : 'Thử tạo preview'}</button><button class="media-error-retry" type="button" disabled={importing()} onClick={() => void restoreSource()}>Tìm lại video nguồn</button></Show></div></Show>

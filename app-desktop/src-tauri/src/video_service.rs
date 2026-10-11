@@ -111,7 +111,7 @@ fn import_video_mode(store: &ProjectStore,project_id: &str,source_path: &str,rep
         project.source.video_path.as_deref(),
     ) {
         if existing_hash == checksum
-            && resolve_project_file(store, project_id, existing_relative, "media/source").is_ok()
+            && resolve_project_file(store, project_id, existing_relative, "media").is_ok()
         {
             return Ok(VideoImportResult {
                 project,
@@ -208,7 +208,7 @@ fn import_video_mode(store: &ProjectStore,project_id: &str,source_path: &str,rep
 
     if had_video && !restore {
         if let Some(previous) = previous_relative {
-            if let Ok(path) = resolve_project_file(store, project_id, &previous, "media/source") {
+            if let Ok(path) = resolve_project_file(store, project_id, &previous, "media") {
                 let _ = fs::remove_file(path);
             }
         }
@@ -236,7 +236,7 @@ pub fn resolve_video(store: &ProjectStore, project_id: &str) -> Result<PathBuf, 
         .video_path
         .as_deref()
         .ok_or_else(|| "Dự án chưa có video nguồn.".to_string())?;
-    resolve_project_file(store, project_id, relative, "media/source")
+    resolve_project_file(store, project_id, relative, "media")
 }
 
 pub fn create_preview_proxy(
@@ -504,7 +504,7 @@ fn parse_rational(value: &str) -> Option<f64> {
     }
 }
 
-fn sha256_file(path: &Path) -> Result<String, String> {
+pub(crate) fn sha256_file(path: &Path) -> Result<String, String> {
     let mut file = File::open(path).map_err(|error| format!("Không thể đọc video: {error}"))?;
     let mut hash = Sha256::new();
     let mut buffer = vec![0_u8; 256 * 1024];
@@ -520,7 +520,7 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hash.finalize()))
 }
 
-fn copy_and_hash(source: &Path, destination: &Path) -> Result<String, String> {
+pub(crate) fn copy_and_hash(source: &Path, destination: &Path) -> Result<String, String> {
     let mut input =
         File::open(source).map_err(|error| format!("Không thể mở video nguồn: {error}"))?;
     let mut output = OpenOptions::new()

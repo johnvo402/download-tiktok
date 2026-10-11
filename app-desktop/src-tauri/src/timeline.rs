@@ -29,7 +29,7 @@ impl Rational {
         }
         Ok(())
     }
-    fn from_fps(fps: f64) -> Result<Self, String> {
+    pub(crate) fn from_fps(fps: f64) -> Result<Self, String> {
         if !fps.is_finite() || fps <= 0.0 || fps * 1_000_000.0 > u32::MAX as f64 {
             return Err("FPS nguồn không hợp lệ.".into());
         }
@@ -114,7 +114,7 @@ pub struct VideoSettings {
     pub text_overlays: Vec<ProjectTextOverlay>,
 }
 impl VideoSettings {
-    fn from_project(project: &Project) -> Self {
+    pub(crate) fn from_project(project: &Project) -> Self {
         Self {
             transcript: project.transcript.clone(),
             translation: project.translation.clone(),
