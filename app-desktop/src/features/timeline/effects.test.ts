@@ -23,6 +23,13 @@ let count = 0;
 const apply = (doc: TimelineDocument, command: Parameters<typeof applyEdit>[1]): TimelineDocument => ({ ...doc, ...applyEdit(doc, command, () => `new-${++count}`), tracks: doc.tracks });
 
 describe('timeline effects contract', () => {
+  it('uses the smaller ramp when visual fades overlap on a short clip', () => {
+    const doc = fixture(), c = doc.clips[0];
+    c.sourceOutUs = 2e6;
+    c.effects = { fadeInUs: 2e6, fadeOutUs: 2e6, keyframes: [] };
+    for (const [time, opacity] of [[.5e6, .25], [1e6, .5], [1.5e6, .25]])
+      expect(visualAt(c, doc, time).transform.opacity).toBe(opacity);
+  });
   it('matches shared source-clock motion/fade samples and retimes without moving source keys', () => {
     const doc = fixture(), c = { ...doc.clips[0], ...shared, effects: shared.effects };
     for (const s of shared.samples) {

@@ -115,9 +115,6 @@ export default function WorkspaceLayout() {
         </div>
         <div class="sidebar-group-label">WORKSPACE</div>
         <nav class="workspace-nav" aria-label="Điều hướng dự án">
-          <button class="workspace-nav-item" classList={{ active: section() === 'studio' }} type="button" aria-label="Tạo video AI" title={collapsed() ? 'Tạo video AI' : undefined} aria-current={section() === 'studio' ? 'page' : undefined} onClick={() => setSection('studio')}>
-            <Film size={18} strokeWidth={1.8} aria-hidden="true" /><Show when={!collapsed()}><span>Tạo video AI</span></Show>
-          </button>
           <button class="workspace-nav-item" classList={{ active: section() === 'download' }} type="button" aria-label="Tải video" title={collapsed() ? 'Tải video' : undefined} aria-current={section() === 'download' ? 'page' : undefined} onClick={() => setSection('download')}>
             <Download size={18} strokeWidth={1.8} aria-hidden="true" /><Show when={!collapsed()}><span>Tải video</span></Show>
           </button>
@@ -126,6 +123,9 @@ export default function WorkspaceLayout() {
           </button>
           <button class="workspace-nav-item" classList={{ active: section() === 'translate' }} type="button" title={collapsed() ? 'Dịch' : undefined} aria-current={section() === 'translate' ? 'page' : undefined} onClick={() => setSection('translate')}>
             <AudioLines size={18} strokeWidth={1.8} /><Show when={!collapsed()}><span>Dịch</span></Show>
+          </button>
+          <button class="workspace-nav-item" classList={{ active: section() === 'studio' }} type="button" aria-label="Tạo video AI" title={collapsed() ? 'Tạo video AI' : undefined} aria-current={section() === 'studio' ? 'page' : undefined} onClick={() => setSection('studio')}>
+            <Film size={18} strokeWidth={1.8} aria-hidden="true" /><Show when={!collapsed()}><span>Tạo video AI</span></Show>
           </button>
         </nav>
         <div class="sidebar-bottom">

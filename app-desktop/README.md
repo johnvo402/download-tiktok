@@ -2,6 +2,13 @@
 
 Ứng dụng desktop Windows cho quy trình bản địa hóa video: import/playback, transcript, translation, VieNeu-TTS, blur/logo và FFmpeg export. Hướng dẫn người dùng nằm trong [USER_GUIDE.md](USER_GUIDE.md); build developer ở [docs/BUILD_WINDOWS.md](docs/BUILD_WINDOWS.md).
 
+Phiên bản **0.1.15** thêm timeline nhiều nguồn/lớp trong **Dịch**: cắt/trim,
+di chuyển, undo/redo, ảnh/chữ/phụ đề/âm thanh, canvas/crop, fade, keyframe và
+chuyển cảnh. Transcript, bản dịch và giọng bám từng video nguồn. Preview phát
+trực tiếp; Export chụp trạng thái đã lưu và hỗ trợ toàn bộ timeline hoặc một
+vùng. Xem [cách dùng timeline](USER_GUIDE.md#dựng-timeline-nhiều-nguồn--015)
+và [kiểm tra bản phát hành](docs/RELEASE_0.1.15.md).
+
 ## Yêu cầu phát triển
 
 - Node.js 22.12+ và npm
@@ -190,7 +197,7 @@ Project nằm trong `appDataDir/projects/{UUID}`. Video được copy vào `medi
 6. Play, pause, resume, seek vào giữa segment và thử đoạn bị overflow. Preview segment dừng video dubbing để hai chế độ không chồng tiếng.
 7. Sửa bản dịch, xác nhận audio cũ chuyển thành Outdated, tạo lại; đợi autosave, đóng/mở app/project và kiểm tra audio cùng cài đặt đã phục hồi.
 
-Unit tests không tải model và không gọi VieNeu thật. VieNeu inference end-to-end cần cài package, xác nhận tải khoảng 1.8 GB model/codec trong app, và có FFmpeg/FFprobe trên PATH. TTS model, blur, logo và export video vẫn chưa được bundle/triển khai.
+Unit tests không tải model và không gọi VieNeu thật. VieNeu inference end-to-end cần cài package, xác nhận tải khoảng 1.8 GB model/codec trong app, và có FFmpeg/FFprobe trên PATH. Model TTS không được bundle; blur/logo và export đã có trong ứng dụng.
 
 ## Audio Engine v2 (Task 7)
 

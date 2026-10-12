@@ -50,16 +50,21 @@ export function createTimelineNativePreview(viewport: () => HTMLElement | undefi
       while (pending && alive) {
         const request = pending; pending = undefined;
         if (request.id !== session()) continue;
-        const seek = request.revision !== seekRevision || request.time < lastTime - .000001 || Math.abs(request.time - lastTime) > .15;
-        if (seek) { seekCount++; setReady(false); await resize(); }
-        if (request.id !== session()) continue;
-        await invoke('preview_control', { sessionId: request.id, action: seek ? 'seek' : 'audio', time: request.time });
-        if (request.id !== session()) continue;
-        if (seek) seekRevision = request.revision;
-        lastTime = request.time;
+        try {
+          const seek = request.revision !== seekRevision || request.time < lastTime - .000001 || Math.abs(request.time - lastTime) > .15;
+          if (seek) { seekCount++; setReady(false); await resize(); }
+          if (request.id !== session()) continue;
+          await invoke('preview_control', { sessionId: request.id, action: seek ? 'seek' : 'audio', time: request.time });
+          if (request.id !== session()) continue;
+          if (seek) seekRevision = request.revision;
+          lastTime = request.time;
+        } catch (e) {
+          // A closed decoder can reject while its replacement already has a
+          // queued seek. Only the request's current owner may trigger fallback.
+          if (alive && request.id === session()) fallback(e instanceof Error ? e.message : String(e));
+        }
       }
-    } catch (e) { if (alive) fallback(e instanceof Error ? e.message : String(e)); }
-    finally { sending = false; }
+    } finally { sending = false; }
   }
   createEffect(on(identity, key => {
     const token = ++generation, old = untrack(session), c = clip(), projectId = currentProject()?.id;

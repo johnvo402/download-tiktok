@@ -225,18 +225,26 @@ pub fn alpha_expression(
     let mut expression = motion_expression(c, 4, local_seconds);
     if let Some(e) = &c.effects {
         let d = c.duration_us()?;
+        let mut fades = Vec::new();
         if e.fade_in_us > 0 {
-            expression.push_str(&format!(
-                "*max(0,min(1,({local_seconds})/{}))",
+            fades.push(format!(
+                "max(0,min(1,({local_seconds})/{}))",
                 num(e.fade_in_us.min(d) as f64 / 1e6)
             ));
         }
         if e.fade_out_us > 0 {
-            expression.push_str(&format!(
-                "*max(0,min(1,({}-({local_seconds}))/{}))",
+            fades.push(format!(
+                "max(0,min(1,({}-({local_seconds}))/{}))",
                 num(d as f64 / 1e6),
                 num(e.fade_out_us.min(d) as f64 / 1e6)
             ));
+        }
+        // Same envelope as visualAt and the audio mixer, even when the
+        // requested fades overlap: multiply opacity by the smaller ramp.
+        match fades.as_slice() {
+            [a, b] => expression.push_str(&format!("*min({a},{b})")),
+            [a] => expression.push_str(&format!("*({a})")),
+            _ => {}
         }
     }
     if c.linked_clip_id.is_some() {

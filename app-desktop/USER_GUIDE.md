@@ -28,7 +28,20 @@ chạy lại installer chọn nơi lưu phù hợp.
 7. Tạo vùng blur che hard subtitle, đặt role **Subtitle Blur**, bật translated subtitle và thêm logo nếu cần.
 8. Mở Export, kiểm tra warnings, chọn thư mục đích và export.
 
-Translated subtitle trong video cuối luôn nằm trong vùng blur có role Subtitle Blur. Nếu subtitle tắt, blur vẫn có thể được render nhưng không có text dịch.
+Trong chế độ **Video nguồn**, translated subtitle nằm trong vùng blur có role Subtitle Blur. Nếu subtitle tắt, blur vẫn có thể được render nhưng không có text dịch.
+
+## Dựng timeline nhiều nguồn — 0.1.15
+
+1. Trong **Dịch → Kho nguồn**, nhập nhiều video, ảnh hoặc audio. Chọn **Thêm vào timeline**: video nối vào cuối chuỗi video; ảnh/audio bắt đầu tại playhead. Có thể dùng cùng nguồn cho nhiều clip.
+2. Chọn clip video trên timeline để nhận dạng, dịch hoặc tạo giọng cho riêng video đó. Phát qua clip khác không đổi video đang biên tập. Các phần cắt từ cùng một video dùng chung transcript/bản dịch nguồn.
+3. Kéo clip để đổi thời điểm/track, kéo mép để trim, hoặc dùng **Di chuyển / Trim bằng thời gian**. Phím **S** cắt tại playhead, **Delete** xóa, **Ctrl+Z** hoàn tác. **Shift+Delete** xóa khoảng thời gian và dồn phần sau trên toàn timeline; tệp nguồn vẫn được giữ.
+4. Thêm **Phụ đề**, **Giọng**, chữ hoặc audio thành lớp riêng. Lớp liên kết đi theo video khi di chuyển/cắt. Nhóm để di chuyển nhiều clip; tách liên kết nếu muốn lớp có thời điểm độc lập. Khóa track để tránh sửa nhầm; mute/solo điều khiển âm thanh.
+5. Mở **Hình ảnh / khung hình** để chỉnh canvas, vị trí, kích thước, crop, xoay hoặc lật; mở **Âm thanh** để chỉnh âm lượng, fade, tốc độ và ducking. Bản nháp hình ảnh cần bấm **Áp dụng** để lưu trước khi xuất.
+6. Nhấn **K** hoặc mở **Hiệu ứng / keyframe** để thêm fade và keyframe theo thời gian nguồn. Hai video/ảnh liền nhau trên cùng track có thể thêm hòa tan/quét ngang. Gỡ chuyển cảnh trước khi đổi điểm cắt/tốc độ làm hỏng vùng chồng.
+7. Dùng **Space** phát/dừng, **←/→** lùi/tiến frame, **Shift+←/→** tua một giây, **+/−** zoom và **F** vừa toàn dự án. Preview không tạo MP4. **Xem video đang chọn** trở về xử lý nguồn; **Thử lại preview** nạp lại nguồn lỗi sau khi đã tìm lại tệp.
+8. Mở **Export**, chọn toàn bộ timeline hoặc vùng thời gian, khung hình/FPS và codec. Export dùng các lớp đã lưu và đang bật, kèm audio của từng clip; không phụ thuộc clip đang chọn. Nếu job bị gián đoạn khi đóng app, thử lại từ lịch sử job.
+
+Vùng OCR/xóa chữ trong timeline là hướng dẫn của từng nguồn. Xử lý blur/logo/text nguồn trong **Video nguồn** trước khi dựng, hoặc thêm ảnh/chữ/phụ đề thành lớp timeline. Ảnh logo có thể đặt trên track hình ở phía trên. Timeline không áp thời lượng tối thiểu hai phút của **Tạo video AI**. Video có nhiều audio stream dùng stream mặc định; chưa có chọn stream thủ công. Giới hạn xuất là 32 lớp hình giao cùng một frame; chia vùng xuất hoặc giảm lớp nếu vượt giới hạn.
 
 ## Tạo video AI từ ý tưởng
 

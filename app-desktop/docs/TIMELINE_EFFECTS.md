@@ -38,6 +38,10 @@ thời lượng mỗi ramp được giới hạn bởi thời lượng clip. Tri
 đổi mép và thời lượng fade; keyframe vẫn bám nguồn. Fade tiếng và tốc độ cố định
 đã có ở phần Âm thanh/thời gian clip từ T07, không bị thay bằng fade hình.
 
+Nếu hai ramp chồng nhau, lấy giá trị nhỏ hơn rồi nhân với opacity, giống fade
+tiếng. Ví dụ clip 2 giây, fade vào/ra đều 2 giây: opacity tại giây 1 là 0,5
+(với opacity cơ bản 1). Preview và export dùng cùng công thức.
+
 Nhập fade, thêm/cập nhật/xóa điểm chỉ tạo bản nháp preview. “Áp dụng hiệu ứng”
 lưu toàn bộ thành một transaction/một bước undo; Hủy hoặc đổi lựa chọn thu hồi
 bản nháp. Track khóa không cho thay đổi. Export lấy dữ liệu đã lưu, không ghi

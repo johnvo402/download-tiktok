@@ -765,6 +765,23 @@ fn media_keyframes_fades_transitions_and_ranges() {
         pixel(&frame(Path::new(&output), 0.2), 320, 160, 90)[0] > 160,
         "range preserves motion source clock"
     );
+    // Fade-in and fade-out can overlap on a short clip. Preview uses the
+    // smaller ramp (0.5 at the midpoint), not their product (0.25).
+    let c = &mut p.timeline.as_mut().unwrap().clips[0];
+    c.transform = ClipTransform::default();
+    c.effects = Some(VisualEffects {
+        fade_in_us: 2_000_000,
+        fade_out_us: 2_000_000,
+        keyframes: vec![],
+    });
+    p = store.update_project(&p).unwrap();
+    let snap = capture(&store, &p.id, &opts).unwrap();
+    let (output, _) = render(&snap, &opts, &AtomicU8::new(0), |_, _, _| {}).unwrap();
+    let mid = pixel(&frame(Path::new(&output), 1.0), 320, 160, 90);
+    assert!(
+        (115..=140).contains(&mid[0]),
+        "overlapping fades must match preview: {mid:?}"
+    );
 }
 
 #[test]
